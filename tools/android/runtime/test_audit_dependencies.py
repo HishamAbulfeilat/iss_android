@@ -12,6 +12,7 @@ class DebianPackageGraphTests(unittest.TestCase):
         from package_runtime import selected_runtime_packages, PYTHON_PACKAGES, PYTHON_EXTRA_LIB_PACKAGES
         index = {key: {"SHA256": "0123", "Depends": ""} for key in
                  (*PYTHON_PACKAGES, *PYTHON_EXTRA_LIB_PACKAGES)}
+        index["libreadline8t64"] = {"SHA256": "0123", "Depends": ""}
         index["libpython3.13-stdlib"]["Depends"] = "libreadline8t64, libc6"
         index["libnsl2"]["Depends"] = "libtirpc3t64"
         index["libtirpc3t64"]["Depends"] = "libgssapi-krb5-2, libc6"
