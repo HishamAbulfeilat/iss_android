@@ -10,6 +10,10 @@ for t in aapt2 d8 zipalign apksigner; do test -x "$bt/$t"; done
 test -s "$jar"
 test -s out/bionic/lib/libisspresent.so
 python3 tools/android/bionic/package_runtime.py
+# Also validate the exact launcher bytes embedded in the runtime archive that
+# will be shipped inside the APK, not only the checked-in source.
+tar -xOzf out/release/iss-bionic-runtime.tar.gz issport/run-bionic.sh | sh -n
+tar -xOzf out/release/iss-bionic-runtime.tar.gz issport/run-bionic.sh | bash -n
 work="$PWD/out/bionic/apk-work"
 rm -rf "$work"
 mkdir -p "$work/classes" "$work/package/assets" "$work/package/lib/arm64-v8a" out/release

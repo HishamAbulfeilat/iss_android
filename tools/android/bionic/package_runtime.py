@@ -3,6 +3,7 @@
 from pathlib import Path
 import hashlib
 import json
+import subprocess
 import shutil
 import tarfile
 import tempfile
@@ -42,6 +43,12 @@ def main():
         shutil.copytree(ROOT / "port/patches", base / "patches")
         shutil.copy2(ROOT / "tools/android/runtime/launch.py", base / "launch.py")
         shutil.copy2(ROOT / "tools/android/bionic/run-bionic.sh", base / "run-bionic.sh")
+        # This launcher is executed by Android's /system/bin/sh on the device.
+        # A compiler cannot detect unmatched quotes or malformed shell syntax:
+        # reject those *before* producing and signing another unusable APK.
+        for shell in ("sh", "bash"):
+            subprocess.run([shell, "-n", str(base / "run-bionic.sh")], check=True)
+
         for name in ("user", "tmp", "out"):
             (base / name).mkdir(parents=True)
         (base / "licenses").mkdir()

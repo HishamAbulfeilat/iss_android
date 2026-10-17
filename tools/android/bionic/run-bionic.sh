@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Experimental inFAMOUS Second Son on Android Bionic. No Debian/Xvfb/glibc.
 set -eu
-files=${FXD_FILES:?ISS Bionic requires the application's private data directory}
+files=${FXD_FILES:?ISS Bionic requires the app private data directory}
 base="$files/issport"
 runtime="$base/arm64"
 python="$runtime/python/bin/python3.13"
