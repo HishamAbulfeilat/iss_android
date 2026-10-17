@@ -13,10 +13,9 @@
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 
+#include "common/spin_lock.h"
 #ifdef __unix__
 #include "common/adaptive_mutex.h"
-#else
-#include "common/spin_lock.h"
 #endif
 #include "common/debug.h"
 #include "common/types.h"

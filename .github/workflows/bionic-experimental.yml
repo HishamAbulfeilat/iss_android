@@ -21,9 +21,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
+      - name: Check Bionic Android launcher Java compilation
+        run: |
+          mkdir -p out/android-bionic-classes
+          javac -encoding UTF-8 -source 8 -target 8 -cp "$ANDROID_HOME/platforms/android-35/android.jar" \
+            -d out/android-bionic-classes android/app/src/ro/cobrabm/fexdroid/*.java
       - name: Check Bionic source isolation and game features
         run: |
           python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
@@ -60,6 +69,21 @@ jobs:
         run: |
           bash tools/android/bionic/build_cpu.sh
           bash tools/android/bionic/build_gpu.sh
+      - name: Compile native inFAMOUS loader and AHardwareBuffer JNI bridge
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_native_runtime.sh
+      - name: Build isolated Bionic Python interpreter for ISS preparation
+        run: |
+          ISS_NDK="$ANDROID_HOME/ndk/29.0.14206865" ISS_JOBS=2 bash tools/android/bionic/build_python.sh
+      - name: Validate Bionic native binaries and complete preparation runtime
+        run: |
+          python3 tools/android/bionic/verify_bionic.py --ndk "$ANDROID_HOME/ndk/29.0.14206865" --root out/bionic --complete
+      - uses: actions/cache@v4
+        with:
+          path: .local-deps/android/bionic-development.keystore
+          key: iss-bionic-development-signing-v1
+      - name: Assemble, sign and verify isolated inFAMOUS Bionic APK
+        run: bash tools/android/bionic/build_apk.sh
       - name: Upload native Bionic diagnostic build
         uses: actions/upload-artifact@v4
         with:
@@ -69,6 +93,14 @@ jobs:
             out/bionic/lib/libtlggpu.so
             out/bionic/drivers/gen8/PINNED-DRIVER.json
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-bionic-apk-${{ github.sha }}
+          path: |
+            out/release/inFAMOUS-Second-Son-Daedalus-Bionic-Experimental.apk
+            out/release/inFAMOUS-Second-Son-Daedalus-Bionic-Experimental.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

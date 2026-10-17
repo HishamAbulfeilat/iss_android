@@ -43,6 +43,8 @@ fetch miniz-3.1.2 https://github.com/richgel999/miniz/archive/refs/tags/3.1.2.ta
 fetch Vulkan-Headers-1.4.363 https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.363.tar.gz
 fetch SPIRV-Headers-1.4.309 https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.309.0.tar.gz
 fetch ffmpeg-7.1.5 https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+fetch SDL3-3.2.16 https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.2.16.tar.gz
+fetch freetype-2.13.3 https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-3.tar.gz
 
 # Header-only: vulkan-hpp (the NDK ships Vulkan 1.3.275 C headers without it) and SPIR-V.
 cm vulkan-headers "$src/Vulkan-Headers-1.4.363"
@@ -55,6 +57,13 @@ cm zydis "$src/zydis-4.1.1" -DBUILD_SHARED_LIBS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -
     -DZYDIS_BUILD_DOXYGEN=OFF
 cm xxhash "$src/xxhash-0.8.3/cmake_unofficial" -DBUILD_SHARED_LIBS=OFF -DXXHASH_BUILD_XXHSUM=OFF
 cm miniz "$src/miniz-3.1.2" -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DINSTALL_PROJECT=ON
+# The ISS loader (not the headless Vulkan renderer) still uses SDL3 audio/pad
+# and libSceFont uses FreeType; build ARM64 static libraries, no host linkage.
+cm freetype-2.13.3 "$src/freetype-2.13.3" -DBUILD_SHARED_LIBS=OFF \
+    -DFT_DISABLE_ZLIB=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_PNG=ON \
+    -DFT_DISABLE_BROTLI=ON -DFT_DISABLE_HARFBUZZ=ON
+cm SDL3-3.2.16 "$src/SDL3-3.2.16" -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+    -DSDL_TEST=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL=ON
 # FFmpeg (avplayer/videodec): static, PIC, no programs, only built-in codecs/demuxers.
 if [[ ! -f $prefix/.done-ffmpeg ]]; then
     tc=$ndk/toolchains/llvm/prebuilt/linux-x86_64

@@ -19,6 +19,18 @@ public final class BionicMainActivity extends Activity {
   TextView settings=new TextView(this);settings.setText("Opções de vídeo e controles");settings.setTextSize(20);settings.setPadding(0,16,0,8);l.addView(settings);
   CheckBox fps=new CheckBox(this);fps.setText("Mostrar FPS (contador do renderizador)");fps.setChecked(prefs.getBoolean("show_fps",false));
   fps.setOnCheckedChangeListener((b,checked)->prefs.edit().putBoolean("show_fps",checked).apply());l.addView(fps);
+  TextView driverLabel=new TextView(this);driverLabel.setText("Driver Vulkan:");l.addView(driverLabel);
+  Spinner driver=new Spinner(this);
+  String[] drivers={"Turnip Gen8 V37 Patched (padrão)", "Driver Vulkan do sistema", "Automático (detectar KGSL)"};
+  driver.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,drivers));
+  String selectedDriver=prefs.getString("bionic_driver","gen8");
+  driver.setSelection("system".equals(selectedDriver)?1:"auto".equals(selectedDriver)?2:0);
+  driver.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
+    prefs.edit().putString("bionic_driver",pos==1?"system":pos==2?"auto":"gen8").apply();
+   }
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });l.addView(driver);
   TextView displayLabel=new TextView(this);displayLabel.setText("Exibição:");l.addView(displayLabel);
   Spinner display=new Spinner(this);
   String[] displayValues={"16:9 sem cortes (barras laterais)","Fullscreen sem cortes (esticar)","Fullscreen proporcional (cortar bordas)"};
