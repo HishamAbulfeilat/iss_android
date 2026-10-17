@@ -244,7 +244,8 @@ void Load() {
         {"TLG_ASYNC_SHADERS", "async_shaders"},      {"TLG_DEFERRED_READBACK", "deferred_readback"},
         {"TLG_STALE_READBACK", "stale_readback"},     {"TLG_FSR1", "fsr1"},
         {"TLG_RCAS", "rcas"},                        {"TLG_FRAMES_AHEAD", "frames_queued"},
-        {"TLG_SHOW_FPS", "show_fps"},             {"TLG_SENSOR_AIM", "sensor_aim"},
+        {"TLG_SHOW_FPS", "show_fps"},           {"TLG_OUTPUT_RES", "output_res"},
+        {"TLG_SENSOR_AIM", "sensor_aim"},
         {"TLG_MOUSE", "mouse_enabled"},           {"TLG_MOUSE_SENS", "mouse_sensitivity"},
         {"TLG_MOUSE_INVERT_Y", "mouse_invert_y"}, {"TLG_MOUSE_SMOOTHING", "mouse_smoothing"},
         {"TLG_MOUSE_ACCEL", "mouse_accel"},       {"TLG_MOUSE_DEADZONE", "mouse_deadzone"},
@@ -257,6 +258,13 @@ void Load() {
         if (const char* value = std::getenv(env); value && value[0]) {
             Set(v, key, value);
         }
+    }
+    // Android launcher uses the game's actual presenter FPS, not the
+    // Android/Xvfb bridge refresh rate. Show only FPS for a compact HUD.
+    if (const char* android = std::getenv("TLG_ANDROID_FPS_ONLY"); android && *android == '1') {
+        v.overlay_items = TlgPerfStats::Fps;
+        v.overlay_corner = 1;
+        v.overlay_scale = 140;
     }
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;

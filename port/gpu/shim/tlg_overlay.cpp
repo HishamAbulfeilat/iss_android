@@ -1376,19 +1376,63 @@ void GuideBox() {
 }
 
 // imgui_mutex held.
+void WriteAndroidGuideMarker(bool open) {
+    const char* state = std::getenv("TLG_PAD_FILE");
+    if (!state || !*state || !std::getenv("ISS_ANDROID_INPUT")) return;
+    const std::string file = std::string(state) + ".guide";
+    if (!open) {
+        std::remove(file.c_str());
+        return;
+    }
+    if (FILE* handle = std::fopen(file.c_str(), "wb")) {
+        std::fputs("guide\n", handle);
+        std::fclose(handle);
+    }
+}
+
 void OpenGuide() {
     guide_button_rect = ImRect();
     guide_active = true;
+    WriteAndroidGuideMarker(true);
     ImGui::GetIO().MouseDrawCursor = true;
 }
 
 void CloseGuide() {
     guide_active = false;
+    WriteAndroidGuideMarker(false);
     ImGui::GetIO().MouseDrawCursor = menu_open;
     auto& s = TlgSettings::Get();
     if (!s.graffiti_guide_seen.exchange(true)) {
         TlgSettings::Save();
     }
+}
+
+// Android's on-screen Cross arrives in TLG_PAD_FILE, not as an SDL key or
+// controller event. The modal eats *all* game input, so without this bridge the
+// first-time graffiti guide traps the player forever. Poll only while shown.
+void PollAndroidGraffitiGuide() {
+    static bool previous = false;
+    const char* state = std::getenv("TLG_PAD_FILE");
+    if (!guide_active || !state || !*state || !std::getenv("ISS_ANDROID_INPUT")) {
+        previous = false;
+        return;
+    }
+    bool pressed = false;
+    if (FILE* handle = std::fopen(state, "r")) {
+        char word[64];
+        while (std::fscanf(handle, "%63s", word) == 1) {
+            if (std::strcmp(word, "cross") == 0 || std::strcmp(word, "circle") == 0 ||
+                std::strcmp(word, "options") == 0) {
+                pressed = true;
+                break;
+            }
+        }
+        std::fclose(handle);
+    }
+    if (pressed && !previous) {
+        CloseGuide();
+    }
+    previous = pressed;
 }
 
 // Present thread, imgui_mutex held, after NewFrame: whichever save dialog is up.
@@ -2107,6 +2151,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     UpdateChoiceTextures();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if (guide_active) PollAndroidGraffitiGuide();
     if (loading) {
         LoadingScreen();
     }

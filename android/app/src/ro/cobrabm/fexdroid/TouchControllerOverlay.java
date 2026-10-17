@@ -36,6 +36,7 @@ final class TouchControllerOverlay extends View {
     private final Set<String> pressed=new LinkedHashSet<>();
     private boolean mouseDown,editing;
     private final boolean mouseEnabled;
+    private final java.io.File guideMarker;
     private int editPointer=-1;
     private String dragged;
     private Runnable onEditDone;
@@ -43,6 +44,7 @@ final class TouchControllerOverlay extends View {
     TouchControllerOverlay(Context context,PadBridge pad,boolean mouseEnabled) {
         super(context); this.pad=pad; this.mouseEnabled=mouseEnabled;
         preferences=context.getSharedPreferences("iss",Context.MODE_PRIVATE);
+        guideMarker=new java.io.File(context.getFilesDir(),"issport/android-pad.state.guide");
         for (int i=0;i<NAMES.length;i++) {
             String name=NAMES[i];
             centers.put(name,new PointF(preferences.getFloat("overlay_x_"+name,DEFAULT[i][0]),
@@ -165,7 +167,10 @@ final class TouchControllerOverlay extends View {
         if (action==MotionEvent.ACTION_DOWN || action==MotionEvent.ACTION_POINTER_DOWN) {
             float x=layoutX(e,at),y=layoutY(e,at);
             String name=hit(x,y);
-            if (name==null && !mouseEnabled) return true;
+            // Outside the virtual controls, touches reach the SDL guide only
+            // while that modal is shown. Never emulate mouse clicks during
+            // gameplay (SDL maps its left button to R2).
+            if (name==null && !mouseEnabled && !guideMarker.isFile()) return true;
             controls.put(id,name==null ? "mouse" : name);
             positions.put(id,new PointF(x,y));
         } else if (action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_POINTER_UP) {

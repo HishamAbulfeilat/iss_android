@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.concurrent.*;
 import java.util.regex.*;
 public final class GameActivity extends Activity implements SurfaceHolder.Callback {
- private SurfaceView surface;private TextView status;private PadBridge pad;private AudioBridge audio;
+ private SurfaceView surface;private FrameLayout frame;private TextView status;private PadBridge pad;private AudioBridge audio;private boolean fillScreen;
  private final Handler main=new Handler(Looper.getMainLooper());private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private Process game,xvfb;private volatile boolean destroyed,started,failed;private int shmid=-1;private String files,root,base;
  private int displayLogLines;
@@ -21,17 +21,43 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
    out.write(("[Android] "+message+"\\n").replace("\\n","\n").getBytes(StandardCharsets.UTF_8));
   }catch(IOException ignored){}
  }
- @Override public void onCreate(Bundle saved){super.onCreate(saved);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().getDecorView().setSystemUiVisibility(5894);
+ @Override public void onCreate(Bundle saved){super.onCreate(saved);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  fillScreen="fill".equals(getSharedPreferences("iss",0).getString("display_mode","fill"));
+  getWindow().getDecorView().setSystemUiVisibility(fillScreen?5894:0);
   files=getFilesDir().getPath();root=files+"/rootfs";base=files+"/issport";
   try(FileOutputStream reset=new FileOutputStream(new File(files,"iss.log"),false)){
    reset.write(("ISS Android glibc startup log — "+getPackageName()+"\n").getBytes(StandardCharsets.UTF_8));
   }catch(IOException ignored){}
   record("Activity created; prepare display and audio (no game launched yet)");
+  new File(base,"android-pad.state.guide").delete(); // an interrupted previous session may have left the dialog marker
   pad=new PadBridge(new File(base,"android-pad.state"));audio=new AudioBridge(new File(base,"audio.fifo"));
-  FrameLayout l=new FrameLayout(this);surface=new SurfaceView(this);l.addView(surface);l.addView(new TouchControllerOverlay(this,pad,false));status=new TextView(this);status.setText("Starting inFAMOUS Second Son…");status.setTextColor(0xffe0c891);status.setTextSize(18);status.setGravity(17);l.addView(status);setContentView(l);surface.getHolder().addCallback(this);
+  frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
+  surface=new SurfaceView(this);frame.addView(surface);
+  frame.addView(new TouchControllerOverlay(this,pad,false));
+  status=new TextView(this);status.setText("Starting inFAMOUS Second Son…");status.setTextColor(0xffe0c891);status.setTextSize(18);status.setGravity(17);frame.addView(status);
+  setContentView(frame);
+  frame.addOnLayoutChangeListener((v,left,top,right,bottom,ol,ot,oright,obottom)->updateVideoSize());
+  frame.post(this::updateVideoSize);
+  surface.getHolder().addCallback(this);
+ }
+ private void updateVideoSize(){
+  if(frame==null||surface==null)return;
+  int w=frame.getWidth(),h=frame.getHeight();if(w<=0||h<=0)return;
+  // Xvfb is fixed at 1280x720. Fit preserves every pixel; Fill crops without distorting.
+  float scale=fillScreen?Math.max(w/1280f,h/720f):Math.min(w/1280f,h/720f);
+  int vw=Math.max(1,Math.round(1280f*scale)),vh=Math.max(1,Math.round(720f*scale));
+  FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)surface.getLayoutParams();
+  if(p.width!=vw||p.height!=vh||p.gravity!=Gravity.CENTER){
+   p.width=vw;p.height=vh;p.gravity=Gravity.CENTER;surface.setLayoutParams(p);
+  }
  }
  private Process process(String... args)throws IOException{
   ProcessBuilder p=new ProcessBuilder(args).redirectErrorStream(true);Map<String,String> e=p.environment();e.clear();e.put("PATH",root+"/usr/bin:"+root+"/bin:/system/bin");e.put("HOME",files+"/home/iss");e.put("LANG","C.UTF-8");e.put("TMPDIR",root+"/tmp");e.put("XDG_RUNTIME_DIR",root+"/tmp");e.put("FXD_FILES",files);e.put("FXD_ROOT",root);e.put("FXD_SHM_SOCKET",root+"/tmp/.fxshm/sock");e.put("FEXDROID_PRESENT",root+"/tmp/fxpresent.sock");e.put("LD_LIBRARY_PATH",base+"/lib:"+root+"/usr/lib/aarch64-linux-gnu:"+root+"/usr/lib:"+root+"/usr/lib/aarch64-linux-gnu/pulseaudio");e.put("ISS_GAME_DIR",getIntent().getStringExtra("game_dir"));e.put("ISS_ANDROID_INPUT","1");
+  android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
+  e.put("TLG_SHOW_FPS",prefs.getBoolean("show_fps",false)?"1":"0");
+  e.put("TLG_ANDROID_FPS_ONLY","1");
+  String output=prefs.getString("output_res","1920x1080");
+  e.put("TLG_OUTPUT_RES","1280x720".equals(output)?"1280x720":"1920x1080");
   if(args.length>1&&args[1].endsWith("/Xvfb"))e.put("LD_PRELOAD",root+"/usr/lib/fexdroid/libfxpath.so");return p.start();
  }
  @Override public void surfaceCreated(SurfaceHolder holder){if(shmid>=0){attach(holder);return;}if(started)return;started=true;

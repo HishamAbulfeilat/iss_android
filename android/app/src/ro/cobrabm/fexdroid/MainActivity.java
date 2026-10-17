@@ -15,6 +15,31 @@ public final class MainActivity extends Activity {
   LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(32,48,32,32);
   TextView title=new TextView(this);title.setText("inFAMOUS SECOND SON\nDaedalus Android Fork\nLinux/glibc + FEX — Experimental");title.setTextSize(24);l.addView(title);
   status=new TextView(this);status.setPadding(0,24,0,24);l.addView(status);
+  android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
+  TextView settings=new TextView(this);settings.setText("Opções de vídeo e controles");settings.setTextSize(20);settings.setPadding(0,16,0,8);l.addView(settings);
+  CheckBox fps=new CheckBox(this);fps.setText("Mostrar FPS (contador do renderizador)");fps.setChecked(prefs.getBoolean("show_fps",false));
+  fps.setOnCheckedChangeListener((b,checked)->prefs.edit().putBoolean("show_fps",checked).apply());l.addView(fps);
+  TextView displayLabel=new TextView(this);displayLabel.setText("Exibição:");l.addView(displayLabel);
+  Spinner display=new Spinner(this);
+  String[] displayValues={"Ajustar (16:9, sem cortar)","Preencher a tela (Fullscreen)"};
+  display.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,displayValues));
+  display.setSelection("fill".equals(prefs.getString("display_mode","fill"))?1:0);
+  display.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
+    prefs.edit().putString("display_mode",pos==1?"fill":"fit").apply();
+   }
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });l.addView(display);
+  TextView resolutionLabel=new TextView(this);resolutionLabel.setText("Resolução de saída (não altera o patch interno do jogo):");l.addView(resolutionLabel);
+  Spinner output=new Spinner(this);String[] outputValues={"1280 × 720 (720p)","1920 × 1080 (1080p)"};
+  output.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,outputValues));
+  output.setSelection("1280x720".equals(prefs.getString("output_res","1920x1080"))?0:1);
+  output.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
+    prefs.edit().putString("output_res",pos==0?"1280x720":"1920x1080").apply();
+   }
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });l.addView(output);
   button(l,"Select game folder",this::choose);button(l,"Launch game",this::launch);
   button(l,"Export latest log",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
   TextView help=new TextView(this);help.setText("Use an extracted game with update 1.07 merged into the same folder. Upstream reference: CUSA00223.\n\nGraffiti: L3 + R3 toggles sensor mode; Cross shakes, R2 sprays, left stick aims.\n\nBased on HayatoG/iss_pc, FEX-Emu and shadPS4. Android infrastructure adapted from God of War III — Daedalus Fork, Bloodborne-Android and fexdroid.\n\nNo game files included.");l.addView(help);ScrollView sc=new ScrollView(this);sc.addView(l);setContentView(sc);refresh();
