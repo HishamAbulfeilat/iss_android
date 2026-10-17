@@ -82,6 +82,33 @@ if [[ ! -f $prefix/.done-libucontext ]]; then
     cp "$ctx/LICENSE" "$prefix/share/licenses/libucontext/"
     touch "$prefix/.done-libucontext"
 fi
+# ARM64 NEON FFT accesses external ff_tx_tab_* tables with a non-PIC ADRP.
+# --enable-pic is insufficient for handwritten assembly; rewrite only this
+# cross-object access through the GOT, keeping the accelerated NEON FFT.
+python3 - "$src/ffmpeg-7.1.5/libavutil/aarch64/tx_float_neon.S" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+source = p.read_text()
+old = r"        movrel          \re, X(ff_tx_tab_\len\()_float)"
+new = r"""#if CONFIG_PIC && !defined(__APPLE__) && !defined(_WIN32)
+        adrp            \re, :got:X(ff_tx_tab_\len\()_float)
+        ldr             \re, [\re, :got_lo12:X(ff_tx_tab_\len\()_float)]
+#else
+        movrel          \re, X(ff_tx_tab_\len\()_float)
+#endif"""
+if source.count(old) != 1 and new not in source:
+    raise SystemExit("FFmpeg 7.1.5 ARM64 source changed; refusing unverified PIC patch")
+if new not in source:
+    p.write_text(source.replace(old, new, 1))
+    print("FFmpeg 7.1.5 Bionic: accelerated NEON FFT now uses GOT for external tables")
+PY
+# Existing cache prefixes contain FFmpeg built before this repair. Only its
+# archives must be rebuilt; other already-validated dependencies stay cached.
+if [[ ! -f $prefix/.done-ffmpeg-got-pic-v1 ]]; then
+    rm -f "$prefix/.done-ffmpeg"
+    rm -rf "$bld/ffmpeg"
+fi
 # FFmpeg (avplayer/videodec): static, PIC, no programs, only built-in codecs/demuxers.
 if [[ ! -f $prefix/.done-ffmpeg ]]; then
     tc=$ndk/toolchains/llvm/prebuilt/linux-x86_64
@@ -99,4 +126,5 @@ if [[ ! -f $prefix/.done-ffmpeg ]]; then
     popd >/dev/null
     touch "$prefix/.done-ffmpeg"
 fi
+touch "$prefix/.done-ffmpeg-got-pic-v1"
 echo "Bionic deps in $prefix"
