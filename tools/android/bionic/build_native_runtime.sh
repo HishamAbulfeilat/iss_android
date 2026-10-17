@@ -26,11 +26,20 @@ done
 "$ar" rcs "$out/libatrac9.a" "$out"/atrac9/*.o
 includes=(-Iport -Iport/src -Iport/gpu -I"$prefix/include" -I"$prefix/include/freetype2")
 objects=()
+compile_failed=0
 for source in port/src/probe.c port/src/runtime*.c; do
   object="$out/runtime-objects/$(basename "${source%.c}").o"
-  "$cc" -std=gnu11 -O2 -g -Wall -Wextra -pthread -fPIE "${includes[@]}" -c "$source" -o "$object"
+  # Continue on errors and identify *every* incompatible HLE source in one pass.
+  if ! "$cc" -std=gnu11 -O2 -g -Wall -Wextra -pthread -fPIE "${includes[@]}" -c "$source" -o "$object"; then
+    printf 'ISS Bionic C compilation failed: %s\n' "$source" >&2
+    compile_failed=1
+  fi
   objects+=("$object")
 done
+if [[ $compile_failed != 0 ]]; then
+  echo 'Bionic C/HLE preflight failed; all affected source files reported above' >&2
+  exit 1
+fi
 if [[ ${1:-} = --compile-only ]]; then
   echo "ISS Bionic C/HLE/launcher objects compile successfully"; exit 0
 fi
