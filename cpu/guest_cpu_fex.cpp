@@ -225,6 +225,14 @@ public:
                 return {base, size, false};
             }
         }
+        // Don't treat writable data or unmapped pages as executable: it would
+        // hide erroneous jumps and allow decoding garbage. Limited diagnostics
+        // make an unregistered JIT/trampoline recognizable in the device log.
+        static std::atomic<unsigned> miss_count {0};
+        if (miss_count.fetch_add(1, std::memory_order_relaxed) < 6) {
+            std::fprintf(stderr, "FEX executable range unregistered: guest=0x%llx (not executable guest code)\n",
+                         static_cast<unsigned long long>(address));
+        }
         return {0, 0, false};
     }
     std::optional<FEXCore::ExecutableFileSectionInfo> LookupExecutableFileSection(InternalThreadState*, uint64_t) override {

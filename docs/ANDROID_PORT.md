@@ -105,3 +105,22 @@ Linux ARM64 verificado. A build exige que \`libpulsecommon\` esteja no
 pacote e roda \`ld-linux-aarch64.so.1 --list\` por QEMU como prova de
 resolução da cadeia (sem alegar teste do jogo). O APK faz o mesmo preflight
 no aparelho antes de preparar os 130 MiB do eboot.
+
+## Primeira execução guest/FEX em CUSA00004
+
+O log após reparo das dependências confirma entrada no jogo, Vulkan Adreno
+830, FEX e áudio funcionais até o começo da lógica inFAMOUS. Encontrado
+`NoExec instruction in entry block: 80858C000`, seguido de SIGSEGV (139).
+
+O boot havia executado acidentalmente a instalação de hooks de distância/LOD
+específicos de **GoW III CUSA01623 v01.02** em **inFAMOUS CUSA00004 v01.00**.
+A verificação por assinaturas de bytes sem confirmação do jogo permitia a
+correspondência indevida: `Draw distance: ready`. Corrigido com identificação
+do TITLE_ID+APP_VER antes da alteração do executável. Todos os stubs dinâmicos
+gerados para os hooks de GoW agora também entram no registro de regiões
+executáveis FEX, evitando `NoExec` por omissão de registro quando usados no
+jogo correto. A consulta FEX continua recusando páginas desconhecidas e
+registra até seis faltas; não desativa proteção nem permite executar dados.
+
+Essa correção elimina a corrupção comprovável no código do inFAMOUS.
+O sucesso do gameplay ainda depende de teste no dispositivo.

@@ -642,6 +642,7 @@ static void install_cheats(const char *app0, Segment *segments, uint64_t count, 
             continue;
         }
         protect(stubs, page_size, 5);
+        guest_cpu_code((uintptr_t)stubs, page_size); /* FEX must know this is executable */
         for (unsigned i = 0; i < TLG_CHEAT_HOOK_COUNT; ++i) {
             const TlgCheatHook *hook = &tlg_cheat_hooks[i];
             if (hook->id != id) continue;
@@ -676,6 +677,7 @@ static void install_actor_watch(const char *app0, Segment *segments, uint64_t co
     }
     tlg_actor_build_stub(stub, tlg_actor_slots_address(), (uintptr_t)(image + at + TLG_ACTOR_HOOK_LENGTH));
     protect(stub, page_size, 5);
+    guest_cpu_code((uintptr_t)stub, page_size);
     const int32_t relative = (int32_t)delta;
     image[at] = 0xe9;
     memcpy(image + at + 1, &relative, 4);
@@ -715,6 +717,7 @@ static void install_orb_multiplier(const char *app0, Segment *segments, uint64_t
     }
     memcpy(stub, code, sizeof(code));
     protect(stub, page_size, 5);
+    guest_cpu_code((uintptr_t)stub, page_size);
     for (unsigned i = 0; i < 3; ++i)
         memcpy(image + tlg_orb_calls[i] + 1, &displacements[i], 4);
     tlg_orbs_status(1);
@@ -755,7 +758,10 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
                                    tlg_orb_pickup_multiplier(2),
                                    (uintptr_t)(image + pickup_at + TLG_ORB_PICKUP_LENGTH));
     }
-    if (stubs) protect(stubs, page_size, 5);
+    if (stubs) {
+        protect(stubs, page_size, 5);
+        guest_cpu_code((uintptr_t)stubs, page_size);
+    }
     damage = damage && install_jump(damage_at, TLG_DAMAGE_HOOK_LENGTH, stubs);
     pickup = pickup && install_jump(pickup_at, TLG_ORB_PICKUP_LENGTH, stubs + 256);
     tlg_stat_multipliers_status(damage, pickup);
@@ -768,7 +774,16 @@ extern void tlg_view_attach(unsigned char *guest_image);
 
 /* Draw distance, LOD and clip planes (src/view_hook.h): the menu's values reach the game's data
  * through tlg_view_attach; the regions' LOD_ADJUST and FADE_DISTANCE go through four stubs. */
-static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size) {
+static void install_view_tuning(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
+    /* IMPORTANT: the pre-existing signature test alone matched CUSA00004.
+     * On ARM64/FEX this accidentally installed GoW III x86 code stubs inside
+     * inFAMOUS Second Son, followed by "NoExec instruction in entry block".
+     * Never write GoW III hooks to an inFAMOUS executable. */
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if (strcmp(serial, "CUSA01623") || strcmp(version, "01.02")) return;
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
@@ -793,6 +808,7 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
         }
     }
     protect(stubs, page_size, 5);
+    guest_cpu_code((uintptr_t)stubs, page_size);
     for (unsigned kind = 0; kind < 2; ++kind)
         for (unsigned i = 0; i < 2; ++i)
             install_jump(sites[kind][i], TLG_VIEW_SITE_LENGTH, stubs + (kind * 2 + i) * 128);
@@ -1380,7 +1396,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
-    if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
