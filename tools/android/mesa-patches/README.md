@@ -16,6 +16,10 @@ The common patch set is applied in lexical order to both variants:
   patch for the optional `TU_KGSL_PWR_CONSTRAINT` setting.
 - `0007-wsi-x11-sw-frames-straight-to-the-app.patch` — fexdroid-derived local Mesa patch
   for the `FEXDROID_PRESENT` shared-frame path.
+- `0008-wsi-x11-sw-present-direct-even-with-mit-shm.patch` — inFAMOUS Android fix:
+  use completed direct frames when MIT-SHM is also advertised by Xvfb, instead
+  of scanning Xvfb mid-update (horizontal tearing). Without direct-present,
+  Mesa's original MIT-SHM/DRI3 path remains unchanged.
 
 The common patches are associated with the pinned Mesa revision in `build_turnip.sh` and
 retain the license/provenance headers from their source. The fexdroid source boundary is

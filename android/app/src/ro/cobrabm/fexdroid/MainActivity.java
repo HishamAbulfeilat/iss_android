@@ -62,11 +62,6 @@ public final class MainActivity extends Activity {
   CheckBox depth=new CheckBox(this);depth.setText("Desativar Depth Blur");
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
-  TextView textureLabel=new TextView(this);textureLabel.setText("Compatibilidade de texturas (Adreno Gen8)");textureLabel.setTextSize(18);textureLabel.setPadding(0,16,0,8);l.addView(textureLabel);
-  CheckBox textureFix=new CheckBox(this);textureFix.setText("Alias 1D/2D (BP09 — evita LUT desatualizada)");textureFix.setChecked(prefs.getBoolean("texture_1d_fix",true));
-  textureFix.setOnCheckedChangeListener((b,enabled)->prefs.edit().putBoolean("texture_1d_fix",enabled).apply());l.addView(textureFix);
-  CheckBox bcTiny=new CheckBox(this);bcTiny.setText("Decodificar BC1–BC5 pequenos na CPU (experimental)");bcTiny.setChecked(prefs.getBoolean("bc_tiny",false));
-  bcTiny.setOnCheckedChangeListener((b,enabled)->prefs.edit().putBoolean("bc_tiny",enabled).apply());l.addView(bcTiny);
   TextView caveat=new TextView(this);caveat.setText("Os XMLs enviados não possuem patch de sombras. Fullscreen sem corte estica a proporção 16:9 do jogo, sem perder HUD.");l.addView(caveat);
   button(l,"Select game folder",this::choose);button(l,"Launch game",this::launch);
   button(l,"Export latest log",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));

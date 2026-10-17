@@ -15,6 +15,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
  private final Handler main=new Handler(Looper.getMainLooper());private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private Process game,xvfb;private volatile boolean destroyed,started,failed;private int shmid=-1;private String files,root,base;
  private int displayLogLines;
+ private long attachedAtMs;
+ private boolean directLogged, fallbackLogged;
  private synchronized void record(String message){
   if(files==null)return;
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
@@ -69,9 +71,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
   if(prefs.getBoolean("patch_dof",false))enabled.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))enabled.add("Disable depth blur");
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",enabled));
-  // Existing texture backport: 1D colour LUT and 2D render-target alias.
-  e.put("TLG_BP09",prefs.getBoolean("texture_1d_fix",true)?"1":"0");
-  e.put("TLG_BC_TINY",prefs.getBoolean("bc_tiny",false)?"1":"0");
+  // Both experiments were rejected on-device (BP09 worsened graphics).
+  // Force their OFF state even for users with old persisted preferences.
+  e.put("TLG_BP09","0");
+  e.put("TLG_BC_TINY","0");
   if(args.length>1&&args[1].endsWith("/Xvfb"))e.put("LD_PRELOAD",root+"/usr/lib/fexdroid/libfxpath.so");return p.start();
  }
  @Override public void surfaceCreated(SurfaceHolder holder){if(shmid>=0){attach(holder);return;}if(started)return;started=true;
@@ -100,7 +103,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
   record("Attaching Xvfb shared memory to Android Surface");
   String result=DisplayBridge.start(h.getSurface(),root+"/tmp/.fxshm/sock",shmid,60,root+"/tmp/fxpresent.sock");
   record("DisplayBridge result: "+result);
-  if(!result.startsWith("bridge running:")){error(result);return;}XInput.connect(0);
+  if(!result.startsWith("bridge running:")){error(result);return;}
+  attachedAtMs=android.os.SystemClock.uptimeMillis();
+  directLogged=false;fallbackLogged=false;
+  XInput.connect(0);
   if(game==null)worker.execute(()->{try{
    record("Running game preflight /system/bin/sh -> explicit glibc loader");
    game=process("/system/bin/sh",base+"/run-iss.sh");
@@ -111,7 +117,21 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
    if(!destroyed)error("Game stopped ("+code+"). Export the log from the launcher.");
   }catch(Exception e){error(e.toString());}});poll();
  }
- private void poll(){if(destroyed)return;if(!failed&&DisplayBridge.frames()>0)status.setVisibility(View.GONE);main.postDelayed(this::poll,1000);}
+ private void poll(){
+  if(destroyed)return;
+  long frames=DisplayBridge.frames();
+  if(!failed&&frames>0)status.setVisibility(View.GONE);
+  long direct=DisplayBridge.directFrames();
+  if(direct>0&&!directLogged){
+   directLogged=true;
+   record("DIRECT_PRESENT_ACTIVE: "+direct+" complete Mesa frames, total displayed="+frames);
+  }else if(direct==0&&!fallbackLogged&&frames>0
+           &&android.os.SystemClock.uptimeMillis()-attachedAtMs>=60000){
+   fallbackLogged=true;
+   record("WARNING: no direct Mesa frames after 60s; Xvfb polling fallback can cause horizontal tearing");
+  }
+  main.postDelayed(this::poll,1000);
+ }
  private void error(String s){failed=true;record("ERROR: "+s);main.post(()->{status.setVisibility(View.VISIBLE);status.setText(s);});}
  @Override public void surfaceChanged(SurfaceHolder h,int f,int w,int height){}
  @Override public void surfaceDestroyed(SurfaceHolder h){DisplayBridge.stop();}

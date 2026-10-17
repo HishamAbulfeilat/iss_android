@@ -65,6 +65,11 @@ for target in "$base/bin/iss-probe" "$base/lib/libtlggpu.so" "$base/lib/libisscp
   esac
 done
 echo "ISS ELF preflight OK: probe, GPU, CPU and Linux Turnip Gen8 dependencies resolved"
+# Linux Turnip on KGSL uses software WSI for the Xvfb display. Its Mesa
+# fxpresent path sends completed frames directly to the Android bridge.
+# Do NOT let the Android bridge poll/copy Xvfb's mutable framebuffer unless
+# direct presentation has actually failed (e.g. non-fullscreen X window).
+export MESA_VK_WSI_DEBUG=sw
 export DISPLAY=:0 SDL_VIDEODRIVER=x11
 # SDL3 disk driver feeds the Android AudioTrack FIFO; do not use a host Linux sound daemon.
 # SDL3 disk driver: emit raw PCM into the FIFO consumed by Android AudioTrack.
