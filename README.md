@@ -2,31 +2,41 @@
 
 Projeto **iss_android**, mantido por [erickmendes22 — Daedalus Emulator](https://www.youtube.com/@daedalusemulator), baseado em [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc).
 
-## Estado atual
+## Estado atual (17/10/2026)
 
-**Preparação do port para Android ARM64. Ainda não há APK Android nem gameplay Android validada neste projeto.**
+**APK experimental Android ARM64 gerado por CI, usando Linux/glibc + FEXCore. O jogo ainda não foi validado em um dispositivo Android.**
 
-A primeira etapa utilizará **Linux/glibc + FEXCore**, reaproveitando a infraestrutura dos ports de God of War III e Bloodborne. Após validar inicialização e gameplay, a etapa seguinte será a migração para o runtime nativo **Android/Bionic**.
+A branch [`android-glibc`](https://github.com/erickmendes22/iss_android/tree/android-glibc) contém a primeira integração de runtime, tradução x86-64 → ARM64, renderizador Vulkan, launcher Android, controles, áudio e empacotamento. A branch `main` permanece separada.
 
-O código original do jogo é x86-64 e precisará de tradução para ARM64. O renderizador traduz comandos gráficos e shaders do PS4 para Vulkan.
+O [GitHub Actions Android glibc](https://github.com/erickmendes22/iss_android/actions/workflows/android-glibc.yml) compilou os binários nativos, gerou o APK, assinou-o com uma chave local de desenvolvimento e verificou o pacote em 17/10/2026 ([execução aprovada](https://github.com/erickmendes22/iss_android/actions/runs/39031239053)). O APK está dentro do artefato `iss-android-glibc-apk-...` dessa execução, junto do checksum.
+
+**Não há confirmação de boot, menu, saves, renderização ou gameplay no Redmagic/Android.** A aprovação do CI comprova somente compilação e empacotamento; a etapa posterior é testar com uma cópia própria e compatível do jogo. O APK usa assinatura local experimental, que pode mudar entre builds e exigir desinstalar a versão anterior para instalar outra.
+
+## Arquitetura da etapa glibc
+
+- **CPU:** código x86-64 do jogo traduzido por FEXCore; ponte `guest_cpu` adaptada para threads, TLS, exceções, callbacks e fibras ARM64.
+- **GPU:** biblioteca Vulkan `libtlggpu.so` preservando correções e serviços do `iss_pc`; erros de compilação ARM64 foram resolvidos sem importar patches específicos de outros jogos.
+- **Android:** launcher Java, apresentação via bridge fexdroid/Xvfb, controles físicos e virtuais, modo sensor para grafite, áudio e exportação de logs.
+- **Empacotamento:** rootfs glibc e scripts de preparação do `iss_pc` incluídos; `eboot.bin`, arquivos de jogo, saves de terceiros e firmware não são distribuídos.
+- **Primeiro teste:** exige arquivos extraídos do inFAMOUS Second Son, com atualização 1.07 integrada na mesma pasta (referência upstream `CUSA00223`). A compatibilidade em Android permanece não confirmada.
+
+O build experimental contém a implementação **glibc**, e **não** um runtime Bionic. A migração para Android/Bionic é uma etapa separada, posterior à validação da inicialização e do jogo na base glibc.
 
 ## Base preservada
 
-- Código, submódulos e correções específicas do inFAMOUS provenientes de `HayatoG/iss_pc`.
+- Código, submódulos, serviços e correções específicas do inFAMOUS provenientes de `HayatoG/iss_pc`.
 - Base inicial: `1898d449a7edf506d12ef63445f8fc5432e60105`.
-- Documentação original preservada em [README.upstream.md](README.upstream.md). Seus requisitos e instruções de execução descrevem a versão de PC.
-- Os workflows herdados ainda compilam a versão de PC; não geram um APK Android.
+- Documentação original de PC preservada em [README.upstream.md](README.upstream.md).
+- Build de PC preservado; o workflow Android experimental é separado.
 
-Consulte o [plano de adaptação](docs/ANDROID_PORT.md) para as etapas e os pontos que precisam de implementação.
+Consulte [docs/ANDROID_PORT.md](docs/ANDROID_PORT.md) para o estado de cada etapa.
 
 ## Créditos
 
-- [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc) — projeto de origem, runtime e adaptações específicas do inFAMOUS.
-- [God of War III — Daedalus Fork](https://github.com/erickmendes22/gow3_android_daedalus_fork) — referência para a infraestrutura Android e integração FEX.
-- [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android) — referência para a etapa Android/Bionic.
-- [FEX-Emu](https://github.com/FEX-Emu/FEX) — tradução dinâmica x86-64 para ARM64 planejada.
-- [shadPS4](https://github.com/shadps4-emu/shadPS4) e demais projetos e colaboradores creditados na [documentação original](README.upstream.md).
+- [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc) — projeto de origem e adaptações do inFAMOUS.
+- [God of War III — Daedalus Fork](https://github.com/erickmendes22/gow3_android_daedalus_fork) — referência da infraestrutura Linux/glibc Android e FEX, sem reaproveitar patches de jogo.
+- [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android) — referência de integração Android e futura etapa Bionic.
+- [FEX-Emu](https://github.com/FEX-Emu/FEX) — tradução dinâmica de x86-64 para ARM64.
+- [shadPS4](https://github.com/shadps4-emu/shadPS4), [fexdroid](https://github.com/cobrabm12/fexdroid) e demais autores e colaboradores creditados na documentação e fontes.
 
-As atribuições e licenças existentes nos arquivos e componentes continuam preservadas. Os projetos Android citados são referências de integração; sua infraestrutura ainda não foi incorporada nesta preparação inicial.
-
-Nenhum arquivo do jogo ou firmware é distribuído. É necessária uma cópia própria do jogo. Projeto sem afiliação com Sony Interactive Entertainment ou Sucker Punch Productions.
+Atribuições e licenças existentes devem ser preservadas. Nenhum arquivo de jogo ou firmware é distribuído. Projeto sem afiliação com Sony Interactive Entertainment ou Sucker Punch Productions.

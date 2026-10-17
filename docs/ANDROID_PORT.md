@@ -1,35 +1,40 @@
-# Plano do port Android
+# inFAMOUS Second Son — plano do port Android
 
-## Escopo inicial
+Projeto `iss_android` separado dos ports de God of War III e Bloodborne. Base upstream: `HayatoG/iss_pc`, commit `1898d449a7edf506d12ef63445f8fc5432e60105`.
 
-Projeto separado de God of War III: preservar a base de inFAMOUS Second Son e adaptar apenas as camadas necessárias ao Android ARM64. Primeiro Linux/glibc com FEXCore; depois Android/Bionic.
+## Estado verificado em 17/10/2026
 
-Base upstream: HayatoG/iss_pc, commit 1898d449a7edf506d12ef63445f8fc5432e60105.
+| Etapa | Estado | Evidência/limitação |
+| --- | --- | --- |
+| Ponte `guest_cpu`, FEXCore, TLS e fibras ARM64 | Implementada; compilada | Contextos FEX independentes; testes sintéticos anteriores não substituem teste real com jogo |
+| Biblioteca Vulkan `libtlggpu.so` | Compilada para ARM64 | Mantidas correções do inFAMOUS do PC; ainda sem renderização validada no dispositivo |
+| Loader `iss-probe` glibc | Compilado para ARM64 | Inclui FreeType ARM64; checagem CPUID x86 mantida somente no PC |
+| Launcher Android, controles, sensor para grafite, áudio e bridge de imagem | Compilados/empacotados | Interfaces de dispositivo ainda não validadas no jogo |
+| Rootfs, scripts do jogo e APK | Empacotados/assinados | [Actions Android glibc aprovado](https://github.com/erickmendes22/iss_android/actions/runs/39031239053); assinatura APK v3 verificada |
+| Boot/menu/save/gameplay no Android | **Pendente** | Precisa de teste em aparelho real e logs, sem prometer desempenho |
+| Migração para Bionic | **Não iniciada nesta branch** | Somente após estabilidade glibc |
 
-## Etapas de implementação
+## Sequência técnica
 
-1. Introduzir a interface guest_cpu entre o runtime e a execução do jogo, mantendo o caminho x86-64 de PC. Adaptar imports, callbacks, entradas de threads, TLS/GS, contadores de tempo e tratamento de sinais.
-2. Integrar FEXCore com versão fixada e compilar o runtime Linux ARM64 com glibc. Auditar caminhos de assembly x86, fibras e acessos a registradores de contexto.
-3. Adaptar o renderizador e sua ponte ao apresentador Android, sem depender de um servidor X11. Auditar o walker SRT, a proteção de páginas e os recursos Vulkan disponíveis no dispositivo.
-4. Integrar o aplicativo Android: seleção de jogo, instalação, controles, áudio, apresentação, logs e empacotamento do runtime. Preservar o sensor de movimento e touchpad específicos do inFAMOUS.
-5. Validar inicialização, menus, carregamento de save e gameplay em aparelho real antes de avaliar desempenho ou declarar compatibilidade.
-6. Migrar para Android/Bionic usando a ponte de CPU e interfaces de apresentação já isoladas, revalidando comportamento e empacotamento.
+1. A camada x86-64 do `iss_pc` usa `guest_cpu`/FEX no host ARM64 Linux/glibc, preservando a execução de PC.
+2. Na primeira etapa Android, a imagem passa por Xvfb/bridge fexdroid até a `Surface` do aplicativo. A substituição desta cadeia por uma apresentação Android/Bionic realmente nativa é uma etapa posterior.
+3. O launcher recebe uma pasta extraída com `eboot.bin` e executa os scripts originais de preparação/vinculação de módulos antes de iniciar `iss-probe`. Nenhum arquivo de jogo é incluído no APK.
+4. O controle Android é publicado num arquivo de estado consumido pelo runtime do inFAMOUS. L3+R3 alterna o modo sensor do grafite, sem modificar a configuração do controle de PC.
+5. O APK da branch `android-glibc` é produzido pelo workflow `.github/workflows/android-glibc.yml`. O artefato é assinado com chave **de desenvolvimento local**; instalações sucessivas podem ter certificados diferentes.
+6. Antes de qualquer alegação de funcionamento, validar instalação limpa, arranque do glibc, `iss-probe`, apresentação Vulkan, controles, grafite, saves, menus e gameplay, nesta ordem.
+7. Somente depois de validar os blocos essenciais, planejar migração Bionic com a mesma semântica de CPU, GPU e HLE.
 
 ## Regras de integração
 
-- Não aplicar patches de executável, endereços, resoluções, limites de FPS ou configurações de readback específicos de God of War III ao inFAMOUS.
-- Preservar as correções gráficas e serviços próprios do iss_pc; avaliar equivalência antes de trazer otimizações de outro port.
-- Não apresentar uma compilação bem-sucedida como confirmação de funcionamento no aparelho.
-- Manter créditos, licenças e referências das partes incorporadas.
-- Não distribuir dumps de jogo, firmware, saves de terceiros ou bibliotecas proprietárias.
+- Não transferir indiscriminadamente endereços, patch de executável, resolução, FPS ou readback específicos de God of War III.
+- Não descartar otimizações e correções exclusivas do `iss_pc`.
+- Não confundir APK gerado em CI com compatibilidade comprovada em dispositivo.
+- Manter a branch `main` separada da integração experimental e preservar créditos/licenças.
+- Não distribuir dumps de jogo, firmware, saves de terceiros ou bibliotecas proprietárias do jogo.
 
-## Bloqueios identificados no código de origem
+## Falhas de build corrigidas nesta integração
 
-- port/src/probe.c exige x86-64 e acessa registradores e assembly dessa arquitetura.
-- port/src/runtime_thread.c usa arch_prctl/ARCH_SET_GS e instruções x86 de estado de ponto flutuante.
-- O tratamento de sinais e diagnóstico de falhas de memória assume contextos x86 em vários caminhos.
-- port/src/runtime_gr2.c contém fibras com getcontext/makecontext/swapcontext, que exigirão auditoria na etapa Bionic.
-- port/gpu/CMakeLists.txt exige X11 nas plataformas fora do Windows e ainda não tem um alvo Android.
-- O projeto não possui integração guest_cpu/FEXCore na base inicial.
-
-Esta preparação adiciona somente identificação e documentação do projeto Android. Não inclui ainda as adaptações acima nem um workflow de APK.
+- `CPUState` do FEX possui contador de sinais não atribuível. A cópia dos estados de fibras preserva os componentes internos de cada thread.
+- A busca de informações binárias de shaders usa conversões de ponteiros em tempo de execução: funções não são mais declaradas `constexpr` inválidas no Clang ARM64.
+- FreeType usa `ft2build.h` sob o diretório `freetype2` do sysroot ARM64.
+- `cpu_check.c` tem instruções CPUID de x86 e não deve entrar no link do loader ARM64.
