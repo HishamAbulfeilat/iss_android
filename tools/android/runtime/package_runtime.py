@@ -32,7 +32,7 @@ PYTHON_PACKAGES = ("python3.13-minimal", "libpython3.13-minimal", "libpython3.13
 # The extras cover extensions such as _ssl, _gdbm, _nis and _curses_panel.
 PYTHON_EXTRA_LIB_PACKAGES = (
     "libssl3t64", "libgdbm6t64", "libgdbm-compat4t64",
-    "libcrypt1", "libnsl2", "libtirpc3t64", "libpanelw6",
+    "libcrypt1", "libnsl2", "libtirpc3t64",
 )
 PROTECTED_RUNTIME_PACKAGES = {"libc6", "libc6-dev", "libstdc++6", "libgcc-s1",
                               "libpython3.13-minimal", "libpython3.13-stdlib"}
