@@ -20,7 +20,7 @@
 #include <cstring>
 #include <memory>
 #include <thread>
-#include <x86intrin.h>
+#include "common/host_cpu.h"
 
 #include "common/assert.h"
 #include "common/thread.h"
@@ -109,10 +109,10 @@ public:
         ++drains;
         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
         ++drains_by_reason[slot];
-        const u64 start = __rdtsc();
+        const u64 start = Common::FencedRDTSC();
         for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
             if (spins < 4096) {
-                __builtin_ia32_pause();
+                Common::HostPause();
             } else if (SleepInDrain()) {
                 SleepUntilDrained();
                 break;
@@ -120,7 +120,7 @@ public:
                 std::this_thread::yield();
             }
         }
-        const u64 waited = __rdtsc() - start;
+        const u64 waited = Common::FencedRDTSC() - start;
         drain_cycles += waited;
         cycles_by_reason[slot] += waited;
     }
@@ -189,7 +189,7 @@ private:
     }
     void WaitForSpace(u64 at, u64 size) {
         while (at + size - consumed.load(std::memory_order_acquire) > Capacity) {
-            __builtin_ia32_pause();
+            Common::HostPause();
         }
     }
 
@@ -216,7 +216,7 @@ private:
                     if (stop.stop_requested()) {
                         return;
                     }
-                    __builtin_ia32_pause();
+                    Common::HostPause();
                     if (!(spins & 255) && std::chrono::steady_clock::now() >= spin_until) {
                         const u32 seen = wake.load(std::memory_order_seq_cst);
                         sleeping.store(true, std::memory_order_seq_cst);
@@ -236,9 +236,9 @@ private:
                 NotifyDrain();
                 continue;
             }
-            const u64 start = __rdtsc();
+            const u64 start = Common::FencedRDTSC();
             handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
-            busy_cycles.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+            busy_cycles.fetch_add(Common::FencedRDTSC() - start, std::memory_order_relaxed);
             at += header->size;
             consumed.store(at, std::memory_order_seq_cst);
             NotifyDrain();

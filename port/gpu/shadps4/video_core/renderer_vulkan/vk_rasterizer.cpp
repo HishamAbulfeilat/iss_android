@@ -1,3 +1,4 @@
+#include "common/host_cpu.h"
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -915,13 +916,13 @@ void Rasterizer::PrintPipeStats() {
     }
     static auto window = std::chrono::steady_clock::now();
     static u64 last_packets = 0, last_drains = 0, last_drain_cycles = 0, last_busy = 0;
-    static u64 last_tsc = __rdtsc();
+    static u64 last_tsc = Common::FencedRDTSC();
     const auto now = std::chrono::steady_clock::now();
     const double seconds = std::chrono::duration<double>(now - window).count();
     if (seconds < 5.0) {
         return;
     }
-    const u64 tsc = __rdtsc();
+    const u64 tsc = Common::FencedRDTSC();
     const double cycles = double(tsc - last_tsc);
     const u64 busy = draw_pipe->busy_cycles.load(std::memory_order_relaxed);
     std::printf("Draw pipe: %.0f draws/s pipelined, %.0f drains/s that waited, stage A waited "

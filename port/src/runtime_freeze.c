@@ -201,8 +201,8 @@ static void capture_signal(int sig, siginfo_t *info, void *context) {
     int saved = errno;
     if (__atomic_load_n(&capture_tid, __ATOMIC_ACQUIRE) == gettid()) {
         Capture *c = __atomic_load_n(&capture_out, __ATOMIC_ACQUIRE);
-        const greg_t *g = ((ucontext_t *)context)->uc_mcontext.gregs;
-        c->rip = (uintptr_t)g[REG_RIP]; c->rsp = (uintptr_t)g[REG_RSP]; c->rbp = (uintptr_t)g[REG_RBP];
+        GuestRegs g; guest_cpu_signal_regs(context,&g);
+        c->rip=g.rip; c->rsp=g.gpr[GUEST_RSP]; c->rbp=g.gpr[GUEST_RBP];
         c->frames = walk_frames(c->rbp, c->chain, MAX_FRAMES);
         c->captured = 1;
         __atomic_store_n(&capture_done, 1, __ATOMIC_RELEASE);

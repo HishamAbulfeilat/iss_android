@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include "runtime.h"
+#include "guest_cpu.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "orb_hook.h"
@@ -15,7 +16,7 @@
 #include "damage_hook.h"
 #include "view_hook.h"
 #include "gpu/tlggpu.h"
-#if !defined(__x86_64__) || !defined(__GNUC__)
+#if !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
 #ifdef _WIN32
@@ -45,11 +46,17 @@ static uint64_t module_count;
 static int entered_game;
 static int gpu_enabled;
 static unsigned cpu_missing_sets; /* CPU_SET_* the host lacks; the guest code needs them rewritten */
-static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handlers and the report read it */
-#ifndef _WIN32
-static uintptr_t guest_code_end; /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
+#ifdef GUEST_CPU_NATIVE
+static IsaTable *isa_table; /* native PC instruction rewrites */
 #endif
+#ifndef _WIN32
+#ifdef GUEST_CPU_NATIVE
+static uintptr_t guest_code_end;
+#endif /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
+#endif
+#ifdef GUEST_CPU_NATIVE
 static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
+#endif
 int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
@@ -91,8 +98,8 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     printf("STOP: first unsupported PS4 import: %s (index %u)\n", names[id], id);
     printf("API: %s\n", runtime_import_name(names[id]));
     printf("Caller return offset: 0x%" PRIxPTR "; first argument: 0x%" PRIxPTR "\n",
-           (uintptr_t)__builtin_return_address(0) - (uintptr_t)image, argument);
-    uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
+           guest_cpu_return_address((uintptr_t)__builtin_return_address(0)) - (uintptr_t)image, argument);
+    uintptr_t caller=guest_cpu_return_address((uintptr_t)__builtin_return_address(0))-(uintptr_t)image;
     for (uint64_t m=0;m<module_count;++m)
         if (caller>=modules[m].base && caller-modules[m].base<modules[m].size)
             printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",caller-modules[m].base);
@@ -125,7 +132,7 @@ static uintptr_t trace_stub(uint64_t index, uintptr_t target) {
     *p++ = 0xbf; memcpy(p, &id, 4); p += 4;
     static const unsigned char lea[] = {0x48,0x8d,0xb4,0x24,0x80,0,0,0};
     memcpy(p, lea, sizeof(lea)); p += sizeof(lea);
-    uintptr_t logger = (uintptr_t)trace_import;
+    uintptr_t logger = guest_cpu_host_function((void *)trace_import);
     *p++ = 0x48; *p++ = 0xb8; memcpy(p, &logger, 8); p += 8;
     *p++ = 0xff; *p++ = 0xd0;
     for (int x = 0; x < 8; ++x) { unsigned char m[] = {0xf3,0x0f,0x6f,(unsigned char)(0x44|(x<<3)),0x24,(unsigned char)(x*16)}; memcpy(p, m, 6); p += 6; }
@@ -136,7 +143,7 @@ static uintptr_t trace_stub(uint64_t index, uintptr_t target) {
     if (p - t > TRACE_STUB_SIZE) fail("trace stub too large");
     return trace_made[index] = (uintptr_t)t;
 }
-#ifndef _WIN32
+#if defined(GUEST_CPU_NATIVE) && !defined(_WIN32)
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
 __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
@@ -272,6 +279,7 @@ static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
 }
 #endif
 #ifndef _WIN32
+#ifdef GUEST_CPU_NATIVE
 /* ucontext gregs of IsaRegs.gpr (x86 numbering). */
 static const int isa_gregs[16]={REG_RAX,REG_RCX,REG_RDX,REG_RBX,REG_RSP,REG_RBP,REG_RSI,REG_RDI,
                                 REG_R8,REG_R9,REG_R10,REG_R11,REG_R12,REG_R13,REG_R14,REG_R15};
@@ -433,6 +441,55 @@ static void fault(int sig, siginfo_t *info, void *context) {
     if (isa_table) { isa_rewrite_report(isa_table, stderr); fflush(stderr); }
     _exit(128 + sig);
 }
+#else
+static unsigned clobber_red_zone;
+static void clobber_thread_init(void) {}
+static void fault(int sig, siginfo_t *info, void *context) {
+    /* GPU page tracking (write-protected guest pages) is resolved first. */
+    if (gpu_enabled && sig == SIGSEGV && tlggpu_handle_fault(context, info->si_addr)) return;
+    /* Faults the guest CPU itself raises (JIT bookkeeping) are handled and resumed. */
+    if (guest_cpu_handle_fault(sig, info, context)) return;
+    /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
+    if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
+        sigjmp_buf *recover = runtime_fault_recover;
+        runtime_fault_recover = NULL;
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, sig);
+        pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
+        siglongjmp(*recover, 1);
+    }
+    /* The process is terminating: dladdr/snprintf are acceptable here. */
+    GuestRegs regs;
+    const int in_guest = guest_cpu_signal_regs(context, &regs);
+    uintptr_t rip = in_guest == GUEST_CPU_IN_GUEST ? (uintptr_t)regs.rip : guest_cpu_host_pc(context);
+    char line[512];
+    Dl_info where;
+    if (rip - (uintptr_t)image < 0x10000000)
+        snprintf(line, sizeof(line), "Guest fault (signal %d) at guest offset 0x%lx, address %p\n",
+                 sig, (unsigned long)(rip - (uintptr_t)image), info->si_addr);
+    else if (dladdr((void *)rip, &where) && where.dli_fname)
+        snprintf(line, sizeof(line), "Host fault (signal %d) in %s+0x%lx (%s), address %p\n", sig, where.dli_fname,
+                 (unsigned long)(rip - (uintptr_t)where.dli_fbase), where.dli_sname ? where.dli_sname : "?", info->si_addr);
+    else
+        snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
+    { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+    if (gpu_enabled) tlggpu_dump_guest_writes(context);
+    /* Host call chain (frames with unwind info; guest frames end it). */
+    void *frames[32];
+    int depth = backtrace(frames, 32);
+    for (int i = 2; i < depth; ++i) {
+        if (dladdr(frames[i], &where) && where.dli_fname)
+            snprintf(line, sizeof(line), "  #%d %s+0x%lx (%s)\n", i, where.dli_fname,
+                     (unsigned long)((uintptr_t)frames[i] - (uintptr_t)where.dli_fbase), where.dli_sname ? where.dli_sname : "?");
+        else
+            snprintf(line, sizeof(line), "  #%d %p\n", i, frames[i]);
+        ssize_t written_=write(2, line, strlen(line)); (void)written_;
+    }
+    _exit(128 + sig);
+}
+#endif
+
 #endif
 #ifndef _WIN32
 /* Watchdog: dump RIP and the rbp frame chain of every thread (guest offsets
@@ -444,11 +501,12 @@ static void write_hex(char *out, uint64_t v) {
 }
 static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
-    uintptr_t rip=(uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rbp=(uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    GuestRegs regs; guest_cpu_signal_regs(uc,&regs);
+    uintptr_t rip=regs.rip, rbp=regs.gpr[GUEST_RBP];
     uint64_t tid=(uint64_t)gettid();
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
-    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)uc->uc_mcontext.gregs[REG_RDI]);
+    write_hex(arg+6,tid); write_hex(arg+27,regs.gpr[GUEST_RDI]);
     { ssize_t written_=write(2,arg,sizeof(arg)-1); (void)written_; }
     {   /* Thread name (the process is terminating: stdio-free reads are enough). */
         char path[64], name[32]={0};
@@ -814,6 +872,7 @@ void runtime_restart(void) {
  * in missing. */
 static int cpu_supported(char *missing, size_t size) {
     missing[0] = 0;
+#ifdef GUEST_CPU_NATIVE
     const char *check = getenv("TLG_CPU_CHECK");
     if (check && !strcmp(check, "0")) return 1;
     const CpuFeatureWords words = cpu_feature_words();
@@ -823,6 +882,9 @@ static int cpu_supported(char *missing, size_t size) {
         return 0;
     }
     cpu_missing_sets = cpu_missing_rewritable(words, missing, size);
+#else
+    (void)size;
+#endif
     return 1;
 }
 
@@ -919,6 +981,7 @@ int main(int argc, char **argv) {
     alias_port_environment();
     apply_verbose_log();
     boot_step("start");
+    guest_cpu_init(runtime_low_map);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
@@ -986,6 +1049,7 @@ int main(int argc, char **argv) {
     /* TLG_ISA_REWRITE=0 never rewrites, =1 rewrites every emulated site (MOVBE, BMI1, LZCNT, F16C, SSE4A:
      * a test on a complete CPU), a list such as "sse4a", "f16c" or "movbe,bmi1" rewrites those sets; by
      * default the sets the CPU lacks. */
+#ifdef GUEST_CPU_NATIVE
     const char *policy = getenv("TLG_ISA_REWRITE");
     int policy_valid;
     const unsigned isa_forced = cpu_sets_named(policy, &policy_valid);
@@ -1009,6 +1073,11 @@ int main(int argc, char **argv) {
     int red_zone_on = !(red_zone_policy && !strcmp(red_zone_policy, "0"));
 #else
     int red_zone_on = red_zone_policy && !strcmp(red_zone_policy, "1");
+#endif
+#else
+    unsigned isa_sets=0;
+    int red_zone_on=0;
+    (void)isa_file;
 #endif
     if (content_profile) {
         FILE *profile=fopen(content_profile,"rb");
@@ -1178,6 +1247,7 @@ int main(int argc, char **argv) {
             if (!executable) fail("native function is not executable");
         }
     }
+#ifdef GUEST_CPU_NATIVE
     isa_table = (isa_sets || red_zone_on) && isa_file ? isa_table_load(isa_file) : NULL;
     if (!isa_table && cpu_missing_sets) { printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing); return 20; }
     /* The stubs follow the image in the same low mapping (rel32 jmps reach them): the emulation
@@ -1206,6 +1276,13 @@ int main(int argc, char **argv) {
         isa_table = NULL;
         red_zone_on = 0;
     }
+#else
+    size_t stub_area=0, red_zone_area=0;
+    (void)isa_sets; (void)red_zone_on;
+    image=allocate(round_page(size));
+    if (fread(image,1,size,f)!=size || fgetc(f)!=EOF) fail("incorrect memory image size");
+    fclose(f);
+#endif
     if (!cpu_only) {
         char title[128]="God of War III", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
@@ -1225,11 +1302,13 @@ int main(int argc, char **argv) {
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);
     protect(data_traps, (import_count + 1) * page_size, 0);
+    guest_cpu_code((uintptr_t)image,round_page(size)+stub_area+red_zone_area);
+    guest_cpu_code((uintptr_t)traps,round_page((import_count+1)*32));
     for (uint64_t i = 0; i < import_count; ++i) {
         unsigned char *t = traps + i * 32;
         /* SysV: mov edi, index; movabs rax, handler; jmp rax. No fake return values. */
         uint32_t index = (uint32_t)i;
-        uintptr_t handler = (uintptr_t)unresolved;
+        uintptr_t handler = guest_cpu_host_function((void *)unresolved);
         t[0] = 0x48; t[1] = 0x89; t[2] = 0xfe; /* mov rsi,rdi: preserve arg0 */
         t[3] = 0xbf; memcpy(t + 4, &index, 4);
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
@@ -1242,6 +1321,7 @@ int main(int argc, char **argv) {
         trace_made = calloc(import_count + 1, sizeof(*trace_made));
         trace_counts = calloc(import_count + 1, sizeof(*trace_counts));
         if (!trace_made || !trace_counts) fail("allocation failed");
+        guest_cpu_code((uintptr_t)trace_stubs,round_page((import_count+1)*TRACE_STUB_SIZE));
     }
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
@@ -1250,8 +1330,8 @@ int main(int argc, char **argv) {
         if (relocs[i].kind) {
             uintptr_t resolved = runtime_resolve(names[relocs[i].value], relocs[i].kind == 2);
             if (resolved) {
-                value = resolved + relocs[i].addend;
-                if (trace_stubs && relocs[i].kind == 1 && !relocs[i].addend) value = trace_stub(relocs[i].value, resolved);
+                value = relocs[i].kind==1 ? guest_cpu_host_function((void *)resolved) : resolved + relocs[i].addend;
+                if (trace_stubs && relocs[i].kind == 1 && !relocs[i].addend) value = trace_stub(relocs[i].value, guest_cpu_host_function((void *)resolved));
             } else if (native_libc && bindings[relocs[i].value]) {
                 uint64_t address=bindings[relocs[i].value];
                 if (binding_kinds[relocs[i].value]!=relocs[i].kind || !mapped(segments,ns,address,relocs[i].addend+1)) fail("native export kind/range mismatch");
@@ -1287,6 +1367,7 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
+#ifdef GUEST_CPU_NATIVE
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
         IsaReport r = isa_rewrite_apply(isa_table, image, stubs, isa_sets);
@@ -1312,6 +1393,7 @@ int main(int argc, char **argv) {
         runtime_set_report_hook(isa_report_hook);
         protect(stubs, stub_area + red_zone_area, 5);
     }
+#endif
     protect(traps, round_page((import_count + 1) * 32), 5);
     if (trace_stubs) protect(trace_stubs, round_page((import_count + 1) * TRACE_STUB_SIZE), 5);
     protect(image, round_page(size), 0);
@@ -1339,8 +1421,7 @@ int main(int argc, char **argv) {
         /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. */
         for (uint64_t m=0;m<module_count;++m) {
             printf("Starting linked module %" PRIu64 " at image offset 0x%" PRIx64 "; native bindings=%" PRIu64 "\n",m,modules[m].init,nb);
-            typedef int (ABI *ModuleInit)(uint64_t,void *,void *);
-            int result=((ModuleInit)(image+modules[m].init))(0,NULL,NULL);
+            int result=(int)guest_cpu_call((uintptr_t)(image+modules[m].init),3,(const uint64_t[]){0,0,0});
             printf("Module %" PRIu64 " initializer returned %d\n",m,result);
             if (result) fail("module initializer failed");
         }
@@ -1369,8 +1450,13 @@ int main(int argc, char **argv) {
     enum { MAIN_STACK=8*1024*1024 };
     unsigned char *stack=runtime_low_map(MAIN_STACK,PROT_READ|PROT_WRITE);
     if (!stack) fail("cannot allocate guest main stack");
+#ifdef GUEST_CPU_NATIVE
     clobber_thread_init();
     enter_on_stack(image+entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
+#else
+    guest_cpu_thread_stack(stack+MAIN_STACK-64,MAIN_STACK-64);
+    guest_cpu_call((uintptr_t)(image+entry),2,(const uint64_t[]){(uintptr_t)&params,guest_cpu_host_function((void *)guest_exit)});
+#endif
 #endif
     fail("entry unexpectedly returned");
 }

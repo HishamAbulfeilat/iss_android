@@ -2,6 +2,7 @@
 # drivers, adapted to the native_probe runtime through shims in shim/.
 cmake_minimum_required(VERSION 3.24)
 project(tlggpu LANGUAGES C CXX)
+option(ISS_ANDROID_GLIBC "Build Linux ARM64 runtime for Android" OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -205,7 +206,7 @@ if (NOT WIN32)
     target_link_options(tlggpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
-target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
+target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt-header-only Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 # xbyak is header-only: the distribution's copy when there is one (Fedora xbyak-devel), else the
 # submodule (MSYS2 and Ubuntu do not package it).
@@ -504,3 +505,7 @@ target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan:
 
 add_executable(cheat-hook-test ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+if(ISS_ANDROID_GLIBC)
+ target_link_libraries(tlggpu PRIVATE "${ISS_CPU_LIBRARY}")
+endif()

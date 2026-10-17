@@ -24,7 +24,12 @@ typedef tlg_jmp_buf sigjmp_buf;
 extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
+#include "guest_cpu.h"
+#ifdef GUEST_CPU_NATIVE
 #define ABI __attribute__((sysv_abi))
+#else
+#define ABI
+#endif
 typedef void (ABI *GuestCallback)(void);
 void runtime_start(uint64_t capabilities);
 uintptr_t runtime_resolve(const char *name, int is_data);
@@ -148,7 +153,11 @@ typedef struct RuntimeWait {
 } RuntimeWait;
 /* Frame of the calling (guest-called) function, for runtime_wait_begin. Use it in the ABI
  * entry itself: there [frame+8] is the guest call site and [frame] the guest frame chain. */
+#ifdef GUEST_CPU_NATIVE
 #define RUNTIME_GUEST_FRAME() ((uintptr_t)__builtin_frame_address(0))
+#else
+#define RUNTIME_GUEST_FRAME() guest_cpu_stack_pointer()
+#endif
 uint64_t runtime_wait_now_ms(void);
 /* The calling thread's slot: its guest thread record, else a host slot (NULL when all are taken). */
 RuntimeWait *runtime_wait_slot(void);

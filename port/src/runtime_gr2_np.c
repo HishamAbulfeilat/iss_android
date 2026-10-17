@@ -62,11 +62,11 @@ static void *_Atomic external_alloc; /* AllocImplementation::externalAlloc */
 static void *tk_alloc(uint64_t bytes) {
     void *impl=atomic_load(&external_alloc);
     if (!impl) { once("NpToolkit AppSTLAllocator::allocate before Parameters"); return NULL; }
-    return (*(AllocFn **)impl)[0](impl,(int32_t)bytes);
+    return (void *)(uintptr_t)guest_cpu_call((uintptr_t)(*(AllocFn **)impl)[0],2,(const uint64_t[]){(uintptr_t)impl,(uint64_t)(int64_t)(int32_t)bytes});
 }
 static void tk_free(void *p,uint64_t n) {
     void *impl=atomic_load(&external_alloc);
-    if (impl) (*(FreeFn **)impl)[1](impl,p,(uint32_t)n);
+    if (impl) guest_cpu_call((uintptr_t)(*(FreeFn **)impl)[1],3,(const uint64_t[]){(uintptr_t)impl,(uintptr_t)p,(uint32_t)n});
 }
 static ABI void *alloc_char(void *self,uint64_t n,const void *hint) { (void)self; (void)hint; return tk_alloc(n); }
 static ABI void *alloc_npuser(void *self,uint64_t n,const void *hint) { (void)self; (void)hint; return tk_alloc((uint32_t)n*0x310u); }

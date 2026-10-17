@@ -1557,7 +1557,7 @@ void PersistentSrtInfo::Serialize(Serialization::Archive& ar) const {
 
     srt.Write(this, sizeof(*this));
     if (walker_func_size) {
-        srt.Write(reinterpret_cast<void*>(walker_func), walker_func_size);
+        srt.Write(SrtWalkerCode(walker_func), walker_func_size);
     }
 }
 

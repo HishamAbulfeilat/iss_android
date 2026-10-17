@@ -126,8 +126,8 @@ void runtime_finalize(void *dso) {
         if (!i) { pthread_mutex_unlock(&handler_lock); return; }
         ExitHandler handler = handlers[i-1]; handlers[i-1].active = 0;
         pthread_mutex_unlock(&handler_lock);
-        if (handler.with_arg) handler.callback.with_arg(handler.argument);
-        else handler.callback.plain();
+        if (handler.with_arg) guest_cpu_call((uintptr_t)handler.callback.with_arg,1,(const uint64_t[]){(uintptr_t)handler.argument});
+        else guest_cpu_call((uintptr_t)handler.callback.plain,0,NULL);
     }
 }
 static ABI void guest_finalize(void *dso) { runtime_finalize(dso); }

@@ -3,6 +3,7 @@
 
 #ifdef __linux__
 #include <ucontext.h>
+#include "../../../../src/guest_cpu.h"
 #endif
 #include <vector>
 #include <chrono>
@@ -86,9 +87,10 @@ struct PageManager::Impl {
         static std::unordered_map<u64, FaultSite> sites;
         static auto window = std::chrono::steady_clock::now();
         const auto* uc = static_cast<ucontext_t*>(context);
-        const u64 rip = static_cast<u64>(uc->uc_mcontext.gregs[REG_RIP]);
+        GuestRegs regs; guest_cpu_signal_regs(uc,&regs);
+        const u64 rip=regs.rip;
         // The return address at the top of the stack (right for leaf routines such as memcpy).
-        const u64 caller = *reinterpret_cast<const u64*>(uc->uc_mcontext.gregs[REG_RSP]);
+        const u64 caller = *reinterpret_cast<const u64*>(regs.gpr[GUEST_RSP]);
         std::scoped_lock lock{mutex};
         auto& site = sites[rip];
         ++site.count;
