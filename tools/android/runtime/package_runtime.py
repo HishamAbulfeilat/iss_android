@@ -21,6 +21,9 @@ from validate_runtime_elf import inspect
 SOURCE = ROOT / ".local-deps/android/migration/x/rootfs"
 BUNDLE = ROOT / "out/arm64/bundle"
 OUT = ROOT / "out/release"
+GEN8 = ROOT / "out/arm64/turnip-gen8"
+GEN8_LIBRARY = "libvulkan_freedreno_gen8.so"
+GEN8_ICD = "freedreno_gen8_icd.aarch64.json"
 PYTHON_PACKAGES = ("python3.13-minimal", "libpython3.13-minimal", "libpython3.13-stdlib")
 APP_LOADER = "/data/user/0/com.daedalus.iss/files/rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
 EXCLUDES = ("dev", "proc", "sys", "run", "home", "root", "tmp", "var", "usr/include",
@@ -90,6 +93,10 @@ def validate_inputs():
             raise SystemExit("Incomplete fexdroid rootfs: " + key)
     if not (SOURCE / "usr/share/vulkan/icd.d/freedreno_icd.aarch64.json").is_file():
         raise SystemExit("Missing Vulkan ICD JSON in fexdroid rootfs")
+    for required in (GEN8 / GEN8_LIBRARY, GEN8 / GEN8_ICD,
+                     BUNDLE / "bin/kgsl-chip-id"):
+        if not required.is_file() or required.stat().st_size == 0:
+            raise SystemExit("Missing compiled Linux/glibc Turnip Gen8 input: " + str(required))
     if not (ROOT / "tools/android/runtime/launch.py").is_file():
         raise SystemExit("Missing Python game launcher")
     if not (ROOT / "tools/android/device/run-iss.sh").is_file():
@@ -114,6 +121,10 @@ def main():
         interp = record["interpreter"] or ""
         if "com.iss.android" in interp or "ro.cobrabm.fexdroid" in interp:
             raise SystemExit("Stale interpreter in rootfs: " + name + " " + interp)
+    # Turnip Gen8 must be an AArch64 Linux shared object, never an Android/Bionic .so.
+    driver_info = inspect(GEN8 / GEN8_LIBRARY)
+    if not driver_info or driver_info["machine"] != 183 or not driver_info["dynamic"]:
+        raise SystemExit("Turnip Gen8 output is not an ARM64 Linux dynamic library")
     OUT.mkdir(parents=True, exist_ok=True)
     overlay = python_overlay()
     archive = OUT / "runtime.tar.gz"
@@ -140,6 +151,15 @@ def main():
         tar.add(ROOT / "tools/android/device/run-iss.sh", arcname="issport/run-iss.sh",
                 filter=lambda info: fix_mode(info))
         tar.add(ROOT / "tools/android/runtime/launch.py", arcname="issport/launch.py")
+        tar.add(GEN8 / GEN8_LIBRARY,
+                arcname="rootfs/usr/lib/aarch64-linux-gnu/" + GEN8_LIBRARY)
+        gen8_payload = json.loads((GEN8 / GEN8_ICD).read_text())
+        if not isinstance(gen8_payload.get("ICD"), dict):
+            raise SystemExit("Invalid Linux Gen8 Turnip Vulkan ICD")
+        gen8_payload["ICD"]["library_path"] = APP_LOADER.replace(
+            "ld-linux-aarch64.so.1", GEN8_LIBRARY)
+        add_bytes(tar, "rootfs/usr/share/vulkan/icd.d/" + GEN8_ICD,
+                  (json.dumps(gen8_payload, indent=2) + "\n").encode())
         # The JSON must point to the current APK's private rootfs, never another port.
         icd = SOURCE / "usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
         if icd.is_file():

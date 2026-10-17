@@ -19,9 +19,25 @@ for required in "$loader" "$python" "$base/bin/iss-probe" "$base/lib/libisscpu.s
     exit 31
   fi
 done
-icd="$root/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+# Pick the Linux/glibc KGSL Turnip, not a Bionic driver from the Android system.
+base_icd="$root/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
+gen8_icd="$root/usr/share/vulkan/icd.d/freedreno_gen8_icd.aarch64.json"
+chip="unknown"
+if [ -r "$base/bin/kgsl-chip-id" ]; then
+  chip=$("$loader" "$base/bin/kgsl-chip-id" 2>/dev/null) || chip="unavailable"
+fi
+case "$chip" in
+  0x44*)
+    icd="$gen8_icd"
+    echo "ISS GPU: $chip (Adreno Gen8); selecting bundled Linux/glibc Turnip Gen8"
+    ;;
+  *)
+    icd="$base_icd"
+    echo "ISS GPU: $chip; selecting base Linux/glibc Turnip (Gen8 not selected)"
+    ;;
+esac
 if [ ! -r "$icd" ]; then
-  echo "ISS preflight: missing bundled Vulkan ICD $icd" >&2
+  echo "ISS preflight: selected Vulkan ICD missing: $icd" >&2
   exit 32
 fi
 /system/bin/mkdir -p "$base/out" "$base/user" "$FXD_FILES/home/iss" || exit 33

@@ -53,3 +53,16 @@ as opções gráficas do port PC. Logs identificam agora as etapas de preparaç�
 
 **Estado:** correções de código não equivalem a boot comprovado, menu, renderização,
 controles, áudio ou desempenho em dispositivo. Esses itens continuam pendentes de teste real.
+
+## Vulkan Linux/glibc (Adreno Gen8)
+
+A primeira build continha a `libvulkan_freedreno.so` do rootfs de fexdroid,
+mas não executava `build_turnip.sh gen8` nem trazia
+`libvulkan_freedreno_gen8.so`. A etapa CI agora compila a variante Gen8
+da Mesa/Turnip com suporte KGSL, suas correções e o ICD Vulkan associado;
+a montagem do APK exige os dois arquivos. O helper ARM64
+`kgsl-chip-id` consulta `/dev/kgsl-3d0`; chip IDs `0x44...`
+selecionam o ICD Gen8. Outros IDs preservam a versão base do rootfs.
+Os arquivos do APK são ELFs Linux/ARM64/glibc, não drivers Android/Bionic.
+Compilação e empacotamento são verificações distintas de inicialização Vulkan
+e renderização em dispositivo, que permanecem pendentes.

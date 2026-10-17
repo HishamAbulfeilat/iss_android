@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
-            pkg-config patchelf libxml2-utils unzip xz-utils zstd
+            pkg-config patchelf libxml2-utils unzip xz-utils zstd bison flex python3-venv
       - uses: actions/cache@v4
         with:
           path: |
@@ -67,6 +67,13 @@ jobs:
         run: |
           export ISS_ARM64_HEADERS="$CONDA_PREFIX"
           bash tools/android/build/build_arm64.sh
+      - name: Compile Linux/glibc Turnip for Adreno Gen8 (KGSL)
+        shell: bash -el {0}
+        run: |
+          bash tools/android/build/build_turnip.sh gen8
+          test -s out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so
+          test -s out/arm64/turnip-gen8/freedreno_gen8_icd.aarch64.json
+          llvm-readelf -h out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so | grep -q 'Machine:.*AArch64'
       - name: Build experimental installable Android APK
         shell: bash -el {0}
         run: bash tools/android/apk/build_apk.sh

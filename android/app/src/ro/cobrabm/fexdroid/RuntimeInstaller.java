@@ -16,11 +16,13 @@ final class RuntimeInstaller {
  }
  private static boolean complete(File root){
   String[] required={"issport/bin/iss-probe","issport/lib/libisscpu.so","issport/lib/libtlggpu.so",
-   "issport/run-iss.sh","issport/launch.py","issport/scripts/prepare.py",
+   "issport/run-iss.sh","issport/launch.py","issport/bin/kgsl-chip-id","issport/scripts/prepare.py",
    "issport/scripts/link_modules.py","issport/scripts/graphics_options.py",
    "rootfs/usr/bin/Xvfb","rootfs/usr/libexec/fxshmd","rootfs/usr/bin/python3.13",
    "rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
    "rootfs/usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so",
+   "rootfs/usr/lib/aarch64-linux-gnu/libvulkan_freedreno_gen8.so",
+   "rootfs/usr/share/vulkan/icd.d/freedreno_gen8_icd.aarch64.json",
    "rootfs/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"};
   for(String path:required)if(!new File(root,path).isFile())return false;
   return new File(root,"issport/bin/iss-probe").canExecute();

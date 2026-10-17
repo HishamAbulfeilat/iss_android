@@ -11,6 +11,12 @@ for tool in aapt2 d8 zipalign apksigner; do
 done
 [[ -f "$jar" ]] || { echo "Missing android-35 platform" >&2; exit 1; }
 python3 tools/android/build/build_bundle.py
+# Native glibc helper uses KGSL's public ioctl to choose the correct Linux Turnip variant.
+# Never attempt to load Android/Bionic Vulkan libraries inside the glibc process.
+clang --target=aarch64-linux-gnu --sysroot="$PWD/.local-deps/android/arm64-sysroot" \
+  -fuse-ld=lld -O2 -Wall -Wextra tools/android/build/kgsl_chip_id.c \
+  -o out/arm64/bundle/bin/kgsl-chip-id
+llvm-readelf -h out/arm64/bundle/bin/kgsl-chip-id | grep -q 'Machine:.*AArch64'
 python3 tools/android/runtime/package_runtime.py
 work="$PWD/out/android-apk"
 mkdir -p "$work/classes" "$work/package/assets" "$work/package/lib/arm64-v8a" "$PWD/out/release"
