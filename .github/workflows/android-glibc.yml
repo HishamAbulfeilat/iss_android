@@ -64,6 +64,17 @@ jobs:
         run: |
           python3 tools/android/inputs/fetch_arm64_sysroot.py
           python3 tools/android/inputs/fetch_rootfs.py
+      - name: Preflight Python 3.13 ARM64 runtime libraries (before native compilation)
+        shell: bash -el {0}
+        run: |
+          python3 - <<'PY'
+          from tools.android.runtime.package_runtime import (
+              debian_index, python_overlay, runtime_library_inputs)
+          index = debian_index()
+          python_overlay(index)
+          runtime_library_inputs(index)
+          print("Python 3.13 and recursive Debian library inputs verified")
+          PY
       - name: Cross-compile FEXCore, Vulkan renderer and runtime
         shell: bash -el {0}
         run: |

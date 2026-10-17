@@ -106,23 +106,51 @@ def python_overlay(index):
     return directory
 
 
+def selected_runtime_packages(index):
+    """Resolve library *package* dependencies too, not just Python's first level.
+
+    Some stdlib extensions need libnsl -> libtirpc -> libgssapi -> libkrb5,
+    and each of those can reference yet more libraries at runtime.
+    """
+    pending = list(PYTHON_EXTRA_LIB_PACKAGES)
+    for name in PYTHON_PACKAGES:
+        if name not in index:
+            raise RuntimeError(f"Python Debian package missing from index: {name}")
+        pending.extend(dependencies(index[name]))
+    selected = set()
+    while pending:
+        name = pending.pop()
+        if name in selected or name in PROTECTED_RUNTIME_PACKAGES:
+            continue
+        if not name.startswith(("lib", "zlib")):
+            continue  # files other than native runtime libraries are not needed here
+        info = index.get(name)
+        if info is None:
+            raise RuntimeError(f"Debian {SUITE} arm64 runtime package not found: {name}")
+        selected.add(name)
+        pending.extend(dependencies(info))
+    return sorted(selected)
+
+
 def runtime_library_inputs(index):
-    # Include Debian's declared runtime dependencies for Python, not just the
-    # Python .deb files themselves. The old builder copied 3 Python .debs and
-    # then discovered one absent DT_NEEDED per 14-minute native build.
+    """Prepare verified Debian ARM64 library packages before expensive native builds."""
     import shutil
     directory = OUT / "debian-runtime-lib-input"
+    requested = selected_runtime_packages(index)
+    digest = hashlib.sha256("\n".join(
+        f"{name} {index[name]['SHA256']}" for name in requested).encode()).hexdigest()
+    marker = directory / ".package-set.sha256"
+    if (marker.is_file() and marker.read_text().strip() == digest
+            and any(directory.rglob("*.so*"))):
+        print(f"Debian ARM64 runtime inputs reused: {len(requested)} packages", flush=True)
+        return directory
     if directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True)
-    requested = set(PYTHON_EXTRA_LIB_PACKAGES)
-    for name in PYTHON_PACKAGES:
-        requested.update(dep for dep in dependencies(index[name])
-                         if dep.startswith(("lib", "zlib")))
-    requested.difference_update(PROTECTED_RUNTIME_PACKAGES)
-    for name in sorted(requested):
+    for name in requested:
         debian_package(name, index, directory)
-    print(f"Debian ARM64 Python runtime inputs: {len(requested)} packages", flush=True)
+    marker.write_text(digest + "\n")
+    print(f"Debian ARM64 runtime inputs prepared: {len(requested)} packages", flush=True)
     return directory
 
 def validate_inputs():

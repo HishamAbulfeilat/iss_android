@@ -7,6 +7,23 @@ from unittest import mock
 import audit_dependencies as audit
 
 
+class DebianPackageGraphTests(unittest.TestCase):
+    def test_runtime_packages_include_recursive_native_dependencies(self):
+        from package_runtime import selected_runtime_packages, PYTHON_PACKAGES, PYTHON_EXTRA_LIB_PACKAGES
+        index = {key: {"SHA256": "0123", "Depends": ""} for key in
+                 (*PYTHON_PACKAGES, *PYTHON_EXTRA_LIB_PACKAGES)}
+        index["libpython3.13-stdlib"]["Depends"] = "libreadline8t64, libc6"
+        index["libnsl2"]["Depends"] = "libtirpc3t64"
+        index["libtirpc3t64"]["Depends"] = "libgssapi-krb5-2, libc6"
+        index["libgssapi-krb5-2"] = {"SHA256": "0456", "Depends": "libkrb5-3"}
+        index["libkrb5-3"] = {"SHA256": "0789", "Depends": "libk5crypto3"}
+        index["libk5crypto3"] = {"SHA256": "1011", "Depends": ""}
+        selected = selected_runtime_packages(index)
+        for name in ("libreadline8t64", "libtirpc3t64", "libkrb5-3", "libk5crypto3"):
+            self.assertIn(name, selected)
+        self.assertNotIn("libc6", selected)
+
+
 class DependencyClosureTests(unittest.TestCase):
     def run_case(self, include_common=True):
         with tempfile.TemporaryDirectory() as temp:
