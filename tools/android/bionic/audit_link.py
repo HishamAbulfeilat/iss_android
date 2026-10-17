@@ -57,7 +57,7 @@ def main():
     reply=a.build/'.cmake/api/v1/reply'
     index=json.loads(max(reply.glob('index-*.json'),key=lambda p:p.stat().st_mtime_ns).read_text())
     model=json.loads((reply/index['reply']['codemodel-v2']['jsonFile']).read_text())
-    target=next(t for t in model['configurations'][0]['targets'] if t['name']=='gow3gpu')
+    target=next(t for t in model['configurations'][0]['targets'] if t['name']=='tlggpu')
     data=json.loads((reply/target['jsonFile']).read_text())
     n=audit(data['link']['commandFragments'],a.build,[a.prefix,a.ndk],
             a.ndk/'toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf',a.ndk)

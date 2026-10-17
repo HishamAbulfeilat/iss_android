@@ -1,0 +1,80 @@
+name: inFAMOUS Android Bionic — experimental
+on:
+  push:
+    branches: [experimental-bionic]
+  workflow_dispatch:
+concurrency:
+  group: iss-bionic-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  bionic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      ISS_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;29.0.14206865'
+      - name: Check Bionic source isolation and game features
+        run: |
+          python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
+          python3 -m compileall -q tools/android/bionic
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: ci/environment.yml
+          cache-environment: true
+          init-shell: bash
+      - name: Install host build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
+            pkg-config patchelf unzip xz-utils zstd bison flex python3-venv
+      - name: Set NDK and host headers
+        shell: bash -el {0}
+        run: |
+          echo "ISS_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "ISS_BIONIC_HEADERS=$CONDA_PREFIX" >> "$GITHUB_ENV"
+          bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - name: Stage pinned StevenMXZ Turnip Gen8 V37 Patched
+        shell: bash -el {0}
+        run: |
+          python3 tools/android/bionic/stage_driver.py --output out/bionic/drivers/gen8
+          test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
+      - name: Build Bionic dependency prefix
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_deps.sh
+      - name: Configure ISS Bionic GPU and audit NDK linker inputs
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_gpu.sh --configure-only
+      - name: Compile inFAMOUS FEX CPU and native Vulkan/HLE
+        shell: bash -el {0}
+        run: |
+          bash tools/android/bionic/build_cpu.sh
+          bash tools/android/bionic/build_gpu.sh
+      - name: Upload native Bionic diagnostic build
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-bionic-native-${{ github.sha }}
+          path: |
+            out/bionic/lib/libisscpu.so
+            out/bionic/lib/libtlggpu.so
+            out/bionic/drivers/gen8/PINNED-DRIVER.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: iss-bionic-build-diagnostics-${{ github.sha }}
+          path: |
+            .local-deps/android/bionic-build/**/*.log
+            out/bionic/gpu/CMakeFiles/CMakeConfigureLog.yaml
+            out/bionic/gpu/.cmake/api/v1/reply/target-tlggpu-*.json
+          if-no-files-found: ignore

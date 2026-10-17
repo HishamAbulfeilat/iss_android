@@ -1,3 +1,6 @@
+#ifdef __ANDROID__
+#include "video_core/renderer_vulkan/vk_swapchain_ahb.h"
+#else
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -142,3 +145,5 @@ private:
 };
 
 } // namespace Vulkan
+
+#endif

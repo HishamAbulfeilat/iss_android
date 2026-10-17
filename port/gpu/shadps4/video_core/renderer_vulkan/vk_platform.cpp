@@ -23,6 +23,9 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#ifdef __ANDROID__
+#include "vk_driver_loader.h"
+#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -271,9 +274,15 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
     setenv("VK_DRIVER_FILES", icd_path.c_str(), true);
 #endif
 
+#ifdef __ANDROID__
+    const auto gipa = reinterpret_cast<PFN_vkGetInstanceProcAddr>(iss_vk_get_instance_proc_addr());
+    ASSERT_MSG(gipa, "Selected Bionic Vulkan driver could not be loaded");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(gipa);
+#else
     static vk::detail::DynamicLoader dl;
     VULKAN_HPP_DEFAULT_DISPATCHER.init(
         dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr"));
+#endif
 
     const auto [available_version_result, available_version] =
         VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion
