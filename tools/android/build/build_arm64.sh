@@ -213,7 +213,7 @@ end_stage "libatrac9.a"
 begin "iss-probe (loader)"
 # port/src/runtime*.c includes runtime_cpu.c (a stub on ARM64: libisscpu.so implements guest_cpu.h).
 "${cc[@]}" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -Iport -Iport/src \
-    port/src/probe.c port/port/src/runtime*.c port/src/cpu_check.c port/src/vulkan_smoke.c "$out/libatrac9.a" -lm \
+    port/src/probe.c port/src/runtime*.c port/src/cpu_check.c port/src/vulkan_smoke.c "$out/libatrac9.a" -lm \
     -L"$out/gpu" -ltlggpu -L"$out/fex" -lisscpu -Wl,-rpath,'$ORIGIN/../lib' \
     -Wl,--dynamic-linker="$rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" -rdynamic \
     "${libraries[@]}" -o "$out/iss-probe"
