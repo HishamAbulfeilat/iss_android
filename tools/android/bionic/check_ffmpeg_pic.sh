@@ -1,37 +1,53 @@
 #!/usr/bin/env bash
-# Link ALL Android FFmpeg archive members into a Bionic shared library,
-# catching incompatible assembly relocations before the costly Vulkan build.
+# Audit PIC relocations in every FFmpeg ARM64 static library BEFORE the
+# expensive native GPU build. Test each archive independently: FFmpeg intentionally
+# contains same-named implementation symbols in DIFFERENT libraries; forcing
+# all five archives at once introduces duplicate-symbol errors that the normal
+# linker (selective archive extraction) will never encounter.
 set -Eeuo pipefail
 cd -- "$(dirname "$0")/../../.."
 ndk=${ISS_NDK:-${ANDROID_NDK_HOME:?Set ISS_NDK}}
 api=${ISS_BIONIC_API:-30}
-clang="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$api-clang"
+clang="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${api}-clang"
 readelf="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 prefix=$PWD/.local-deps/android/bionic-prefix
 out=$PWD/.local-deps/android/bionic-build
 mkdir -p "$out"
-libraries=()
+failed=0
 for name in avformat avcodec swscale swresample avutil; do
-    archive="$prefix/lib/lib$name.a"
-    test -s "$archive"
-    libraries+=("$archive")
+    archive="$prefix/lib/lib${name}.a"
+    log="$out/ffmpeg-pic-${name}.log"
+    so="$out/ffmpeg-pic-${name}.so"
+    if [[ ! -s "$archive" ]]; then
+        echo "FFmpeg PIC preflight: missing $archive" >&2
+        failed=1
+        continue
+    fi
+    # Whole-archive on JUST ONE library exercises every .o and every NEON
+    # specialization. Shared undefined references into sibling libraries are
+    # intentionally allowed here; they will be checked by the real GPU link.
+    # It is WRONG to combine multiple FFmpeg archives under --whole-archive:
+    # e.g. ff_init_half2float_tables has an implementation in both avcodec and
+    # swscale, and regular links extract only the needed definition.
+    if ! "$clang" -fPIC -shared -Wl,-z,undefs -Wl,--error-limit=0 \
+        -Wl,--whole-archive "$archive" -Wl,--no-whole-archive \
+        -lm -ldl -llog -lz -o "$so" >"$log" 2>&1; then
+        echo "FFmpeg PIC preflight FAILED: $name (full log: $log)" >&2
+        grep -E 'ld.lld: error:|recompile with -fPIC|>>> defined|>>> referenced' "$log" | head -120 >&2 || :
+        tail -35 "$log" >&2
+        failed=1
+        continue
+    fi
+    if "$readelf" -d "$so" | grep -E 'TEXTREL|FLAGS.*TEXTREL'; then
+        echo "FFmpeg PIC preflight FAILED: $name has forbidden TEXTREL" >&2
+        failed=1
+        continue
+    fi
+    "$readelf" -h "$so" | grep -q 'Machine:.*AArch64'
+    echo "FFmpeg PIC preflight OK: $name, all static members link without TEXTREL"
 done
-log="$out/ffmpeg-shared-pic-preflight.log"
-so="$out/ffmpeg-pic-preflight.so"
-# Whole-archive deliberately checks code not demanded by the present GPU
-# configuration. Undefined FFMPEG external calls are allowed at this probe;
-# malformed PIC relocations and other real linker errors are not.
-if ! "$clang" -fPIC -shared -Wl,-z,undefs -Wl,--error-limit=0 \
-    -Wl,--whole-archive "${libraries[@]}" -Wl,--no-whole-archive \
-    -lm -ldl -llog -lz -o "$so" >"$log" 2>&1; then
-    echo "FFmpeg archive not linkable as Bionic shared library; full errors in $log" >&2
-    grep -E "ld.lld: error:|recompile with -fPIC|>>> defined|>>> referenced" "$log" | head -140 >&2 || :
-    tail -45 "$log" >&2
+if [[ "$failed" != 0 ]]; then
+    echo "FFmpeg PIC preflight found one or more invalid ARM64 archives; full reports above" >&2
     exit 1
 fi
-if "$readelf" -d "$so" | grep -E 'TEXTREL|FLAGS.*TEXTREL'; then
-    echo "FFmpeg has forbidden dynamic text relocations" >&2
-    exit 1
-fi
-"$readelf" -h "$so" | grep -q 'Machine:.*AArch64'
-echo "FFmpeg ARM64 PIC preflight passed: all 5 complete static archives link, no TEXTREL."
+echo "FFmpeg ARM64 PIC preflight PASS: 5 independently validated static archives."
