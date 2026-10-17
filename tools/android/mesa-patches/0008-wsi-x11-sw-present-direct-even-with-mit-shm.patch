@@ -15,9 +15,7 @@ app requests it (extended by the second hunk below).
 
 --- a/src/vulkan/wsi/wsi_common_x11.c
 +++ b/src/vulkan/wsi/wsi_common_x11.c
-@@ -2336,7 +2336,7 @@ x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index)
-    x11_capture_trace(chain);
-
+@@ -2338,5 +2338,5 @@ x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index)
     VkResult result;
 -   if (chain->base.wsi->sw && !chain->has_mit_shm)
 +   if (chain->base.wsi->sw && (!chain->has_mit_shm || chain->fxpresent))
