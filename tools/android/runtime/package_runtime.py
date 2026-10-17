@@ -14,6 +14,9 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools/android/inputs"))
 from fetch_arm64_sysroot import MIRROR, SUITE, fetch, parse_packages, extract_deb
+from fetch_rootfs import migrate_interpreters
+sys.path.insert(0, str(ROOT / 'tools/android/runtime'))
+from validate_runtime_elf import inspect
 
 SOURCE = ROOT / ".local-deps/android/migration/x/rootfs"
 BUNDLE = ROOT / "out/arm64/bundle"
@@ -81,6 +84,14 @@ def validate_inputs():
                  BUNDLE / "lib/libtlggpu.so"):
         if not path.is_file():
             raise SystemExit("Missing game-free runtime input: " + str(path))
+    for key in ("usr/bin/mkdir", "usr/bin/Xvfb", "usr/libexec/fxshmd",
+                "usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so"):
+        if not (SOURCE / key).is_file():
+            raise SystemExit("Incomplete fexdroid rootfs: " + key)
+    if not (SOURCE / "usr/share/vulkan/icd.d/freedreno_icd.aarch64.json").is_file():
+        raise SystemExit("Missing Vulkan ICD JSON in fexdroid rootfs")
+    if not (ROOT / "tools/android/runtime/launch.py").is_file():
+        raise SystemExit("Missing Python game launcher")
     if not (ROOT / "tools/android/device/run-iss.sh").is_file():
         raise SystemExit("Missing inFAMOUS game startup script")
 
@@ -92,6 +103,17 @@ def add_bytes(tar, path, content, mode=0o644):
 
 def main():
     validate_inputs()
+    # Cache entries produced by earlier builds pointed PT_INTERP at com.iss.android.
+    # Repair cached binaries as well as freshly extracted rootfs, then validate before signing.
+    migrated = migrate_interpreters(SOURCE)
+    print(f"Rootfs ELF interpreter migration: {migrated} corrected")
+    for name in ("usr/bin/mkdir", "usr/bin/Xvfb", "usr/libexec/fxshmd"):
+        record = inspect(SOURCE / name)
+        if not record or record["machine"] != 183:
+            raise SystemExit("Rootfs executable is not AArch64: " + name)
+        interp = record["interpreter"] or ""
+        if "com.iss.android" in interp or "ro.cobrabm.fexdroid" in interp:
+            raise SystemExit("Stale interpreter in rootfs: " + name + " " + interp)
     OUT.mkdir(parents=True, exist_ok=True)
     overlay = python_overlay()
     archive = OUT / "runtime.tar.gz"
@@ -117,6 +139,7 @@ def main():
             tar.add(script, arcname="issport/scripts/" + script.name)
         tar.add(ROOT / "tools/android/device/run-iss.sh", arcname="issport/run-iss.sh",
                 filter=lambda info: fix_mode(info))
+        tar.add(ROOT / "tools/android/runtime/launch.py", arcname="issport/launch.py")
         # The JSON must point to the current APK's private rootfs, never another port.
         icd = SOURCE / "usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"
         if icd.is_file():

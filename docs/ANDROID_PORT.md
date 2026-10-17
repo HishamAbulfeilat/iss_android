@@ -38,3 +38,18 @@ Projeto `iss_android` separado dos ports de God of War III e Bloodborne. Base up
 - A busca de informações binárias de shaders usa conversões de ponteiros em tempo de execução: funções não são mais declaradas `constexpr` inválidas no Clang ARM64.
 - FreeType usa `ft2build.h` sob o diretório `freetype2` do sysroot ARM64.
 - `cpu_check.c` tem instruções CPUID de x86 e não deve entrar no link do loader ARM64.
+
+## Correções de inicialização após teste real (17/10/2026)
+
+O log do primeiro APK parou antes de abrir o jogo: `/rootfs/usr/bin/mkdir: No such file or directory`.
+A causa observável é a seleção de um ELF glibc por `PATH` no `/system/bin/sh` Android,
+não um crash dentro do inFAMOUS. Além disso, o empacotador legado migrava
+`PT_INTERP` para `com.iss.android`, embora o application ID seja `com.daedalus.iss`.
+Esta revisão usa somente `/system/bin` para ferramentas do shell Android,
+repara interpretadores ARM64 do rootfs em cache, valida seus executáveis/ICD e inclui
+`launch.py`, antes ausente. O launcher passa a pré-validar os arquivos originais
+do jogo, executar a preparação do `iss_pc` com glibc explícita e preservar
+as opções gráficas do port PC. Logs identificam agora as etapas de preparação.
+
+**Estado:** correções de código não equivalem a boot comprovado, menu, renderização,
+controles, áudio ou desempenho em dispositivo. Esses itens continuam pendentes de teste real.

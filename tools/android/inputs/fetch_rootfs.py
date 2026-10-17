@@ -29,7 +29,8 @@ DEFAULT_APK = ROOT / '.local-deps/android/fexdroid-legacy.apk'
 # Reviewed apk-latest asset used to create the current Gow3 migration input.
 DEFAULT_SHA256 = '21bed34092f698e39e77138589ebdab8d3498577ffc4fdc3bfef1c711b50d3bf'
 OLD_ROOT = '/data/data/ro.cobrabm.fexdroid/files/rootfs'
-NEW_ROOT = '/data/user/0/com.iss.android/files/rootfs'
+BROKEN_ROOT = '/data/user/0/com.iss.android/files/rootfs'  # older experimental build
+NEW_ROOT = '/data/user/0/com.daedalus.iss/files/rootfs'
 
 
 def migrate_interpreters(rootfs):
@@ -48,8 +49,12 @@ def migrate_interpreters(rootfs):
             info = inspect(path)
         except ElfError:
             continue
-        if info and info['interpreter'] and info['interpreter'].startswith(OLD_ROOT):
-            target = NEW_ROOT + info['interpreter'][len(OLD_ROOT):]
+        if info and info['interpreter']:
+            source = next((p for p in (OLD_ROOT, BROKEN_ROOT)
+                           if info['interpreter'].startswith(p + '/')), None)
+            if source is None:
+                continue
+            target = NEW_ROOT + info['interpreter'][len(source):]
             try:
                 rewrite_interpreter(path, target)
             except ElfError as error:
@@ -122,7 +127,8 @@ def main(argv=None):
     args.out = args.out.resolve()
     if args.out.exists() and not args.force:
         if (args.out / 'usr/bin/FEX').is_file() and (args.out / 'usr/share/fex-emu').is_dir():
-            print(f'FEX rootfs already exists: {args.out}')
+            rewritten = migrate_interpreters(args.out)
+            print(f'FEX rootfs already exists: {args.out} (repaired {rewritten} stale ELF interpreters)')
             return 0
         parser.error(f'output exists but is incomplete; use --force: {args.out}')
 
