@@ -158,6 +158,14 @@ endforeach()
 add_custom_target(host_shaders DEPENDS ${SHADER_HEADERS})
 
 file(GLOB_RECURSE VIDEO_CORE CONFIGURE_DEPENDS shadps4/video_core/*.cpp)
+# Select only one swapchain ABI per platform. Android uses the direct AHardwareBuffer
+# implementation; glibc/desktop retains its VkSurfaceKHR implementation.
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain\\.cpp$")
+else()
+    list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain_ahb\\.cpp$")
+endif()
+
 file(GLOB_RECURSE RECOMPILER CONFIGURE_DEPENDS shadps4/shader_recompiler/*.cpp)
 # tlg: the shader cache key: a hash of every source that shapes the generated SPIR-V. The
 # shader cache directory carries it, so a changed recompiler starts a fresh cache instead of

@@ -10,8 +10,12 @@ prefix=$PWD/.local-deps/android/bionic-prefix
 out=$PWD/out/bionic
 cc="$llvm/bin/aarch64-linux-android${api}-clang"
 ar="$llvm/bin/llvm-ar"
-test -s "$out/lib/libisscpu.so"
-test -s "$out/lib/libtlggpu.so"
+# Compile the complete game-specific HLE/launcher sources before the expensive GPU link.
+# --compile-only catches later-stage Android C build errors in the current CI run.
+if [[ ${1:-} != --compile-only ]]; then
+  test -s "$out/lib/libisscpu.so"
+  test -s "$out/lib/libtlggpu.so"
+fi
 test -s "$prefix/lib/libavcodec.a"
 test -s "$prefix/lib/libSDL3.a"
 test -s "$prefix/lib/libfreetype.a"
@@ -27,6 +31,9 @@ for source in port/src/probe.c port/src/runtime*.c; do
   "$cc" -std=gnu11 -O2 -g -Wall -Wextra -pthread -fPIE "${includes[@]}" -c "$source" -o "$object"
   objects+=("$object")
 done
+if [[ ${1:-} = --compile-only ]]; then
+  echo "ISS Bionic C/HLE/launcher objects compile successfully"; exit 0
+fi
 # The Vulkan test in the desktop probe calls the system Vulkan loader directly.
 # Bionic must instead always use the configured Turnip HAL through the ISS Vulkan driver shim.
 cat > "$out/runtime-objects/vulkan_smoke_bionic.c" <<'EOF'

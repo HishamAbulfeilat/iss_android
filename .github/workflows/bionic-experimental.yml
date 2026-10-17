@@ -64,6 +64,11 @@ jobs:
       - name: Configure ISS Bionic GPU and audit NDK linker inputs
         shell: bash -el {0}
         run: bash tools/android/bionic/build_gpu.sh --configure-only
+      - name: Preflight native inFAMOUS HLE and loader C sources
+        shell: bash -el {0}
+        run: bash tools/android/bionic/build_native_runtime.sh --compile-only
+      - name: Build Android Bionic Python for preserved preparation and patches
+        run: ISS_NDK="$ANDROID_HOME/ndk/29.0.14206865" ISS_JOBS=2 bash tools/android/bionic/build_python.sh
       - name: Compile inFAMOUS FEX CPU and native Vulkan/HLE
         shell: bash -el {0}
         run: |
@@ -72,9 +77,6 @@ jobs:
       - name: Compile native inFAMOUS loader and AHardwareBuffer JNI bridge
         shell: bash -el {0}
         run: bash tools/android/bionic/build_native_runtime.sh
-      - name: Build isolated Bionic Python interpreter for ISS preparation
-        run: |
-          ISS_NDK="$ANDROID_HOME/ndk/29.0.14206865" ISS_JOBS=2 bash tools/android/bionic/build_python.sh
       - name: Validate Bionic native binaries and complete preparation runtime
         run: |
           python3 tools/android/bionic/verify_bionic.py --ndk "$ANDROID_HOME/ndk/29.0.14206865" --root out/bionic --complete

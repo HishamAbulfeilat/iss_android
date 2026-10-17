@@ -29,6 +29,7 @@ cmake -S port/gpu -B "$build" -G Ninja \
   -Dboost_headers_DIR="$headers/lib/cmake/boost_headers-1.92.0"
 python3 tools/android/bionic/audit_link.py --build "$build" --prefix "$prefix" --ndk "$ndk"
 if [[ ${1:-} = --configure-only ]]; then exit 0; fi
-cmake --build "$build" --target tlggpu --parallel "$jobs"
+# Collect all further compile failures during one CI run instead of stopping at first object.
+cmake --build "$build" --target tlggpu --parallel "$jobs" -- -k 0
 mkdir -p out/bionic/lib
 cp "$build/libtlggpu.so" out/bionic/lib/
