@@ -35,9 +35,9 @@ SUITE = 'trixie'
 # What the runtime, the GPU library and FEXCore link against (dependencies follow).
 WANTED = [
     'libc6-dev', 'libstdc++-14-dev', 'libgcc-14-dev', 'linux-libc-dev',
-    'libvulkan-dev', 'libfmt-dev', 'libxxhash-dev', 'libsdl3-dev', 'libx11-dev', 'libzydis-dev',
+    'libvulkan-dev', 'libfreetype-dev', 'libfmt-dev', 'libxxhash-dev', 'libsdl3-dev', 'libx11-dev', 'libzydis-dev',
     'libavformat-dev', 'libavcodec-dev', 'libavutil-dev', 'libswscale-dev', 'libswresample-dev',
-    'spirv-headers', 'zlib1g-dev', 'libfreetype-dev', 'libboost-dev', 'robin-map-dev', 'libvulkan-memory-allocator-dev',
+    'spirv-headers', 'zlib1g-dev',
 ]
 # Not needed to compile or link (package management, scripts, documentation, data).
 SKIP = re.compile(r'^(debconf|perl.*|dpkg|adduser|tzdata|sensible-utils|libc-bin|libc-dev-bin|'
@@ -65,7 +65,7 @@ def fetch(url, attempts=4):
         for attempt in range(1, attempts + 1):
             try:
                 request = urllib.request.Request(candidate, headers={
-                    'User-Agent': 'gow3-android-build/1.0 (Debian package mirror client)'})
+                    'User-Agent': 'iss-android-build/1.0 (Debian package mirror client)'})
                 with urllib.request.urlopen(request, timeout=120) as response:
                     return response.read()
             except urllib.error.HTTPError as error:

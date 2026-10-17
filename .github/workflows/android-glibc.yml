@@ -1,0 +1,69 @@
+name: inFAMOUS Android glibc ARM64
+
+on:
+  push:
+    branches: [android-glibc]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: iss-glibc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Validate Java Android launcher against API 35
+        run: |
+          set -euo pipefail
+          mkdir -p out/android-classes
+          javac -source 8 -target 8 -cp "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" \
+            -d out/android-classes android/app/src/ro/cobrabm/fexdroid/*.java
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: ci/environment.yml
+          cache-environment: true
+          init-shell: bash
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
+            pkg-config patchelf libxml2-utils unzip xz-utils zstd
+      - name: Build pinned headers and host dependencies
+        shell: bash -el {0}
+        run: bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - name: Fetch checked ARM64 sysroot and rootfs
+        shell: bash -el {0}
+        run: |
+          python3 tools/android/inputs/fetch_arm64_sysroot.py
+          python3 tools/android/inputs/fetch_rootfs.py
+      - name: Cross-compile FEXCore, Vulkan renderer and runtime
+        shell: bash -el {0}
+        run: |
+          export ISS_ARM64_HEADERS="$CONDA_PREFIX"
+          bash tools/android/build/build_arm64.sh
+      - name: Upload native compilation artifacts (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-glibc-native-${{ github.sha }}
+          path: |
+            out/arm64/iss-probe
+            out/arm64/fex/libisscpu.so
+            out/arm64/gpu/libtlggpu.so
+          if-no-files-found: error
+          retention-days: 7

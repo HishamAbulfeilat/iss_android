@@ -29,11 +29,11 @@ DEFAULT_APK = ROOT / '.local-deps/android/fexdroid-legacy.apk'
 # Reviewed apk-latest asset used to create the current Gow3 migration input.
 DEFAULT_SHA256 = '21bed34092f698e39e77138589ebdab8d3498577ffc4fdc3bfef1c711b50d3bf'
 OLD_ROOT = '/data/data/ro.cobrabm.fexdroid/files/rootfs'
-NEW_ROOT = '/data/user/0/com.daedalus.iss/files/rootfs'
+NEW_ROOT = '/data/user/0/com.iss.android/files/rootfs'
 
 
 def migrate_interpreters(rootfs):
-    """Rewrite fexdroid's app-private ELF loader path for gow3.android."""
+    """Rewrite fexdroid's app-private ELF loader path for iss.android."""
     import sys
     sys.path.insert(0, str(ROOT))
     from tools.android.runtime.validate_runtime_elf import ElfError, inspect, rewrite_interpreter
@@ -72,7 +72,7 @@ def download(url, destination, attempts=4):
     # the redirect and therefore gets a fresh signed asset URL.
     for attempt in range(1, attempts + 1):
         try:
-            request = urllib.request.Request(url, headers={'User-Agent': 'gow3port-rootfs-fetch/1'})
+            request = urllib.request.Request(url, headers={'User-Agent': 'issport-rootfs-fetch/1'})
             with urllib.request.urlopen(request, timeout=120) as response, destination.open('wb') as stream:
                 shutil.copyfileobj(response, stream, length=1024 * 1024)
             return
@@ -127,7 +127,7 @@ def main(argv=None):
         parser.error(f'output exists but is incomplete; use --force: {args.out}')
 
     ROOT.joinpath('.local-deps').mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='gow3-fexdroid-', dir=ROOT / '.local-deps') as work:
+    with tempfile.TemporaryDirectory(prefix='iss-fexdroid-', dir=ROOT / '.local-deps') as work:
         work = Path(work)
         apk = args.apk.resolve() if args.apk else DEFAULT_APK
         if args.apk:

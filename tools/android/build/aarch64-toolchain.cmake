@@ -2,7 +2,6 @@
 # The sysroot comes from tools/android/fetch_arm64_sysroot.py.
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
-set(CMAKE_LIBRARY_ARCHITECTURE aarch64-linux-gnu)
 get_filename_component(ISS_REPO "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 if(NOT DEFINED ISS_ARM64_SYSROOT)
   set(ISS_ARM64_SYSROOT "${ISS_REPO}/.local-deps/android/arm64-sysroot")
