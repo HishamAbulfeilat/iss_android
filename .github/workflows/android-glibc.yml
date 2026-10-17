@@ -93,6 +93,8 @@ jobs:
           bash tools/android/apk/build_apk.sh
           tar -tzf out/release/runtime.tar.gz > "$RUNNER_TEMP/iss-runtime-members.txt"
           grep -Fx 'rootfs/usr/lib/aarch64-linux-gnu/libpulsecommon-17.0.so' "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'issport/patches/InfamousSecondSon.xml' "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'issport/scripts/iss_mask_patches.py' "$RUNNER_TEMP/iss-runtime-members.txt"
       - name: Verify transitive ELF linking with emulated ARM64 glibc loader
         shell: bash -el {0}
         run: |

@@ -58,6 +58,14 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
   e.put("TLG_ANDROID_FPS_ONLY","1");
   String output=prefs.getString("output_res","1920x1080");
   e.put("TLG_OUTPUT_RES","1280x720".equals(output)?"1280x720":"1920x1080");
+  java.util.ArrayList<String> enabled=new java.util.ArrayList<>();
+  String internal=prefs.getString("internal_res","native");
+  if("720p".equals(internal))enabled.add("Render resolution 1280x720");
+  else if("900p".equals(internal))enabled.add("Render resolution 1600x900");
+  if(prefs.getBoolean("patch_motion_blur",false))enabled.add("Disable motion blur");
+  if(prefs.getBoolean("patch_dof",false))enabled.add("Disable depth of field");
+  if(prefs.getBoolean("patch_depth_blur",false))enabled.add("Disable depth blur");
+  e.put("ISS_PATCHES",android.text.TextUtils.join(";",enabled));
   if(args.length>1&&args[1].endsWith("/Xvfb"))e.put("LD_PRELOAD",root+"/usr/lib/fexdroid/libfxpath.so");return p.start();
  }
  @Override public void surfaceCreated(SurfaceHolder holder){if(shmid>=0){attach(holder);return;}if(started)return;started=true;

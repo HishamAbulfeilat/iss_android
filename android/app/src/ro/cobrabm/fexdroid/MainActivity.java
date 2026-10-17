@@ -40,6 +40,28 @@ public final class MainActivity extends Activity {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(output);
+  TextView patchLabel=new TextView(this);patchLabel.setText("Patches internos — CUSA00004 01.00");patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
+  Spinner resolutionPatch=new Spinner(this);
+  String[] modes={"Original (sem patch)","1280 × 720 interno (720p)","1600 × 900 interno (900p)"};
+  resolutionPatch.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,modes));
+  String selected=prefs.getString("internal_res","native");
+  resolutionPatch.setSelection("720p".equals(selected)?1:"900p".equals(selected)?2:0);
+  resolutionPatch.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
+    prefs.edit().putString("internal_res",pos==1?"720p":pos==2?"900p":"native").apply();
+   }
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });l.addView(resolutionPatch);
+  CheckBox blur=new CheckBox(this);blur.setText("Desativar Motion Blur");
+  blur.setChecked(prefs.getBoolean("patch_motion_blur",false));
+  blur.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_motion_blur",checked).apply());l.addView(blur);
+  CheckBox dof=new CheckBox(this);dof.setText("Desativar Depth of Field");
+  dof.setChecked(prefs.getBoolean("patch_dof",false));
+  dof.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_dof",checked).apply());l.addView(dof);
+  CheckBox depth=new CheckBox(this);depth.setText("Desativar Depth Blur");
+  depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
+  depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
+  TextView caveat=new TextView(this);caveat.setText("Sombras: não existe patch de sombras nos XMLs enviados. Patches de código só são aplicados quando cada assinatura corresponde a um único endereço.");l.addView(caveat);
   button(l,"Select game folder",this::choose);button(l,"Launch game",this::launch);
   button(l,"Export latest log",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
   TextView help=new TextView(this);help.setText("Use an extracted game with update 1.07 merged into the same folder. Upstream reference: CUSA00223.\n\nGraffiti: L3 + R3 toggles sensor mode; Cross shakes, R2 sprays, left stick aims.\n\nBased on HayatoG/iss_pc, FEX-Emu and shadPS4. Android infrastructure adapted from God of War III — Daedalus Fork, Bloodborne-Android and fexdroid.\n\nNo game files included.");l.addView(help);ScrollView sc=new ScrollView(this);sc.addView(l);setContentView(sc);refresh();

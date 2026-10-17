@@ -70,7 +70,10 @@ PATCHES_DIR=Path(__file__).resolve().parent.parent/'patches'
 # sha256 of the only eboot.bin they were checked against (another build of the same version has
 # its code elsewhere: byte writes there corrupt it).
 GAMES=[({'CUSA01623'},PATCHES_DIR/'God_of_War_III_Remastered.xml','01.02',
-        'd85c8135d330c3b601bf5dc3f1dd86bd6119fb8a9fce372bed2c9785f9a79299')]
+        'd85c8135d330c3b601bf5dc3f1dd86bd6119fb8a9fce372bed2c9785f9a79299'),
+       # Mask-only patches: every pattern is required to match a UNIQUE place in
+       # CUSA00004 v01.00's own executable PT_LOAD before any write is allowed.
+       ({'CUSA00004'},PATCHES_DIR/'InfamousSecondSon.xml','01.00',None)]
 # Recognized builds without patch support yet, so the launcher can name them instead of a generic
 # mismatch. The full 01.02 update has this eboot for both CUSA01623 and CUSA01715.
 UNPORTED_BUILDS={'6e72330e9092e5164049b865e5568f2d450904001a73fe0a2f4b39194c195b3c':'full 01.02 update'}
@@ -130,7 +133,7 @@ def selected_patches(xml, app_version, extra, only=False):
     names=[] if only else [m.get('Name') for m in ET.parse(xml).getroot().iter('Metadata')
                            if m.get('AppVer')==app_version and m.get('isEnabled','false').lower()=='true']
     names+=[n for n in (n.strip() for n in extra.split(';')) if n and n not in names]
-    exclusive=[n for n in names if n.startswith(EXCLUSIVE_PREFIX)]
+    exclusive=[n for n in names if n.startswith((EXCLUSIVE_PREFIX, 'Render resolution '))]
     if len(exclusive)>1:
         raise ValueError(f'choose one resolution patch, not {exclusive}')
     return [n for n in names if not (exclusive and n in REPLACED_BY_EXCLUSIVE)]
@@ -240,7 +243,11 @@ def main():
         return
     names=selected_patches(xml,needed,a.extra,os.environ.get('TLG_PATCHES_ONLY')=='1')
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
-    writes=compile_patches(xml,names,needed,segments)
+    if title == 'CUSA00004':
+        from iss_mask_patches import compile_masks
+        writes=compile_masks(xml,names,needed,a.out/'boot-linked.bin',a.out/'eboot.elf')
+    else:
+        writes=compile_patches(xml,names,needed,segments)
     if a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.
         writes+=compile_external(external_selection(external_patches(a.patches_dir,needed,xml,ids),

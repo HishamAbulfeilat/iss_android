@@ -233,6 +233,8 @@ def main():
         scripts = ROOT / "port/scripts"
         for script in sorted(scripts.glob("*.py")):
             tar.add(script, arcname="issport/scripts/" + script.name)
+        tar.add(ROOT / "port/patches/InfamousSecondSon.xml",
+                arcname="issport/patches/InfamousSecondSon.xml")
         tar.add(ROOT / "tools/android/device/run-iss.sh", arcname="issport/run-iss.sh",
                 filter=lambda info: fix_mode(info))
         tar.add(ROOT / "tools/android/runtime/launch.py", arcname="issport/launch.py")
