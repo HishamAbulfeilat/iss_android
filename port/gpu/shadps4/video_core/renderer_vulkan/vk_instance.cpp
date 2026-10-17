@@ -316,8 +316,23 @@ bool Instance::CreateDevice() {
     };
 
     // Required
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // The native Android renderer has no VkSurfaceKHR/VkSwapchainKHR. Its images
+    // are AHardwareBuffer allocations imported into Vulkan; sync-fd semaphores
+    // and foreign queue-family ownership replace the desktop WSI path
+    // (vk_swapchain_ahb.cpp). Keep all three required and fail explicitly if
+    // the selected Vulkan HAL cannot support the actual Android presenter.
+    for (const char* extension : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+                                  VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+                                  VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME}) {
+        ASSERT_MSG(add_extension(extension),
+                   "Required Android AHardwareBuffer presentation extension unavailable: {}",
+                   extension);
+    }
+#else
     ASSERT_MSG(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+#endif
     ASSERT_MSG(add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     ASSERT_MSG(add_extension(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME),
