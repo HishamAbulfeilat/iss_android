@@ -50,7 +50,21 @@ export PYTHONHOME="$root/usr" PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
 export TLG_GAME_DIR="$game" TLG_DATA_DIR="$base" TLG_USER_DIR="$base/user"
 export ISS_CONFIG="$base/user/tlg.ini"
 export TLG_CONFIG="$ISS_CONFIG"
-export LD_LIBRARY_PATH="$base/lib:$root/usr/lib/aarch64-linux-gnu:$root/usr/lib"
+export LD_LIBRARY_PATH="$base/lib:$root/usr/lib/aarch64-linux-gnu:$root/usr/lib:$root/usr/lib/aarch64-linux-gnu/pulseaudio"
+# Runtime linker preflight catches future missing transitive dependencies
+# without reprocessing the ~130 MiB eboot image.
+for target in "$base/bin/iss-probe" "$base/lib/libtlggpu.so" "$base/lib/libisscpu.so" "$root/usr/lib/aarch64-linux-gnu/libvulkan_freedreno_gen8.so"; do
+  if ! deps=$("$loader" --list "$target" 2>&1); then
+    echo "ISS ELF dependency preflight failed ($target): $deps" >&2
+    exit 35
+  fi
+  case "$deps" in
+    *"not found"*|*"cannot open shared object file"*)
+      echo "ISS ELF dependency missing ($target): $deps" >&2
+      exit 35 ;;
+  esac
+done
+echo "ISS ELF preflight OK: probe, GPU, CPU and Linux Turnip Gen8 dependencies resolved"
 export DISPLAY=:0 SDL_VIDEODRIVER=x11
 # SDL3 disk driver feeds the Android AudioTrack FIFO; do not use a host Linux sound daemon.
 # SDL3 disk driver: emit raw PCM into the FIFO consumed by Android AudioTrack.

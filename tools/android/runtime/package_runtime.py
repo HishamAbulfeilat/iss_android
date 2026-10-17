@@ -17,6 +17,7 @@ from fetch_arm64_sysroot import MIRROR, SUITE, fetch, parse_packages, extract_de
 from fetch_rootfs import migrate_interpreters
 sys.path.insert(0, str(ROOT / 'tools/android/runtime'))
 from validate_runtime_elf import inspect
+from audit_dependencies import complete
 
 SOURCE = ROOT / ".local-deps/android/migration/x/rootfs"
 BUNDLE = ROOT / "out/arm64/bundle"
@@ -127,6 +128,13 @@ def main():
         raise SystemExit("Turnip Gen8 output is not an ARM64 Linux dynamic library")
     OUT.mkdir(parents=True, exist_ok=True)
     overlay = python_overlay()
+    # Complete the graph reachable from the native entrypoints and Vulkan ICDs.
+    # Existing fexdroid libraries can themselves depend on missing .so files.
+    extra = OUT / "dependency-overlay"
+    if extra.exists():
+        import shutil
+        shutil.rmtree(extra)
+    copied = complete(SOURCE, BUNDLE, GEN8, ROOT / ".local-deps/android/arm64-sysroot", overlay, extra)
     archive = OUT / "runtime.tar.gz"
     with PortableTar.open(archive, "w:gz", compresslevel=6, format=tarfile.PAX_FORMAT, dereference=False) as tar:
         def safe_root_member(info):
@@ -135,6 +143,8 @@ def main():
             return keep(info)
         tar.add(SOURCE, arcname="rootfs", filter=safe_root_member)
         for child in sorted(overlay.iterdir()):
+            tar.add(child, arcname="rootfs/" + child.name, filter=keep)
+        for child in sorted(extra.iterdir()):
             tar.add(child, arcname="rootfs/" + child.name, filter=keep)
         for folder in ("rootfs/tmp", "rootfs/tmp/.X11-unix", "rootfs/tmp/.fxshm",
                        "rootfs/run", "rootfs/var", "rootfs/home", "home",
@@ -173,6 +183,9 @@ def main():
     # No game content, personal save data, or decrypted modules may be embedded.
     with tarfile.open(archive, "r:gz") as t:
         names = t.getnames()
+    for soname in copied:
+        if "rootfs/usr/lib/aarch64-linux-gnu/" + soname not in names:
+            raise SystemExit("runtime archive omitted dependency: " + soname)
     forbidden = ("eboot.bin", "boot-linked.bin", "sce_module/", "sce_sys/", "savedata/")
     if any(any(word in name for word in forbidden) for name in names):
         archive.unlink()

@@ -23,7 +23,8 @@ final class RuntimeInstaller {
    "rootfs/usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so",
    "rootfs/usr/lib/aarch64-linux-gnu/libvulkan_freedreno_gen8.so",
    "rootfs/usr/share/vulkan/icd.d/freedreno_gen8_icd.aarch64.json",
-   "rootfs/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json"};
+   "rootfs/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json",
+   "rootfs/usr/lib/aarch64-linux-gnu/libpulsecommon-17.0.so"};
   for(String path:required)if(!new File(root,path).isFile())return false;
   return new File(root,"issport/bin/iss-probe").canExecute();
  }

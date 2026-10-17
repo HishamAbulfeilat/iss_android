@@ -93,3 +93,15 @@ e renderização em dispositivo, que permanecem pendentes.
   `sdlaudio.raw` em vez de usar a ponte do Android. A configuração foi
   conferida contra os hints oficiais SDL3; a reprodução em aparelho
   ainda precisa de confirmação.
+
+## Diagnóstico de bibliotecas glibc (CUSA00004)
+
+O dump CUSA00004 superou \`prepare\`, \`link_modules\`, \`content_profile\`
+e \`patches\`. O erro \`libpulsecommon-17.0.so\` (código 127) ocorre no
+linker de \`iss-probe\`, antes da GPU/gameplay. A auditoria \`DT_NEEDED\`
+agora percorre recursivamente bibliotecas presentes no rootfs e as DLLs
+nativas carregadas no Vulkan, copiando apenas as ausentes para um overlay
+Linux ARM64 verificado. A build exige que \`libpulsecommon\` esteja no
+pacote e roda \`ld-linux-aarch64.so.1 --list\` por QEMU como prova de
+resolução da cadeia (sem alegar teste do jogo). O APK faz o mesmo preflight
+no aparelho antes de preparar os 130 MiB do eboot.
