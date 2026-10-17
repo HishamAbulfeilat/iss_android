@@ -859,6 +859,23 @@ void runtime_restart(void) {
     /* The new launch waits for this process's GPU device to go away (run.py --after). */
     TerminateProcess(GetCurrentProcess(),0);
 #else
+    /* Android runs this native Linux/glibc process under an app-owned /system/bin/sh
+     * supervisor, without bash or run.sh. An in-game restart must go through that
+     * original supervisor, keeping stdout/stderr so GameActivity continues to log. */
+    const char *android = getenv("ISS_ANDROID_INPUT");
+    if (android && android[0]=='1') {
+        const char *data = getenv("TLG_DATA_DIR");
+        char script[1024];
+        if (!data || (size_t)snprintf(script,sizeof(script),"%s/run-iss.sh",data)>=sizeof(script)) {
+            fputs("runtime_restart: missing/invalid Android launcher path\\n",stderr);
+            _exit(1);
+        }
+        puts("Runtime: restarting through Android glibc supervisor");
+        fflush(NULL);
+        execl("/system/bin/sh", "sh", script, (char *)NULL);
+        perror("runtime_restart: Android supervisor exec");
+        _exit(1);
+    }
     puts("Runtime: restarting through run.sh");
     syscall(SYS_close_range, 3u, ~0u, 0u);
     execlp("bash", "bash", "run.sh", (char *)NULL);

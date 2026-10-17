@@ -48,7 +48,8 @@ export FXD_SHM_SOCKET="$root/tmp/.fxshm/sock"
 export FEXDROID_PRESENT="$root/tmp/fxpresent.sock"
 export PYTHONHOME="$root/usr" PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
 export TLG_GAME_DIR="$game" TLG_DATA_DIR="$base" TLG_USER_DIR="$base/user"
-export TLG_CONFIG="$base/iss.ini"
+export ISS_CONFIG="$base/user/tlg.ini"
+export TLG_CONFIG="$ISS_CONFIG"
 export LD_LIBRARY_PATH="$base/lib:$root/usr/lib/aarch64-linux-gnu:$root/usr/lib"
 export DISPLAY=:0 SDL_VIDEODRIVER=x11
 # SDL3 disk driver feeds the Android AudioTrack FIFO; do not use a host Linux sound daemon.

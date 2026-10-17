@@ -66,3 +66,22 @@ selecionam o ICD Gen8. Outros IDs preservam a versão base do rootfs.
 Os arquivos do APK são ELFs Linux/ARM64/glibc, não drivers Android/Bionic.
 Compilação e empacotamento são verificações distintas de inicialização Vulkan
 e renderização em dispositivo, que permanecem pendentes.
+
+## Revisão preventiva do fluxo pós-seleção (17/10/2026)
+
+- **Dados do jogo:** inFAMOUS usa `art/`, não `dvdroot_ps4/` ou `*.psarc`.
+  Preflight verifica arquivos reais do dump (`eboot.bin`, `sce_sys/param.sfo`,
+  `libc.prx`, `libSceFios2.prx`) e acesso a `art/`, sem ler assets de ~33 GB.
+  `prepare.py` passa a relatar categorias e tamanhos sob `art/`.
+- **Parâmetros:** o launcher Android usa o preset do `port/launcher/infamous_run.py`
+  (precise readbacks, write merge, deferred readback, cache 3500 MB,
+  upscaler/jitter/object motion off). Opções `ISS_*` explícitas continuam prioritárias;
+  não aplica presets nem patches de God of War III.
+- **Configuração:** saves, shader cache e `tlg.ini` estão no diretório `issport/user`;
+  `ISS_CONFIG`/`TLG_CONFIG` apontam para o mesmo local.
+- **Reinicialização:** no Android `runtime_restart` volta ao `run-iss.sh` usando
+  `/system/bin/sh` em vez do `bash run.sh` inexistente. Continua sem validação
+  prática de reinicialização no jogo.
+- **Verificação automatizada:** testes com estruturas de pastas artificiais
+  verificam a aceitação de `art/` e a rejeição de um dump incompleto.
+  Não representam teste de gameplay, módulos reais ou GPU física.
