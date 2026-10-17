@@ -628,7 +628,7 @@ void OverlayTab() {
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextDisabled(TL("Preview", "Prévia"));
+        ImGui::TextDisabled("%s", TL("Preview", "Prévia"));
         ImGui::BeginChild("##preview", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
         const std::string text = OverlayText();
@@ -657,9 +657,9 @@ void OverlayTab() {
         InfoRow(TL("Game", "Jogo"), text);
         const u32 total = background_total;
         if (total) {
-            std::snprintf(text, sizeof(text), TL("loading %u%%", "carregando %u%%"), u32(u64(background_done) * 100 / total));
+            std::snprintf(text, sizeof(text), "%s %u%%", TL("loading", "carregando"), u32(u64(background_done) * 100 / total));
         } else {
-            std::snprintf(text, sizeof(text), TL("ready", "pronto"));
+            std::snprintf(text, sizeof(text), "%s", TL("ready", "pronto"));
         }
         InfoRow(TL("Shader cache", "Cache de shaders"), text);
         ImGui::EndTable();
@@ -1482,7 +1482,7 @@ void LoadingScreen() {
                                                              loading_compile_started)
                                    .count();
         const u32 left = u32(elapsed * double(total - done) / double(done)) + 1;
-        ImGui::Text(TL("About %u:%02u left", "Faltam cerca de %u:%02u"), left / 60, left % 60);
+        ImGui::Text("%s %u:%02u%s", TL("About", "Faltam cerca de"), left / 60, left % 60, TL(" left", ""));
     }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", compile ? TL("Only on the first start on this computer and after updates: "
