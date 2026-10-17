@@ -43,9 +43,10 @@ def checked(path):
     return path
 
 
-def complete(rootfs, bundle, gen8, sysroot, python_overlay, destination):
+def complete(rootfs, bundle, gen8, sysroot, python_overlay, destination, debian_runtime=None):
     rootfs, bundle, gen8 = map(Path, (rootfs, bundle, gen8))
     sysroot, python_overlay, destination = map(Path, (sysroot, python_overlay, destination))
+    debian_runtime = Path(debian_runtime) if debian_runtime is not None else sysroot
     bundled = {p.name: p for p in (bundle / "lib").glob("*.so*") if p.is_file()}
     # Debian's Python 3.13 is installed in the *overlay*, not the fexdroid
     # base rootfs.  Test the exact inputs that the tar packager merges.
@@ -89,7 +90,9 @@ def complete(rootfs, bundle, gen8, sysroot, python_overlay, destination):
                     if found is not None:
                         break
             if found is None:
-                replacement = find(rootfs, name, SOURCE_DIRS) or find(sysroot, name, SOURCE_DIRS)
+                replacement = (find(rootfs, name, SOURCE_DIRS)
+                               or find(debian_runtime, name, SOURCE_DIRS)
+                               or find(sysroot, name, SOURCE_DIRS))
                 if replacement is None:
                     raise RuntimeError(f"UNRESOLVED ARM64 DT_NEEDED: {name} required by {path}")
                 if name in PROTECTED_ABI:

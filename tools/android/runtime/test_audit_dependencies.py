@@ -58,6 +58,29 @@ class DependencyClosureTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "UNRESOLVED ARM64 DT_NEEDED.*libpulsecommon"):
                         audit.complete(fs, bundle, gen8, sysroot, python, dest)
 
+    def test_python_dependency_prefetch_is_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rootfs, bundle, gen8, sysroot = [root / name for name in ("rootfs", "bundle", "gen8", "sysroot")]
+            python, dest, stage = [root / name for name in ("python", "destination", "debian-stage")]
+            for base, path in ((bundle, "bin/iss-probe"), (bundle, "bin/kgsl-chip-id"),
+                               (rootfs, "usr/bin/Xvfb"), (rootfs, "usr/libexec/fxshmd"),
+                               (rootfs, "usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so"),
+                               (gen8, "libvulkan_freedreno_gen8.so"),
+                               (python, "usr/bin/python3.13"),
+                               (python, "usr/lib/python3.13/lib-dynload/readline.so"),
+                               (stage, "usr/lib/aarch64-linux-gnu/libreadline.so.8")):
+                file = base / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b"test-ELF")
+            def dependencies(file):
+                return ["libreadline.so.8"] if file.name == "readline.so" else []
+            with mock.patch.object(audit, "checked", side_effect=lambda f: f), \
+                 mock.patch.object(audit, "deps", side_effect=dependencies):
+                repaired = audit.complete(rootfs, bundle, gen8, sysroot, python, dest, stage)
+            self.assertIn("libreadline.so.8", repaired)
+            self.assertTrue((dest / "usr/lib/aarch64-linux-gnu/libreadline.so.8").is_file())
+
     def test_transitive_pulsecommon_is_packaged(self):
         self.run_case()
 

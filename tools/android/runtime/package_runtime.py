@@ -13,7 +13,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools/android/inputs"))
-from fetch_arm64_sysroot import MIRROR, SUITE, fetch, parse_packages, extract_deb
+from fetch_arm64_sysroot import MIRROR, SUITE, fetch, parse_packages, extract_deb, dependencies
 from fetch_rootfs import migrate_interpreters
 sys.path.insert(0, str(ROOT / 'tools/android/runtime'))
 from validate_runtime_elf import inspect
@@ -26,6 +26,17 @@ GEN8 = ROOT / "out/arm64/turnip-gen8"
 GEN8_LIBRARY = "libvulkan_freedreno_gen8.so"
 GEN8_ICD = "freedreno_gen8_icd.aarch64.json"
 PYTHON_PACKAGES = ("python3.13-minimal", "libpython3.13-minimal", "libpython3.13-stdlib")
+# CPython's stdlib extension modules link to libraries NOT covered by our C/C++
+# build sysroot.  Stage the runtime package dependencies from the SAME Debian
+# trixie arm64 index that supplies Python, then ship only the needed SONAMEs.
+# The extras cover extensions such as _ssl, _gdbm, _nis and _curses_panel.
+PYTHON_EXTRA_LIB_PACKAGES = (
+    "libssl3t64", "libgdbm6t64", "libgdbm-compat4t64",
+    "libcrypt1", "libnsl2", "libtirpc3t64", "libpanelw6",
+)
+PROTECTED_RUNTIME_PACKAGES = {"libc6", "libc6-dev", "libstdc++6", "libgcc-s1",
+                              "libpython3.13-minimal", "libpython3.13-stdlib"}
+
 APP_LOADER = "/data/user/0/com.daedalus.iss/files/rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
 EXCLUDES = ("dev", "proc", "sys", "run", "home", "root", "tmp", "var", "usr/include",
             "usr/share/man", "usr/share/doc", "etc/shadow", "etc/gshadow")
@@ -67,18 +78,51 @@ def keep(info):
     info.uname = info.gname = ""
     return info
 
-def python_overlay():
+def debian_index():
+    # Reuse the already validated Packages index downloaded by fetch_arm64_sysroot.
+    cached = ROOT / ".local-deps/android/arm64-debs" / f"Packages-{SUITE}-binary-arm64.xz"
+    data = cached.read_bytes() if cached.is_file() else fetch(
+        f"{MIRROR}/dists/{SUITE}/main/binary-arm64/Packages.xz")
+    return parse_packages(lzma.decompress(data).decode())
+
+
+def debian_package(name, index, directory):
+    fields = index.get(name)
+    if fields is None:
+        raise RuntimeError(f"Debian {SUITE} arm64 package not found: {name}")
+    blob = fetch(f"{MIRROR}/{fields['Filename']}")
+    if hashlib.sha256(blob).hexdigest() != fields["SHA256"]:
+        raise RuntimeError("Debian package SHA256 mismatch: " + name)
+    extract_deb(blob, directory)
+
+
+def python_overlay(index):
     directory = OUT / "python-overlay"
     if directory.exists() and (directory / "usr/bin/python3.13").is_file():
         return directory
     directory.mkdir(parents=True, exist_ok=True)
-    index = parse_packages(lzma.decompress(fetch(f"{MIRROR}/dists/{SUITE}/main/binary-arm64/Packages.xz")).decode())
     for name in PYTHON_PACKAGES:
-        fields = index[name]
-        blob = fetch(f"{MIRROR}/{fields['Filename']}")
-        if hashlib.sha256(blob).hexdigest() != fields["SHA256"]:
-            raise RuntimeError("Debian package SHA256 mismatch: " + name)
-        extract_deb(blob, directory)
+        debian_package(name, index, directory)
+    return directory
+
+
+def runtime_library_inputs(index):
+    # Include Debian's declared runtime dependencies for Python, not just the
+    # Python .deb files themselves. The old builder copied 3 Python .debs and
+    # then discovered one absent DT_NEEDED per 14-minute native build.
+    import shutil
+    directory = OUT / "debian-runtime-lib-input"
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    requested = set(PYTHON_EXTRA_LIB_PACKAGES)
+    for name in PYTHON_PACKAGES:
+        requested.update(dep for dep in dependencies(index[name])
+                         if dep.startswith(("lib", "zlib")))
+    requested.difference_update(PROTECTED_RUNTIME_PACKAGES)
+    for name in sorted(requested):
+        debian_package(name, index, directory)
+    print(f"Debian ARM64 Python runtime inputs: {len(requested)} packages", flush=True)
     return directory
 
 def validate_inputs():
@@ -127,7 +171,9 @@ def main():
     if not driver_info or driver_info["machine"] != 183 or not driver_info["dynamic"]:
         raise SystemExit("Turnip Gen8 output is not an ARM64 Linux dynamic library")
     OUT.mkdir(parents=True, exist_ok=True)
-    overlay = python_overlay()
+    index = debian_index()
+    overlay = python_overlay(index)
+    debian_runtime = runtime_library_inputs(index)
     # Complete the graph reachable from the native entrypoints and Vulkan ICDs.
     # Existing fexdroid libraries can themselves depend on missing .so files.
     extra = OUT / "dependency-overlay"
@@ -135,7 +181,7 @@ def main():
         import shutil
         shutil.rmtree(extra)
     extra.mkdir(parents=True, exist_ok=True)
-    copied = complete(SOURCE, BUNDLE, GEN8, ROOT / ".local-deps/android/arm64-sysroot", overlay, extra)
+    copied = complete(SOURCE, BUNDLE, GEN8, ROOT / ".local-deps/android/arm64-sysroot", overlay, extra, debian_runtime)
     archive = OUT / "runtime.tar.gz"
     with PortableTar.open(archive, "w:gz", compresslevel=6, format=tarfile.PAX_FORMAT, dereference=False) as tar:
         def safe_root_member(info):
