@@ -47,9 +47,14 @@ def complete(rootfs, bundle, gen8, sysroot, python_overlay, destination):
     rootfs, bundle, gen8 = map(Path, (rootfs, bundle, gen8))
     sysroot, python_overlay, destination = map(Path, (sysroot, python_overlay, destination))
     bundled = {p.name: p for p in (bundle / "lib").glob("*.so*") if p.is_file()}
+    # Debian's Python 3.13 is installed in the *overlay*, not the fexdroid
+    # base rootfs.  Test the exact inputs that the tar packager merges.
+    python_entry = python_overlay / "usr/bin/python3.13"
+    if not python_entry.is_file():
+        python_entry = rootfs / "usr/bin/python3.13"
     roots = [bundle / "bin/iss-probe", bundle / "bin/kgsl-chip-id",
              rootfs / "usr/bin/Xvfb", rootfs / "usr/libexec/fxshmd",
-             rootfs / "usr/bin/python3.13",
+             python_entry,
              rootfs / "usr/lib/aarch64-linux-gnu/libvulkan_freedreno.so",
              gen8 / "libvulkan_freedreno_gen8.so"]
     vulkan = find(rootfs, "libvulkan.so.1")

@@ -33,6 +33,12 @@ class DependencyClosureTests(unittest.TestCase):
             if include_common:
                 common.parent.mkdir(parents=True, exist_ok=True)
                 common.write_bytes(b"arm64 simulated payload")
+            # Mirror the production rootfs: Python comes from Debian overlay,
+            # while fexdroid supplies the legacy display + audio runtime.
+            (fs / "usr/bin/python3.13").unlink()
+            python_bin = python / "usr/bin/python3.13"
+            python_bin.parent.mkdir(parents=True)
+            python_bin.write_bytes(b"overlay Python ARM64 ELF")
             dest.mkdir()
             def dependencies(path):
                 if path.name == "iss-probe":
