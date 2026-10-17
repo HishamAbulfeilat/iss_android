@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.concurrent.*;
 import java.util.regex.*;
 public final class GameActivity extends Activity implements SurfaceHolder.Callback {
- private SurfaceView surface;private FrameLayout frame;private TextView status;private PadBridge pad;private AudioBridge audio;private boolean fillScreen;
+ private SurfaceView surface;private FrameLayout frame;private TextView status;private PadBridge pad;private AudioBridge audio;private String screenMode;
  private final Handler main=new Handler(Looper.getMainLooper());private final ExecutorService worker=Executors.newSingleThreadExecutor();
  private Process game,xvfb;private volatile boolean destroyed,started,failed;private int shmid=-1;private String files,root,base;
  private int displayLogLines;
@@ -22,8 +22,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
   }catch(IOException ignored){}
  }
  @Override public void onCreate(Bundle saved){super.onCreate(saved);getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-  fillScreen="fill".equals(getSharedPreferences("iss",0).getString("display_mode","fill"));
-  getWindow().getDecorView().setSystemUiVisibility(fillScreen?5894:0);
+  screenMode=getSharedPreferences("iss",0).getString("display_mode","fill");
+  if("fill".equals(screenMode))screenMode="stretch";
+  getWindow().getDecorView().setSystemUiVisibility(5894);
   files=getFilesDir().getPath();root=files+"/rootfs";base=files+"/issport";
   try(FileOutputStream reset=new FileOutputStream(new File(files,"iss.log"),false)){
    reset.write(("ISS Android glibc startup log — "+getPackageName()+"\n").getBytes(StandardCharsets.UTF_8));
@@ -43,9 +44,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
  private void updateVideoSize(){
   if(frame==null||surface==null)return;
   int w=frame.getWidth(),h=frame.getHeight();if(w<=0||h<=0)return;
-  // Xvfb is fixed at 1280x720. Fit preserves every pixel; Fill crops without distorting.
-  float scale=fillScreen?Math.max(w/1280f,h/720f):Math.min(w/1280f,h/720f);
-  int vw=Math.max(1,Math.round(1280f*scale)),vh=Math.max(1,Math.round(720f*scale));
+  // Fit preserves 16:9 with side bars, Stretch fills every pixel without
+  // cropping the HUD, and Crop zooms while retaining aspect ratio (opt in).
+  float scale="crop".equals(screenMode)?Math.max(w/1280f,h/720f):Math.min(w/1280f,h/720f);
+  int vw="stretch".equals(screenMode)?w:Math.max(1,Math.round(1280f*scale));
+  int vh="stretch".equals(screenMode)?h:Math.max(1,Math.round(720f*scale));
   FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)surface.getLayoutParams();
   if(p.width!=vw||p.height!=vh||p.gravity!=Gravity.CENTER){
    p.width=vw;p.height=vh;p.gravity=Gravity.CENTER;surface.setLayoutParams(p);
@@ -66,6 +69,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
   if(prefs.getBoolean("patch_dof",false))enabled.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))enabled.add("Disable depth blur");
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",enabled));
+  // Existing texture backport: 1D colour LUT and 2D render-target alias.
+  e.put("TLG_BP09",prefs.getBoolean("texture_1d_fix",true)?"1":"0");
+  e.put("TLG_BC_TINY",prefs.getBoolean("bc_tiny",false)?"1":"0");
   if(args.length>1&&args[1].endsWith("/Xvfb"))e.put("LD_PRELOAD",root+"/usr/lib/fexdroid/libfxpath.so");return p.start();
  }
  @Override public void surfaceCreated(SurfaceHolder holder){if(shmid>=0){attach(holder);return;}if(started)return;started=true;

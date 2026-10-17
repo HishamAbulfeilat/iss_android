@@ -448,6 +448,9 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     /* Android controller/overlay events arrive via TLG_PAD_FILE rather than SDL's
      * joystick subsystem; keep the upstream inFAMOUS graffiti controls intact. */
     if (android_pad_enabled()) {
+        /* Only Android virtual graffiti aiming: physical controllers,
+         * standard sticks/buttons and all other control paths unchanged. */
+        static float spray_axis_x=0.f, spray_axis_y=0.f;
         const int sticks=(injected.buttons&(BTN_L3|BTN_R3))==(BTN_L3|BTN_R3);
         if (sticks && !motion.toggle_held) {
             motion.mode=!motion.mode;
@@ -461,11 +464,19 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             float sx=0.f, sy=0.f;
             if (injected.stick[0]>=0) sx=((float)injected.stick[0]-128.f)/127.f;
             if (injected.stick[1]>=0) sy=((float)injected.stick[1]-128.f)/127.f;
-            const float speed=1.2f*tlggpu_sensor_aim_scale();
-            motion.yaw-=aim_curve(sx)*speed*dt;
-            motion.aim_pitch-=aim_curve(sy)*speed*dt;
-            motion.yaw=fminf(fmaxf(motion.yaw,-1.4f),1.4f);
-            motion.aim_pitch=fminf(fmaxf(motion.aim_pitch,-1.2f),1.2f);
+            /* Stabilize only virtual spray: ~100ms axis smoothing,
+             * a slower motion range and a bounded step after slow frames. */
+            const float spray_dt=fminf(dt,0.050f);
+            const float alpha=spray_dt>0 ? 1.f-expf(-spray_dt*10.f) : 0.f;
+            spray_axis_x+=(aim_curve(sx)-spray_axis_x)*alpha;
+            spray_axis_y+=(aim_curve(sy)-spray_axis_y)*alpha;
+            const float speed=0.48f*tlggpu_sensor_aim_scale();
+            motion.yaw-=spray_axis_x*speed*spray_dt;
+            motion.aim_pitch-=spray_axis_y*speed*spray_dt;
+            motion.yaw=fminf(fmaxf(motion.yaw,-1.20f),1.20f);
+            motion.aim_pitch=fminf(fmaxf(motion.aim_pitch,-1.00f),1.00f);
+        } else {
+            spray_axis_x=spray_axis_y=0.f;
         }
     }
     if (real && !simulated) {

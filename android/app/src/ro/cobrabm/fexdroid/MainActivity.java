@@ -21,12 +21,13 @@ public final class MainActivity extends Activity {
   fps.setOnCheckedChangeListener((b,checked)->prefs.edit().putBoolean("show_fps",checked).apply());l.addView(fps);
   TextView displayLabel=new TextView(this);displayLabel.setText("Exibição:");l.addView(displayLabel);
   Spinner display=new Spinner(this);
-  String[] displayValues={"Ajustar (16:9, sem cortar)","Preencher a tela (Fullscreen)"};
+  String[] displayValues={"16:9 sem cortes (barras laterais)","Fullscreen sem cortes (esticar)","Fullscreen proporcional (cortar bordas)"};
   display.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,displayValues));
-  display.setSelection("fill".equals(prefs.getString("display_mode","fill"))?1:0);
+  String currentMode=prefs.getString("display_mode","fill");
+  display.setSelection("fit".equals(currentMode)?0:"crop".equals(currentMode)?2:1);
   display.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
    public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
-    prefs.edit().putString("display_mode",pos==1?"fill":"fit").apply();
+    prefs.edit().putString("display_mode",pos==0?"fit":pos==2?"crop":"stretch").apply();
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(display);
@@ -61,7 +62,12 @@ public final class MainActivity extends Activity {
   CheckBox depth=new CheckBox(this);depth.setText("Desativar Depth Blur");
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
-  TextView caveat=new TextView(this);caveat.setText("Sombras: não existe patch de sombras nos XMLs enviados. Patches de código só são aplicados quando cada assinatura corresponde a um único endereço.");l.addView(caveat);
+  TextView textureLabel=new TextView(this);textureLabel.setText("Compatibilidade de texturas (Adreno Gen8)");textureLabel.setTextSize(18);textureLabel.setPadding(0,16,0,8);l.addView(textureLabel);
+  CheckBox textureFix=new CheckBox(this);textureFix.setText("Alias 1D/2D (BP09 — evita LUT desatualizada)");textureFix.setChecked(prefs.getBoolean("texture_1d_fix",true));
+  textureFix.setOnCheckedChangeListener((b,enabled)->prefs.edit().putBoolean("texture_1d_fix",enabled).apply());l.addView(textureFix);
+  CheckBox bcTiny=new CheckBox(this);bcTiny.setText("Decodificar BC1–BC5 pequenos na CPU (experimental)");bcTiny.setChecked(prefs.getBoolean("bc_tiny",false));
+  bcTiny.setOnCheckedChangeListener((b,enabled)->prefs.edit().putBoolean("bc_tiny",enabled).apply());l.addView(bcTiny);
+  TextView caveat=new TextView(this);caveat.setText("Os XMLs enviados não possuem patch de sombras. Fullscreen sem corte estica a proporção 16:9 do jogo, sem perder HUD.");l.addView(caveat);
   button(l,"Select game folder",this::choose);button(l,"Launch game",this::launch);
   button(l,"Export latest log",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
   TextView help=new TextView(this);help.setText("Use an extracted game with update 1.07 merged into the same folder. Upstream reference: CUSA00223.\n\nGraffiti: L3 + R3 toggles sensor mode; Cross shakes, R2 sprays, left stick aims.\n\nBased on HayatoG/iss_pc, FEX-Emu and shadPS4. Android infrastructure adapted from God of War III — Daedalus Fork, Bloodborne-Android and fexdroid.\n\nNo game files included.");l.addView(help);ScrollView sc=new ScrollView(this);sc.addView(l);setContentView(sc);refresh();
