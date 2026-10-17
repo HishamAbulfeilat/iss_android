@@ -297,10 +297,12 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
 
     const auto layers = GetInstanceLayers(enable_validation, enable_crash_diagnostic);
     auto extensions = GetLayerExtensions(GetInstanceExtensions(window_type, true), layers);
-    // tlg: DLSS (optional bridge DLL) needs its own instance extensions.
+#ifndef ISS_ANDROID_BIONIC
+    // Optional desktop RTX plugin is not a native Bionic Vulkan extension.
     if (Dlss* dlss = Dlss::Get()) {
         dlss->AppendInstanceExtensions(extensions);
     }
+#endif
 
     const vk::ApplicationInfo application_info = {
         .pApplicationName = "shadPS4",

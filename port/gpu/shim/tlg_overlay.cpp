@@ -1612,13 +1612,20 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                    int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
 
     const vk::Instance vk_instance = instance.GetInstance();
-    ImGui_ImplVulkan_LoadFunctions(
+    // A directly loaded Bionic Vulkan HAL can omit optional ImGui commands.
+    // Validate resolved functions rather than calling a NULL dispatch target.
+    const bool functions_loaded = ImGui_ImplVulkan_LoadFunctions(
         instance.ApiVersion(),
         [](const char* name, void* user) {
             return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(
                 *static_cast<const vk::Instance*>(user), name);
         },
         const_cast<vk::Instance*>(&vk_instance));
+    if (!functions_loaded) {
+        std::fprintf(stderr, "Overlay: Vulkan backend function unavailable; disabling ImGui instead of crashing\n");
+        ImGui::DestroyContext();
+        return;
+    }
 
     const VkFormat color_format = static_cast<VkFormat>(format);
     ImGui_ImplVulkan_InitInfo info{};

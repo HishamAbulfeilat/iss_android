@@ -11,6 +11,9 @@
 // TLG_RENDER_RES retains the older startup-patched guest-resolution path.
 
 #pragma once
+#ifdef ISS_ANDROID_BIONIC
+#include "video_core/renderer_vulkan/vk_temporal_upscaler_bionic.h"
+#else
 
 #include <array>
 #include <chrono>
@@ -286,3 +289,5 @@ private:
 };
 
 } // namespace Vulkan
+
+#endif // ISS_ANDROID_BIONIC

@@ -152,7 +152,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         free_queue.push(&frame);
     }
 
+#ifndef ISS_ANDROID_BIONIC
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
+#endif
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
     TlgOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
 
@@ -517,9 +519,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 
     // tlg: FSR 1, RCAS and its strength come from the in-game menu, every frame.
     const auto& graphics = TlgSettings::Get();
+#ifdef ISS_ANDROID_BIONIC
+    fsr_settings.enable = false;
+    fsr_settings.use_rcas = false;
+#else
     fsr_settings.enable = graphics.fsr1;
     fsr_settings.use_rcas = graphics.rcas;
     fsr_settings.rcas_attenuation = TlgGraphics::RcasAttenuation(graphics.rcas_strength);
+#endif
     TlgSettings::Get().image_width = int(image_size.width);
     TlgSettings::Get().image_height = int(image_size.height);
     TlgSettings::Get().window_width = int(frame->width);
@@ -528,8 +535,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         fsr_settings.use_rcas &&
         TlgGraphics::FsrPassRuns(fsr_settings.enable, true, int(image_size.width), int(image_size.height),
                                   int(frame->width), int(frame->height));
+#ifndef ISS_ANDROID_BIONIC
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
                                  fsr_settings, frame->is_hdr);
+#endif
 
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.

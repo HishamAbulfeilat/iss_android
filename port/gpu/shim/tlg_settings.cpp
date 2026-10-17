@@ -266,6 +266,14 @@ void Load() {
         v.overlay_corner = 1;
         v.overlay_scale = 140;
     }
+#ifdef ISS_ANDROID_BIONIC
+    // Never let an existing desktop tlg.ini reactivate missing render paths.
+    v.upscaler = UpscalerOff;
+    v.fsr1 = false;
+    v.rcas = false;
+    v.object_motion = false;
+    v.jitter = false;
+#endif
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;

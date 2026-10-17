@@ -14,6 +14,8 @@ export FEX_APP_CONFIG_LOCATION="$HOME/.fex-emu/" FEX_APP_DATA_LOCATION="$HOME/.f
 export FEX_APP_CACHE_LOCATION="$HOME/.cache/fex-emu"
 export TLG_DATA_DIR="$base" TLG_GAME_DIR="${ISS_GAME_DIR:?Choose the extracted inFAMOUS game folder}"
 export ISS_BIONIC=1 ISS_ANDROID_INPUT=1 TLG_ANDROID_INPUT=1
+# Native Bionic deliberately has no optional temporal or spatial upscaling.
+export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 TLG_FSR1=0 TLG_RCAS=0
 export TLG_PAD_FILE="$base/android-pad.state"
 export TLG_CONFIG="$base/user/tlg.ini" ISS_CONFIG="$base/user/tlg.ini"
 export TLG_GPU_USER_DIR="$base/user"

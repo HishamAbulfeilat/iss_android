@@ -109,10 +109,12 @@ find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 
-# tlg: FSR 3.1 temporal upscaling / frame generation, native Vulkan (MIT, FireBurn/FSR-Vulkan).
-set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+# Desktop temporal FSR/DLSS; native Bionic inFAMOUS deliberately omits this SDK.
+if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
+    set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+endif()
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
@@ -162,6 +164,8 @@ file(GLOB_RECURSE VIDEO_CORE CONFIGURE_DEPENDS shadps4/video_core/*.cpp)
 # implementation; glibc/desktop retains its VkSurfaceKHR implementation.
 if(ANDROID AND ISS_ANDROID_BIONIC)
     list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain\\.cpp$")
+    list(FILTER VIDEO_CORE EXCLUDE REGEX
+        "renderer_vulkan/vk_temporal_upscaler\\.cpp$|renderer_vulkan/vk_fsr4\\.cpp$|renderer_vulkan/fsr411/fsr411\\.cpp$")
 else()
     list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain_ahb\\.cpp$")
 endif()
@@ -230,7 +234,9 @@ target_compile_options(tlggpu PRIVATE -Wno-deprecated-declarations -Wno-missing-
 if (NOT WIN32)
     target_link_options(tlggpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
+    target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+endif()
 target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt-header-only Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 # xbyak is header-only: the distribution's copy when there is one (Fedora xbyak-devel), else the
@@ -523,10 +529,12 @@ target_include_directories(page-state-test PRIVATE ../tests/stubs shim shadps4)
 target_link_libraries(page-state-test PRIVATE Boost::headers)
 target_compile_options(page-state-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
-add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
-    shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
-target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
-target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
+    add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
+        shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
+    target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
+    target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+endif()
 
 add_executable(cheat-hook-test ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

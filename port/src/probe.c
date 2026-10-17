@@ -496,6 +496,21 @@ static void fault(int sig, siginfo_t *info, void *context) {
     else
         snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
     { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+#if defined(__ANDROID__) && defined(__aarch64__)
+    // PC=0: LR points at the native callsite that jumped through NULL.
+    // Print a single symbolized return address in the crash report.
+    const ucontext_t *arm = (const ucontext_t *)context;
+    uintptr_t lr = (uintptr_t)arm->uc_mcontext.regs[30];
+    if (lr) {
+        if (dladdr((void *)(lr - 4), &where) && where.dli_fname)
+            snprintf(line, sizeof(line), "  native caller LR: %s+0x%lx (%s)\n",
+                     where.dli_fname, (unsigned long)(lr - 4 - (uintptr_t)where.dli_fbase),
+                     where.dli_sname ? where.dli_sname : "?");
+        else
+            snprintf(line, sizeof(line), "  native caller LR: %p\n", (void *)lr);
+        { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+    }
+#endif
     if (gpu_enabled) tlggpu_dump_guest_writes(context);
     /* Host call chain (frames with unwind info; guest frames end it). */
     void *frames[32];
