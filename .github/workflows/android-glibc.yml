@@ -80,28 +80,9 @@ jobs:
         shell: bash -el {0}
         run: |
           bash tools/android/apk/build_apk.sh
-          tar -tzf out/release/runtime.tar.gz | grep -Eq '^rootfs/usr/lib/aarch64-linux-gnu/libpulsecommon-17\.0\.so
-      - name: Upload experimental APK and checksum
-        uses: actions/upload-artifact@v4
-        with:
-          name: iss-android-glibc-apk-${{ github.sha }}
-          path: |
-            out/release/*.apk
-            out/release/*.apk.sha256
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload native compilation artifacts (not an APK)
-        uses: actions/upload-artifact@v4
-        with:
-          name: iss-android-glibc-native-${{ github.sha }}
-          path: |
-            out/arm64/iss-probe
-            out/arm64/fex/libisscpu.so
-            out/arm64/gpu/libtlggpu.so
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Verify ARM64 dependencies with the glibc loader through QEMU
+          tar -tzf out/release/runtime.tar.gz > "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'rootfs/usr/lib/aarch64-linux-gnu/libpulsecommon-17.0.so' "$RUNNER_TEMP/iss-runtime-members.txt"
+      - name: Verify transitive ELF linking with emulated ARM64 glibc loader
         shell: bash -el {0}
         run: |
           set -euo pipefail
@@ -113,12 +94,11 @@ jobs:
           for file in out/arm64/bundle/bin/iss-probe out/arm64/bundle/lib/libtlggpu.so out/arm64/bundle/lib/libisscpu.so out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so; do
             qemu-aarch64 -L "$root" -E LD_LIBRARY_PATH="$libs" "$loader" --list "$PWD/$file" > /tmp/iss-elf-deps.log 2>&1 || { cat /tmp/iss-elf-deps.log; exit 1; }
             if grep -E 'not found|cannot open shared object file' /tmp/iss-elf-deps.log; then
-              echo "Unresolved glibc library: $file" >&2
+              echo "Unresolved ARM64 dependency for $file" >&2
               exit 1
             fi
           done
-          echo 'ARM64 glibc loader dependency check passed'
-
+          echo 'ARM64 Linux glibc dynamic loader resolved all checked roots'
       - name: Upload experimental APK and checksum
         uses: actions/upload-artifact@v4
         with:
