@@ -1,0 +1,16 @@
+{
+  "id": "turnip-gen8-v37-patched",
+  "name": "Turnip Gen8 V37 patched",
+  "author": "StevenMXZ",
+  "family": "adreno-gen8",
+  "archive": "Turnip_Gen8_V37_patch.zip",
+  "url": "https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/download/v37/Turnip_Gen8_V37_patch.zip",
+  "archive_sha256": "c03b5791610edfc9a9b1f42faeef6b37b07b332a0d5e3a29baf6ddc0a82e0dac",
+  "library": "libvulkan_freedreno.so",
+  "library_sha256": "31b4f16fed6bc0c60d80715067845d1ae34761fcbc1fc37e41e80d1de29a8b4e",
+  "entry": "HMI",
+  "min_api": 28,
+  "default_chip_id_prefix": "0x44",
+  "source": "https://github.com/StevenMXZ/Adreno-Tools-Drivers/tree/v37",
+  "patches": "https://github.com/WinNative-Emu/Drivers/tree/main/patches"
+}
