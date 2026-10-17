@@ -40,16 +40,16 @@ class GraffitiAndDisplayTests(unittest.TestCase):
         self.assertIn('"crop"', launcher)
         self.assertIn('"stretch"', launcher)
 
-    def test_explicit_texture_fixes_are_independently_switchable(self):
+    def test_failed_texture_fixes_are_disabled_after_device_feedback(self):
         activity = ACT.read_text()
         launcher = MAIN.read_text()
-        for name in ('texture_1d_fix', 'bc_tiny'):
-            self.assertIn(name, activity)
-            self.assertIn(name, launcher)
-        self.assertIn('e.put("TLG_BP09"', activity)
-        self.assertIn('e.put("TLG_BC_TINY"', activity)
-        self.assertIn('prefs.getBoolean("texture_1d_fix",true)', activity)
-        self.assertIn('prefs.getBoolean("bc_tiny",false)', activity)
+        # BP09 made rendering worse and BC Tiny had no measurable benefit.
+        # Keep old preferences from re-enabling either experiment.
+        for key in ('texture_1d_fix', 'bc_tiny'):
+            self.assertNotIn(key, activity)
+            self.assertNotIn(key, launcher)
+        self.assertIn('e.put("TLG_BP09","0")', activity)
+        self.assertIn('e.put("TLG_BC_TINY","0")', activity)
 
 
 if __name__ == "__main__":
