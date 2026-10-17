@@ -53,7 +53,11 @@ export TLG_CONFIG="$ISS_CONFIG"
 export LD_LIBRARY_PATH="$base/lib:$root/usr/lib/aarch64-linux-gnu:$root/usr/lib"
 export DISPLAY=:0 SDL_VIDEODRIVER=x11
 # SDL3 disk driver feeds the Android AudioTrack FIFO; do not use a host Linux sound daemon.
-export SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE="$base/audio.fifo" SDL_DISKAUDIOFORMAT=S16LE
+# SDL3 disk driver: emit raw PCM into the FIFO consumed by Android AudioTrack.
+# Older SDL_DISKAUDIOFILE is ignored by SDL3; the SDL_AUDIO_* hints are mandatory.
+export SDL_AUDIO_DRIVER=disk SDL_AUDIODRIVER=disk
+export SDL_AUDIO_DISK_OUTPUT_FILE="$base/audio.fifo" SDL_AUDIO_DISK_TIMESCALE=0
+export SDL_AUDIO_FORMAT=S16LE SDL_AUDIO_CHANNELS=2 SDL_AUDIO_FREQUENCY=48000
 export ISS_ANDROID_INPUT=1 TLG_PAD_FILE="$base/android-pad.state" TLG_PAD_QUIET=1
 export TLG_APP_NAME="inFAMOUS Second Son" TLG_APP_ID=com.daedalus.iss
 export VK_DRIVER_FILES="$icd" VK_ICD_FILENAMES="$icd"

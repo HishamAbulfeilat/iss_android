@@ -71,3 +71,14 @@ class EnvironmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ShellAudioContractTests(unittest.TestCase):
+    def test_sdl3_disk_output_matches_android_bridge(self):
+        script = Path(__file__).resolve().parents[1] / "device" / "run-iss.sh"
+        code = script.read_text()
+        self.assertIn('SDL_AUDIO_DISK_OUTPUT_FILE="$base/audio.fifo"', code)
+        self.assertIn('SDL_AUDIO_FORMAT=S16LE', code)
+        self.assertIn('SDL_AUDIO_CHANNELS=2', code)
+        self.assertIn('SDL_AUDIO_FREQUENCY=48000', code)
+        self.assertNotIn('SDL_DISKAUDIOFILE=', code)
+

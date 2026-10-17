@@ -85,3 +85,11 @@ e renderização em dispositivo, que permanecem pendentes.
 - **Verificação automatizada:** testes com estruturas de pastas artificiais
   verificam a aceitação de `art/` e a rejeição de um dump incompleto.
   Não representam teste de gameplay, módulos reais ou GPU física.
+
+- **SDL3/áudio:** substituídas as variáveis legadas `SDL_DISKAUDIOFILE`
+  pela API de hints da SDL3: `SDL_AUDIO_DISK_OUTPUT_FILE` aponta para
+  `audio.fifo`, com PCM estéreo S16LE a 48 kHz e escala de tempo zero
+  (a leitura no AudioTrack regula a fila). O código anterior gravaria
+  `sdlaudio.raw` em vez de usar a ponte do Android. A configuração foi
+  conferida contra os hints oficiais SDL3; a reprodução em aparelho
+  ainda precisa de confirmação.
