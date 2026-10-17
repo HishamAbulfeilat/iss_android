@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Audit PIC relocations in every FFmpeg ARM64 static library BEFORE the
-# expensive native GPU build. Test each archive independently: FFmpeg intentionally
-# contains same-named implementation symbols in DIFFERENT libraries; forcing
-# all five archives at once introduces duplicate-symbol errors that the normal
-# linker (selective archive extraction) will never encounter.
+# Verify that the actual FFmpeg dependency group, including the original
+# troublesome NEON FFT assembly object, links into an Android Bionic shared ELF.
+# IMPORTANT: Do not --whole-archive FFmpeg: several archives intentionally
+# contain same-named symbols; forcing everything in creates false failures.
 set -Eeuo pipefail
 cd -- "$(dirname "$0")/../../.."
 ndk=${ISS_NDK:-${ANDROID_NDK_HOME:?Set ISS_NDK}}
@@ -13,41 +12,60 @@ readelf="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 prefix=$PWD/.local-deps/android/bionic-prefix
 out=$PWD/.local-deps/android/bionic-build
 mkdir -p "$out"
-failed=0
+log="$out/ffmpeg-shared-pic-integration.log"
+so="$out/ffmpeg-pic-integration.so"
+map="$out/ffmpeg-pic-integration.map"
+src="$out/ffmpeg-pic-integration.c"
 for name in avformat avcodec swscale swresample avutil; do
-    archive="$prefix/lib/lib${name}.a"
-    log="$out/ffmpeg-pic-${name}.log"
-    so="$out/ffmpeg-pic-${name}.so"
-    if [[ ! -s "$archive" ]]; then
-        echo "FFmpeg PIC preflight: missing $archive" >&2
-        failed=1
-        continue
-    fi
-    # Whole-archive on JUST ONE library exercises every .o and every NEON
-    # specialization. Shared undefined references into sibling libraries are
-    # intentionally allowed here; they will be checked by the real GPU link.
-    # It is WRONG to combine multiple FFmpeg archives under --whole-archive:
-    # e.g. ff_init_half2float_tables has an implementation in both avcodec and
-    # swscale, and regular links extract only the needed definition.
-    if ! "$clang" -fPIC -shared -Wl,-z,undefs -Wl,--error-limit=0 \
-        -Wl,--whole-archive "$archive" -Wl,--no-whole-archive \
-        -lm -ldl -llog -lz -o "$so" >"$log" 2>&1; then
-        echo "FFmpeg PIC preflight FAILED: $name (full log: $log)" >&2
-        grep -E 'ld.lld: error:|recompile with -fPIC|>>> defined|>>> referenced' "$log" | head -120 >&2 || :
-        tail -35 "$log" >&2
-        failed=1
-        continue
-    fi
-    if "$readelf" -d "$so" | grep -E 'TEXTREL|FLAGS.*TEXTREL'; then
-        echo "FFmpeg PIC preflight FAILED: $name has forbidden TEXTREL" >&2
-        failed=1
-        continue
-    fi
-    "$readelf" -h "$so" | grep -q 'Machine:.*AArch64'
-    echo "FFmpeg PIC preflight OK: $name, all static members link without TEXTREL"
+    test -s "$prefix/lib/lib${name}.a"
 done
-if [[ "$failed" != 0 ]]; then
-    echo "FFmpeg PIC preflight found one or more invalid ARM64 archives; full reports above" >&2
+cat >"$src" <<'EOF'
+#include <libavutil/tx.h>
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
+
+/* Force exactly the tx_float_neon.o that failed in the GPU build.
+ * This is a link-only fixture: the internal function is NEVER called.
+ * ff_tx_fft_sr_float_neon exists in pinned FFmpeg 7.1.5. */
+extern void ff_tx_fft_sr_float_neon(void);
+__attribute__((visibility("default"), used))
+void (*iss_ffmpeg_neon_pic_reference)(void) = ff_tx_fft_sr_float_neon;
+
+/* Pull the real public FFmpeg entry points and their static dependencies. */
+__attribute__((visibility("default")))
+unsigned iss_ffmpeg_link_probe(void) {
+    AVTXContext *ctx = NULL;
+    av_tx_fn transform = NULL;
+    int error = av_tx_init(&ctx, &transform, AV_TX_FLOAT_FFT, 0, 32, NULL, 0);
+    if (ctx) av_tx_uninit(&ctx);
+    return (unsigned)error + avformat_version() + avcodec_version() +
+           swscale_version() + swresample_version() + avutil_version();
+}
+EOF
+# -z undefs mirrors tlggpu's handling of runtime-provided symbols.
+# --start-group preserves FFmpeg's NORMAL selective archive extraction and
+# resolves cross-library dependencies; no duplicate-symbol false positives.
+if ! "$clang" -std=c11 -fPIC -shared -I"$prefix/include" \
+    -Wl,-z,undefs -Wl,--error-limit=0 "-Wl,-Map=$map" \
+    "$src" -Wl,--start-group \
+    "$prefix/lib/libavformat.a" "$prefix/lib/libavcodec.a" \
+    "$prefix/lib/libswscale.a" "$prefix/lib/libswresample.a" \
+    "$prefix/lib/libavutil.a" -Wl,--end-group \
+    -lm -ldl -llog -lz -o "$so" >"$log" 2>&1; then
+    echo "FFmpeg realistic Bionic PIC integration FAILED ($log)" >&2
+    grep -E 'ld.lld: error:|recompile with -fPIC|>>> defined|>>> referenced|error:' "$log" | head -130 >&2 || :
+    tail -55 "$log" >&2
     exit 1
 fi
-echo "FFmpeg ARM64 PIC preflight PASS: 5 independently validated static archives."
+if ! grep -Fq 'tx_float_neon.o' "$map"; then
+    echo "FFmpeg PIC integration did not reach tx_float_neon.o; test is insufficient" >&2
+    exit 1
+fi
+if "$readelf" -d "$so" | grep -E 'TEXTREL|FLAGS.*TEXTREL'; then
+    echo "FFmpeg PIC integration contains Android-forbidden TEXTREL" >&2
+    exit 1
+fi
+"$readelf" -h "$so" | grep -q 'Machine:.*AArch64'
+echo "FFmpeg Android PIC link PASS: actual dependency group, NEON FFT included, no text relocations."
