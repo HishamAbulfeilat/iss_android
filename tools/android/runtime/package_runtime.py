@@ -134,6 +134,7 @@ def main():
     if extra.exists():
         import shutil
         shutil.rmtree(extra)
+    extra.mkdir(parents=True, exist_ok=True)
     copied = complete(SOURCE, BUNDLE, GEN8, ROOT / ".local-deps/android/arm64-sysroot", overlay, extra)
     archive = OUT / "runtime.tar.gz"
     with PortableTar.open(archive, "w:gz", compresslevel=6, format=tarfile.PAX_FORMAT, dereference=False) as tar:
