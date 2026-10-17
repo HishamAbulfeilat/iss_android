@@ -80,12 +80,26 @@ def main():
     game = Path(env["TLG_GAME_DIR"])
     data = Path(env["TLG_DATA_DIR"])
     out = data / "out"
-    root = Path(env["FXD_ROOT"])
-    loader = root / "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
-    python = root / "usr/bin/python3.13"
+    bionic = env.get("ISS_BIONIC") == "1"
+    if bionic:
+        # Runtime is Android/NDK, with no glibc, rootfs or Linux Vulkan ICD.
+        root = data / "arm64"
+        loader = None
+        python = root / "python/bin/python3.13"
+        probe = root / "bin/iss-probe"
+        if not python.is_file() or not probe.is_file():
+            raise SystemExit("ISS Bionic preflight: ARM64 Python or iss-probe missing.")
+        driver = env.get("ISS_VULKAN_DRIVER", "")
+        if driver and not Path(driver).is_file():
+            raise SystemExit(f"ISS Bionic driver missing: {driver}")
+    else:
+        root = Path(env["FXD_ROOT"])
+        loader = root / "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+        python = root / "usr/bin/python3.13"
+        probe = BASE / "bin/iss-probe"
+        if not loader.is_file() or not python.is_file():
+            raise SystemExit("ISS runtime preflight: ARM64 glibc loader or Python missing.")
     check_game_layout(game)
-    if not loader.is_file() or not python.is_file():
-        raise SystemExit("ISS runtime preflight: ARM64 glibc loader or Python missing.")
     out.mkdir(parents=True, exist_ok=True)
     user = data / "user"
     user.mkdir(parents=True, exist_ok=True)
@@ -97,8 +111,8 @@ def main():
         if not name.is_file():
             raise SystemExit(f"ISS package incomplete: missing {name}")
         print(f"ISS preparation: {script}", flush=True)
-        subprocess.run([str(loader), str(python), str(name), *map(str, arguments)],
-                       check=True, env=env)
+        command = ([str(python)] if bionic else [str(loader), str(python)])
+        subprocess.run([*command, str(name), *map(str, arguments)], check=True, env=env)
         print(f"ISS preparation complete: {script}", flush=True)
 
     run_step("prepare", game, "--out", out)
@@ -115,14 +129,15 @@ def main():
         if not (out / artifact).is_file():
             raise SystemExit(f"ISS preparation: missing {artifact}")
 
-    args = [str(loader), str(BASE / "bin/iss-probe"), str(image),
-            "--content-profile", str(out / "content.bin"),
+    args = ([str(probe)] if bionic else [str(loader), str(probe)]) + [
+            str(image), "--content-profile", str(out / "content.bin"),
             "--patches", str(out / "patches.bin"),
             "--app0", str(game), "--user", str(user), "--timeout", "0"]
-    print("ISS preparation complete; entering ARM64 FEX game loader", flush=True)
+    print("ISS preparation complete; entering ARM64 FEX game loader" +
+          (" (Android Bionic)" if bionic else " (Linux glibc)"), flush=True)
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execve(str(loader), args, env)
+    os.execve(str(probe) if bionic else str(loader), args, env)
 
 
 if __name__ == "__main__":
