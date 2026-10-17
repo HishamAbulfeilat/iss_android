@@ -6,6 +6,33 @@ ndk=${ISS_NDK:-${ANDROID_NDK_HOME:?Set ISS_NDK or ANDROID_NDK_HOME}}
 api=${ISS_BIONIC_API:-30}
 jobs=${ISS_JOBS:-2}
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH CMAKE_PREFIX_PATH
+# The vendored FEX FileUtils uses the glibc getdents64() wrapper, which Bionic
+# does not declare. Adapt only the checked-out submodule during this Bionic build;
+# do not change upstream FEX or the original glibc build.
+python3 - <<'PY'
+from pathlib import Path
+path = Path("third_party/FEX/FEXCore/Source/Utils/FileUtils.cpp")
+source = path.read_text()
+anchor = "namespace FEXCore::FileUtils {"
+if "iss_bionic_getdents64" not in source:
+    if source.count("getdents64(") != 2 or source.count(anchor) != 1:
+        raise SystemExit("FEX FileUtils changed; refusing an unverified Android compatibility patch")
+    compat = """#ifdef __ANDROID__
+#include <sys/syscall.h>
+// Android's libc does not export glibc's getdents64 wrapper.
+static ssize_t iss_bionic_getdents64(int fd, void* buf, size_t size) {
+  return syscall(__NR_getdents64, fd, buf, size);
+}
+#endif
+
+"""
+    source = source.replace(anchor, compat + anchor, 1)
+    source = source.replace("getdents64(", "iss_bionic_getdents64(", 2)
+    # The function declaration must retain its own name, not be replaced again.
+    source = source.replace("iss_bionic_iss_bionic_getdents64(", "iss_bionic_getdents64(")
+    path.write_text(source)
+    print("Bionic compatibility: FEX FileUtils getdents64 via Android syscall")
+PY
 cmake -S third_party/FEX -B out/bionic/fex -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-$api -DANDROID_STL=c++_shared \
