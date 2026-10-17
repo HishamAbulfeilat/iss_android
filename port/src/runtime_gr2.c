@@ -19,7 +19,13 @@
 #ifndef _WIN32
 #include <sys/random.h>
 #ifdef __ANDROID__
+// libucontext's freestanding AArch64 header tags its private mcontext as
+// "struct sigcontext". Android NDK already defines that kernel struct.
+// Keep the ABI/layout unchanged, but give the private tag its own name in
+// just this include. This is Bionic-only; glibc keeps system ucontext.
+#define sigcontext iss_libucontext_private_sigcontext
 #include <libucontext/libucontext.h>
+#undef sigcontext
 typedef libucontext_ucontext_t IssFiberContext;
 #define iss_fiber_getcontext libucontext_getcontext
 #define iss_fiber_makecontext libucontext_makecontext

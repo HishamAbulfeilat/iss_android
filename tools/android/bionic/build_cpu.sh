@@ -53,7 +53,7 @@ cmake -S third_party/FEX -B out/bionic/fex -G Ninja \
     -DBUILD_TESTING=OFF -DBUILD_THUNKS=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_STEAM_SUPPORT=OFF \
     -DBUILD_FEX_LINUX_TESTS=OFF -DENABLE_ZYDIS=OFF -DTUNE_ARCH=armv8.2-a -DTUNE_CPU=generic \
     -DENABLE_JEMALLOC_GLIBC_ALLOC=OFF
-cmake --build out/bionic/fex --target isscpu --parallel "$jobs"
+cmake --build out/bionic/fex --target isscpu --parallel "$jobs" -- -k 0
 mkdir -p out/bionic/lib
 cp out/bionic/fex/libisscpu.so out/bionic/lib/
 cp "$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" out/bionic/lib/

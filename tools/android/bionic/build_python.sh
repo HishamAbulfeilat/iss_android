@@ -11,6 +11,21 @@ build=$root/.local-deps/android/bionic-build/python-host-isolated-v1
 cross=$root/.local-deps/android/bionic-build/python-android-isolated-v1
 out=$root/out/bionic/python
 j=${ISS_JOBS:-4}
+# Show the failing cross/host build command's captured diagnostics in Actions,
+# rather than reporting only the outer shell's exit status.
+report_python_failure() {
+    local status=$?
+    trap - ERR
+    echo "ISS Bionic Python build failed (exit $status)" >&2
+    for log in "$build/configure.log" "$build/build.log" "$cross/configure.log" "$cross/build.log" "$cross/install.log"; do
+        if [[ -s $log ]]; then
+            echo "----- $log (last 55 lines) -----" >&2
+            tail -55 "$log" >&2
+        fi
+    done
+    exit "$status"
+}
+trap report_python_failure ERR
 llvm=$ndk/toolchains/llvm/prebuilt/linux-x86_64
 clean=(env -i "PATH=/usr/bin:/bin:$llvm/bin" "HOME=$HOME" LC_ALL=C CONFIG_SITE=/dev/null)
 if [[ ! -f $src/configure ]]; then
