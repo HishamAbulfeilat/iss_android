@@ -211,9 +211,16 @@ end_stage "libatrac9.a"
 
 # ---- 4/5 iss-probe (the loader) --------------------------------------------
 begin "iss-probe (loader)"
+# The Debian ARM64 sysroot must have FreeType's nested ft2build.h headers.
+[[ -f "$sysroot/usr/include/freetype2/ft2build.h" ]] || {
+  echo "FreeType ARM64 headers missing from sysroot" >&2
+  exit 1
+}
+# cpu_check.c is x86 CPUID assembler and must not enter this ARM64 loader.
+
 # port/src/runtime*.c includes runtime_cpu.c (a stub on ARM64: libisscpu.so implements guest_cpu.h).
-"${cc[@]}" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -Iport -Iport/src \
-    port/src/probe.c port/src/runtime*.c port/src/cpu_check.c port/src/vulkan_smoke.c "$out/libatrac9.a" -lm \
+"${cc[@]}" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie "${includes[@]}" -I"$sysroot/usr/include/freetype2" -Iport -Iport/src \
+    port/src/probe.c port/src/runtime*.c port/src/vulkan_smoke.c "$out/libatrac9.a" -lm \
     -L"$out/gpu" -ltlggpu -L"$out/fex" -lisscpu -Wl,-rpath,'$ORIGIN/../lib' \
     -Wl,--dynamic-linker="$rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" -rdynamic \
     "${libraries[@]}" -o "$out/iss-probe"
