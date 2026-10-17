@@ -57,6 +57,18 @@ jobs:
         run: |
           export ISS_ARM64_HEADERS="$CONDA_PREFIX"
           bash tools/android/build/build_arm64.sh
+      - name: Build experimental installable Android APK
+        shell: bash -el {0}
+        run: bash tools/android/apk/build_apk.sh
+      - name: Upload experimental APK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-glibc-apk-${{ github.sha }}
+          path: |
+            out/release/*.apk
+            out/release/*.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload native compilation artifacts (not an APK)
         uses: actions/upload-artifact@v4
         with:

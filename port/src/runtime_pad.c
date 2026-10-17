@@ -72,6 +72,13 @@ static size_t reads;
 static uint8_t connected_count;
 
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
+/* The Android PadBridge writes this same state file without relying on /dev/input. */
+static int android_pad_enabled(void) {
+    static int initialized, enabled;
+    if (!initialized) { const char *v=getenv("ISS_ANDROID_INPUT"); enabled=v && v[0]=='1'; initialized=1; }
+    return enabled;
+}
+
 /* TLG_STICK_DEADZONE (0..0.5, default 0.10): stick values inside it read as centered, the rest
  * is rescaled, so worn sticks (drift) don't move the character or camera. */
 static float stick_deadzone(void) {
@@ -365,6 +372,7 @@ static float aim_curve(float v) {
     const float t=fminf((a-dead)/(1.f-dead),1.f);
     return v<0 ? -t*t : t*t;
 }
+static struct { uint32_t buttons; int stick[4], trigger[2]; } injected={0,{-1,-1,-1,-1},{-1,-1}};
 static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     const uint64_t now=now_us();
     float dt=motion.last_us ? (float)(now-motion.last_us)*1e-6f : 0.f;
@@ -435,6 +443,29 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             d->left_x=d->left_y=128;
             d->right_x=d->right_y=128;
             simulated=1;
+        }
+    }
+    /* Android controller/overlay events arrive via TLG_PAD_FILE rather than SDL's
+     * joystick subsystem; keep the upstream inFAMOUS graffiti controls intact. */
+    if (android_pad_enabled()) {
+        const int sticks=(injected.buttons&(BTN_L3|BTN_R3))==(BTN_L3|BTN_R3);
+        if (sticks && !motion.toggle_held) {
+            motion.mode=!motion.mode;
+            printf("Runtime: Android graffiti sensor mode %s\n",motion.mode ? "on" : "off");
+            if (motion.mode) tlggpu_graffiti_guide(0);
+        }
+        motion.toggle_held=sticks;
+        if (motion.mode) {
+            roll=1.5708f; simulated=1;
+            if (injected.buttons&BTN_CROSS) shake=1;
+            float sx=0.f, sy=0.f;
+            if (injected.stick[0]>=0) sx=((float)injected.stick[0]-128.f)/127.f;
+            if (injected.stick[1]>=0) sy=((float)injected.stick[1]-128.f)/127.f;
+            const float speed=1.2f*tlggpu_sensor_aim_scale();
+            motion.yaw-=aim_curve(sx)*speed*dt;
+            motion.aim_pitch-=aim_curve(sy)*speed*dt;
+            motion.yaw=fminf(fmaxf(motion.yaw,-1.4f),1.4f);
+            motion.aim_pitch=fminf(fmaxf(motion.aim_pitch,-1.2f),1.2f);
         }
     }
     if (real && !simulated) {
@@ -747,7 +778,8 @@ static void sample_host(PadData *d) {
  * touchpad is the left side; lx= ly= rx= ry= (0..255) override the sticks; tilt_right, tilt_left
  * and shake drive the simulated motion sensor (see sample_motion). An empty file
  * releases everything. */
-static struct { uint32_t buttons; int stick[4]; } injected={0,{-1,-1,-1,-1}};
+
+/* Forward declaration: sample_motion reads the Android-injected pad state. */
 static int replay_armed;      /* 1 while a TLG_PAD_REPLAY recording plays, 2 once it ended */
 static uint64_t replay_start; /* 0: (re)start at the next sample */
 static void read_inject(void) {
@@ -770,9 +802,11 @@ static void read_inject(void) {
     FILE *f=fopen(path,"r");
     if (!f) return;
     static const char *sticks[]={"lx=","ly=","rx=","ry="};
+    static const char *triggers[]={"l2=","r2="};
     injected.buttons=0;
     injected_motion=0;
     for (int i=0;i<4;++i) injected.stick[i]=-1;
+    for (int i=0;i<2;++i) injected.trigger[i]=-1;
     char token[64];
     while (fscanf(f,"%63s",token)==1) {
         if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* TLG_PAD_REPLAY */
@@ -781,10 +815,13 @@ static void read_inject(void) {
         if (!strcmp(token,"tilt_left")) injected_motion|=2;
         if (!strcmp(token,"shake")) injected_motion|=4;
         for (int i=0;i<4;++i) if (!strncmp(token,sticks[i],3)) { int v=atoi(token+3); injected.stick[i]=v<0 ? 0 : v>255 ? 255 : v; }
+        for (int i=0;i<2;++i) if (!strncmp(token,triggers[i],3)) { int v=atoi(token+3); injected.trigger[i]=v<0 ? 0 : v>255 ? 255 : v; }
     }
     fclose(f);
-    printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
-           injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
+    /* Avoid flooding stdout with every 8 ms joystick update from Android. */
+    if (!android_pad_enabled() && !(getenv("TLG_PAD_QUIET") && strcmp(getenv("TLG_PAD_QUIET"),"1")==0))
+        printf("Runtime: pad file: buttons 0x%x sticks %d %d %d %d\n",injected.buttons,
+               injected.stick[0],injected.stick[1],injected.stick[2],injected.stick[3]);
 }
 /* TLG_PAD_RECORD=<file>: F9 starts and stops recording the pad state (gamepad or keyboard) with
  * the time since F9; TLG_PAD_REPLAY=<file> plays such a recording back, started by the token
@@ -858,16 +895,26 @@ static void replay_sample(PadData *d) {
  * name) stay hidden until released: the game would take them as a new press. */
 static int hold_after_capture;
 static void sample(PadData *d) {
+    /* Read before sample_host so the injected motion reaches the same frame. */
+    read_inject();
     sample_host(d);
     if (tlggpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; return; }
     record_sample(d); /* the click sources as they are: a replay plays them again */
-    read_inject();
     replay_sample(d);
     d->buttons|=injected.buttons;
     if (injected.buttons & BTN_L2) d->l2=255;
     if (injected.buttons & BTN_R2) d->r2=255;
     uint8_t *axes[4]={&d->left_x,&d->left_y,&d->right_x,&d->right_y};
     for (int i=0;i<4;++i) if (injected.stick[i]>=0) *axes[i]=(uint8_t)injected.stick[i];
+    if (injected.trigger[0]>=0) { d->l2=(uint8_t)injected.trigger[0]; if (d->l2>30) d->buttons|=BTN_L2; }
+    if (injected.trigger[1]>=0) { d->r2=(uint8_t)injected.trigger[1]; if (d->r2>30) d->buttons|=BTN_R2; }
+    if (android_pad_enabled()) {
+        if ((injected.buttons&(BTN_L3|BTN_R3))==(BTN_L3|BTN_R3)) d->buttons &= ~(uint32_t)(BTN_L3|BTN_R3);
+        if (motion.mode) {
+            d->buttons &= ~(uint32_t)BTN_CROSS;
+            d->left_x=d->left_y=d->right_x=d->right_y=128;
+        }
+    }
     if (!play_two_finger(d)) play_click(d);
     if (hold_after_capture) {
         if (d->buttons) d->buttons=0;

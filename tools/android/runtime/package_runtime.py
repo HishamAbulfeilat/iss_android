@@ -96,7 +96,11 @@ def main():
     overlay = python_overlay()
     archive = OUT / "runtime.tar.gz"
     with PortableTar.open(archive, "w:gz", compresslevel=6, format=tarfile.PAX_FORMAT, dereference=False) as tar:
-        tar.add(SOURCE, arcname="rootfs", filter=keep)
+        def safe_root_member(info):
+            if info.name == "rootfs/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json":
+                return None
+            return keep(info)
+        tar.add(SOURCE, arcname="rootfs", filter=safe_root_member)
         for child in sorted(overlay.iterdir()):
             tar.add(child, arcname="rootfs/" + child.name, filter=keep)
         for folder in ("rootfs/tmp", "rootfs/tmp/.X11-unix", "rootfs/tmp/.fxshm",

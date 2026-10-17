@@ -351,9 +351,24 @@ void *guest_cpu_context_current(void) { return Current(); }
 void *guest_cpu_context_create(void *top,size_t size) {
     auto* previous=Current(); self=nullptr;
     auto* fresh=Current();
-    const auto callret=fresh->thread->CurrentFrame->State.callret_sp;
-    fresh->thread->CurrentFrame->State=previous->thread->CurrentFrame->State;
-    fresh->thread->CurrentFrame->State.callret_sp=callret;
+    // CPUState intentionally does not provide copy assignment: DeferredSignalRefCount
+    // belongs to each FEX thread, as do the JIT/L1 cache and call-return stack.
+    // Only clone guest-visible architectural registers, flags and segment tables.
+    auto& dst=fresh->thread->CurrentFrame->State;
+    const auto& src=previous->thread->CurrentFrame->State;
+    constexpr size_t arch_head=offsetof(CPUState, pf_raw);
+    constexpr size_t arch_head_end=offsetof(CPUState, L1Pointer);
+    constexpr size_t arch_rest=offsetof(CPUState, avx_high);
+    std::memcpy(reinterpret_cast<char*>(&dst)+arch_head,
+                reinterpret_cast<const char*>(&src)+arch_head,
+                arch_head_end-arch_head);
+    std::memcpy(reinterpret_cast<char*>(&dst)+arch_rest,
+                reinterpret_cast<const char*>(&src)+arch_rest,
+                sizeof(CPUState)-arch_rest);
+    // The copied segment-array pointers may point inside the previous thread.
+    for (unsigned i=0;i<2;++i) {
+        if (src.segment_arrays[i]==src.private_gdt) dst.segment_arrays[i]=dst.private_gdt;
+    }
     fresh->stack_top=reinterpret_cast<uintptr_t>(top); fresh->depth=0;
     (void)size; self=previous; return fresh;
 }

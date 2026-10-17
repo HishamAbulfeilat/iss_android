@@ -25,6 +25,8 @@ export SDL_AUDIODRIVER=disk
 export SDL_DISKAUDIOFILE="$base/audio.fifo"
 export SDL_DISKAUDIOFORMAT=S16LE
 export ISS_ANDROID_INPUT=1
+export TLG_PAD_FILE="$base/android-pad.state"
+export TLG_PAD_QUIET=1
 export VK_LOADER_LAYERS_DISABLE='~implicit~'
 # The bundled fexdroid Turnip/loader must resolve inside this app, not /usr on Android.
 if [ -f "$root/usr/share/vulkan/icd.d/freedreno_icd.aarch64.json" ]; then
