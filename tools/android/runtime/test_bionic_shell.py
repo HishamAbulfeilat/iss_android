@@ -27,7 +27,7 @@ class BionicShellSyntaxTests(unittest.TestCase):
         # A regression test in addition to syntax checks: the original
         # apostrophe in this *unquoted* parameter expansion crashed Android.
         content = LAUNCHER.read_text()
-        self.assertIn("files=${FXD_FILES:?ISS Bionic requires app private data directory}", content)
+        self.assertIn("files=${FXD_FILES:?ISS Bionic requires a private data directory}", content)
 
 
 if __name__ == "__main__":
