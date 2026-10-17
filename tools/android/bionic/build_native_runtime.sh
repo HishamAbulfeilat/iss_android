@@ -19,6 +19,7 @@ fi
 test -s "$prefix/lib/libavcodec.a"
 test -s "$prefix/lib/libSDL3.a"
 test -s "$prefix/lib/libfreetype.a"
+test -s "$prefix/lib/libucontext.a"
 mkdir -p "$out/bin" "$out/atrac9" "$out/runtime-objects" "$out/lib"
 for source in port/third_party/LibAtrac9/C/src/*.c; do
   "$cc" -std=c99 -O2 -w -fPIC -c "$source" -o "$out/atrac9/$(basename "${source%.c}").o"
@@ -58,6 +59,7 @@ EOF
   "$prefix/lib/libavformat.a" "$prefix/lib/libavcodec.a" "$prefix/lib/libswscale.a" \
   "$prefix/lib/libswresample.a" "$prefix/lib/libavutil.a" \
   "$prefix/lib/libSDL3.a" "$prefix/lib/libfreetype.a" \
+  "$prefix/lib/libucontext.a" \
   -L"$out/lib" -ltlggpu -lisscpu -lc++_shared -lm -lz -ldl -landroid -llog \
   -lOpenSLES -lEGL -lGLESv2 -pthread -Wl,-rpath,'$ORIGIN/../lib' \
   -o "$out/bin/iss-probe"

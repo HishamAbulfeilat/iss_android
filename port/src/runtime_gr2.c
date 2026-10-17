@@ -18,7 +18,19 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <sys/random.h>
+#ifdef __ANDROID__
+#include <libucontext/libucontext.h>
+typedef libucontext_ucontext_t IssFiberContext;
+#define iss_fiber_getcontext libucontext_getcontext
+#define iss_fiber_makecontext libucontext_makecontext
+#define iss_fiber_swapcontext libucontext_swapcontext
+#else
 #include <ucontext.h>
+typedef ucontext_t IssFiberContext;
+#define iss_fiber_getcontext getcontext
+#define iss_fiber_makecontext makecontext
+#define iss_fiber_swapcontext swapcontext
+#endif
 #include <sys/mman.h>
 #else
 #ifndef WIN32_LEAN_AND_MEAN
@@ -120,7 +132,7 @@ static ABI int32_t socket_down(void) {
 typedef void (ABI *FiberEntry)(uint64_t arg_on_initialize,uint64_t arg_on_run);
 #ifndef _WIN32
 typedef struct HostFiber {
-    ucontext_t context;
+    IssFiberContext context;
     void *cpu_context, *host_stack, *owned_guest_stack;
     size_t owned_guest_size;
     FiberEntry entry;
@@ -132,7 +144,7 @@ typedef struct HostFiber {
 /* The guest SceFiber (opaque, at least 16 bytes here) holds the magic and the host object. */
 typedef struct { uint64_t magic; HostFiber *host; } GuestFiber;
 static __thread struct {
-    ucontext_t thread_context;
+    IssFiberContext thread_context;
     void *thread_cpu_context;
     HostFiber *current;
     uint64_t *thread_return_out;
@@ -150,11 +162,11 @@ static void fiber_trampoline(void) {
 /* Separate from fiber_initialize: getcontext returns twice like setjmp, and nothing of the
  * caller's must live across it. */
 static __attribute__((noinline)) void fiber_make_context(HostFiber *f,void *stack,size_t size) {
-    getcontext(&f->context);
+    iss_fiber_getcontext(&f->context);
     f->context.uc_stack.ss_sp=stack;
     f->context.uc_stack.ss_size=size;
     f->context.uc_link=NULL;
-    makecontext(&f->context,fiber_trampoline,0);
+    iss_fiber_makecontext(&f->context,fiber_trampoline,0);
 }
 static ABI int32_t fiber_initialize(void *guest,const char *name,FiberEntry entry,uint64_t arg_on_initialize,
                                     void *context,uint64_t context_size,const void *option,uint32_t build_version) {
@@ -215,7 +227,7 @@ static ABI int32_t fiber_run(void *guest,uint64_t arg_on_run_to,uint64_t *arg_on
     fiber_tls.thread_cpu_context=guest_cpu_context_current();
 #endif
     fiber_enter(f,arg_on_run_to);
-    swapcontext(&fiber_tls.thread_context,&f->context);
+    iss_fiber_swapcontext(&fiber_tls.thread_context,&f->context);
     fiber_tls.current=NULL;
     return 0;
 }
@@ -226,7 +238,7 @@ static ABI int32_t fiber_switch(void *guest,uint64_t arg_on_run_to,uint64_t *arg
     if (to->running) return FIBER_ERR_STATE;
     from->resume_out=arg_on_run; from->running=0;
     fiber_enter(to,arg_on_run_to);
-    swapcontext(&from->context,&to->context);
+    iss_fiber_swapcontext(&from->context,&to->context);
     return 0;
 }
 static ABI int32_t fiber_return_to_thread(uint64_t arg_on_return,uint64_t *arg_on_run) {
@@ -238,7 +250,7 @@ static ABI int32_t fiber_return_to_thread(uint64_t arg_on_return,uint64_t *arg_o
 #ifndef GUEST_CPU_NATIVE
     guest_cpu_context_use(fiber_tls.thread_cpu_context);
 #endif
-    swapcontext(&from->context,&fiber_tls.thread_context);
+    iss_fiber_swapcontext(&from->context,&fiber_tls.thread_context);
     return 0;
 }
 #else

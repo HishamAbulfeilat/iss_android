@@ -43,6 +43,8 @@ fetch miniz-3.1.2 https://github.com/richgel999/miniz/archive/refs/tags/3.1.2.ta
 fetch Vulkan-Headers-1.4.363 https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.363.tar.gz
 fetch SPIRV-Headers-1.4.309 https://github.com/KhronosGroup/SPIRV-Headers/archive/refs/tags/vulkan-sdk-1.4.309.0.tar.gz
 fetch ffmpeg-7.1.5 https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+# Pinned ARM64 userspace contexts (Android libc has no makecontext/swapcontext).
+fetch libucontext-49e671dd52ff6791295d8161ad3b6da7dc5f6f9d https://github.com/kaniini/libucontext/archive/49e671dd52ff6791295d8161ad3b6da7dc5f6f9d.tar.gz
 fetch SDL3-3.2.16 https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.2.16.tar.gz
 fetch freetype-2.13.3 https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-3.tar.gz
 
@@ -64,6 +66,22 @@ cm freetype-2.13.3 "$src/freetype-2.13.3" -DBUILD_SHARED_LIBS=OFF \
     -DFT_DISABLE_BROTLI=ON -DFT_DISABLE_HARFBUZZ=ON
 cm SDL3-3.2.16 "$src/SDL3-3.2.16" -DSDL_SHARED=OFF -DSDL_STATIC=ON \
     -DSDL_TEST=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL=ON
+# Native ARM64 coroutine switching for preserved GR2-style HLE fibers. This
+# library uses a private freestanding context struct; no glibc symbols/ABI leak.
+if [[ ! -f $prefix/.done-libucontext ]]; then
+    tc=$ndk/toolchains/llvm/prebuilt/linux-x86_64
+    ctx=$src/libucontext-49e671dd52ff6791295d8161ad3b6da7dc5f6f9d
+    run make -C "$ctx" ARCH=aarch64 FREESTANDING=yes EXPORT_UNPREFIXED=no \
+        CC="$tc/bin/aarch64-linux-android$api-clang" AR="$tc/bin/llvm-ar" \
+        CFLAGS="-O2 -fPIC" libucontext.a >"$bld/libucontext.log" 2>&1 \
+        || { tail -60 "$bld/libucontext.log" >&2; exit 1; }
+    mkdir -p "$prefix/include/libucontext" "$prefix/lib" "$prefix/share/licenses/libucontext"
+    cp "$ctx/include/libucontext/libucontext.h" "$prefix/include/libucontext/"
+    cp "$ctx/arch/aarch64/include/libucontext/bits.h" "$prefix/include/libucontext/"
+    cp "$ctx/libucontext.a" "$prefix/lib/"
+    cp "$ctx/LICENSE" "$prefix/share/licenses/libucontext/"
+    touch "$prefix/.done-libucontext"
+fi
 # FFmpeg (avplayer/videodec): static, PIC, no programs, only built-in codecs/demuxers.
 if [[ ! -f $prefix/.done-ffmpeg ]]; then
     tc=$ndk/toolchains/llvm/prebuilt/linux-x86_64

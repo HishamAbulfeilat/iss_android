@@ -47,6 +47,8 @@ def main():
         (base / "licenses").mkdir()
         shutil.copy2(ROOT / "tools/android/bionic/NOTICE.txt", base / "licenses/BIONIC-NOTICE.txt")
         shutil.copy2(ROOT / "third_party/FEX/LICENSE", base / "licenses/FEX-LICENSE.txt")
+        shutil.copy2(ROOT / ".local-deps/android/bionic-prefix/share/licenses/libucontext/LICENSE",
+                     base / "licenses/libucontext-LICENSE.txt")
         (stage / "runtime-manifest.json").write_text(
             json.dumps({"schema": 1, "runtime_backend": "android-bionic",
                         "application_id": "com.daedalus.iss.bionic",

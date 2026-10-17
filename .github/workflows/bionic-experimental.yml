@@ -58,9 +58,25 @@ jobs:
         run: |
           python3 tools/android/bionic/stage_driver.py --output out/bionic/drivers/gen8
           test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
+      - name: Restore reusable Android Bionic dependency prefix
+        id: bionic-deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .local-deps/android/bionic-prefix
+            .local-deps/android/bionic-src
+          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
       - name: Build Bionic dependency prefix
         shell: bash -el {0}
         run: bash tools/android/bionic/build_deps.sh
+      - name: Cache successfully built Android Bionic dependencies
+        if: steps.bionic-deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .local-deps/android/bionic-prefix
+            .local-deps/android/bionic-src
+          key: iss-bionic-deps-v2-${{ runner.os }}-${{ hashFiles('tools/android/bionic/build_deps.sh') }}
       - name: Configure ISS Bionic GPU and audit NDK linker inputs
         shell: bash -el {0}
         run: bash tools/android/bionic/build_gpu.sh --configure-only
