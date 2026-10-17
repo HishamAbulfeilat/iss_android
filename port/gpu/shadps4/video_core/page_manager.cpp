@@ -12,6 +12,7 @@
 #include <boost/container/small_vector.hpp>
 #include "tlg_toggles.h"
 #include "common/assert.h"
+#include "common/spin_lock.h"
 #include "common/debug.h"
 #include "common/div_ceil.h"
 #include "common/error.h"
