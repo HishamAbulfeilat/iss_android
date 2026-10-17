@@ -33,3 +33,7 @@ if [[ ${1:-} = --configure-only ]]; then exit 0; fi
 cmake --build "$build" --target tlggpu --parallel "$jobs" -- -k 0
 mkdir -p out/bionic/lib
 cp "$build/libtlggpu.so" out/bionic/lib/
+# The native C preflight produced loader/HLE objects earlier in this workflow.
+# Check their actual tlggpu_* imports against this freshly linked Android .so,
+# preventing missing desktop-only C APIs from reaching the final probe link.
+python3 tools/android/bionic/check_gpu_abi.py --ndk "$ndk" --root out/bionic

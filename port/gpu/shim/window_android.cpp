@@ -4,6 +4,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include "sdl_window.h"
+#include "../tlggpu.h"
+
+// Desktop's SDL window owns mouse capture and provides tlggpu_mouse_take.
+// On Bionic the AHardwareBuffer presenter has no SDL window or desktop mouse.
+// The controller comes from the Android pad bridge; do not report fictitious
+// relative mouse movement or touchpad presses to runtime_pad.c.
+extern "C" void tlggpu_mouse_take(TlgGpuMouse* mouse) {
+    if (mouse) *mouse = TlgGpuMouse{};
+}
 
 namespace Frontend {
 
