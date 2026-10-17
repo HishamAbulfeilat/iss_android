@@ -30,6 +30,21 @@ static ssize_t iss_bionic_getdents64(int fd, void* buf, size_t size) {
     source = source.replace("ssize_t read = getdents64(", "ssize_t read = iss_bionic_getdents64(")
     path.write_text(source)
     print("Bionic compatibility: FEX FileUtils getdents64 via Android syscall")
+# FEX's std::function small-object check assumes libstdc++'s noexcept
+# assignment guarantee. Android libc++ does not promise noexcept assignment,
+# so that assertion is invalid even for the pointer-only wrapper. Keep the
+# existing allocator-backed wrapper and relax only that compile-time check.
+path = Path("third_party/FEX/FEXCore/include/FEXCore/fextl/functional.h")
+source = path.read_text()
+start = '      static_assert(noexcept(internal = std::move(wrapped_lambda)),'
+finish = '                                                                    "fextl::move_only_function");'
+if '#ifndef __ANDROID__\n' + start not in source:
+    if source.count(start) != 1 or source.count(finish) != 1:
+        raise SystemExit("FEX functional.h changed; refusing unverified libc++ adaptation")
+    source = source.replace(start, '#ifndef __ANDROID__\n' + start, 1)
+    source = source.replace(finish, finish + '\n#endif', 1)
+    path.write_text(source)
+    print("Bionic compatibility: allow libc++ std::function assignment")
 PY
 cmake -S third_party/FEX -B out/bionic/fex -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
