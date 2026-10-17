@@ -27,9 +27,7 @@ static ssize_t iss_bionic_getdents64(int fd, void* buf, size_t size) {
 
 """
     source = source.replace(anchor, compat + anchor, 1)
-    source = source.replace("getdents64(", "iss_bionic_getdents64(", 2)
-    # The function declaration must retain its own name, not be replaced again.
-    source = source.replace("iss_bionic_iss_bionic_getdents64(", "iss_bionic_getdents64(")
+    source = source.replace("ssize_t read = getdents64(", "ssize_t read = iss_bionic_getdents64(")
     path.write_text(source)
     print("Bionic compatibility: FEX FileUtils getdents64 via Android syscall")
 PY
