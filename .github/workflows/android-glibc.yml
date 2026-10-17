@@ -44,6 +44,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
             pkg-config patchelf libxml2-utils unzip xz-utils zstd
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .local-deps/android/arm64-debs
+            .local-deps/android/arm64-sysroot
+            .local-deps/android/migration/x/rootfs
+            out/arm64/fex
+            ~/.cache/ccache
+          key: iss-glibc-${{ runner.os }}-${{ hashFiles('cpu/**', 'tools/android/build/aarch64-toolchain.cmake', 'tools/android/inputs/**', 'ci/**', '.gitmodules') }}
+          restore-keys: iss-glibc-${{ runner.os }}-
       - name: Build pinned headers and host dependencies
         shell: bash -el {0}
         run: bash ci/setup-deps.sh "$CONDA_PREFIX"
