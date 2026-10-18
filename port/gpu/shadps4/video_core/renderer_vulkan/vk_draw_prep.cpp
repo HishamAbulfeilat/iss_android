@@ -52,6 +52,12 @@ u32 DefaultWorkerCount() {
     if (const char* env = std::getenv("TLG_PREP_WORKERS")) {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // Adapted from GoW3 Bionic: avoid replaying guest command buffers speculatively
+    // alongside FEX and the Vulkan recorder on a heterogeneous mobile CPU.
+    // TLG_PREP_WORKERS keeps the existing path available for matched-scene A/B runs.
+    return 0;
+#endif
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
     return std::clamp<u32>(TlgThreads::Available() / 2, 1, 8);
@@ -206,8 +212,8 @@ DrawPreparation::DrawPreparation(PipelineCache& pipeline_cache_)
     for (u32 i = 0; i < worker_count; ++i) {
         workers.emplace_back([this, i](std::stop_token stop) { WorkerLoop(stop, i); });
     }
-    std::printf("GPU: draw preparation workers: %u (+1 scanner, %u hardware threads)\n",
-                worker_count, TlgThreads::Available());
+    std::printf("GPU: draw preparation workers: %u (+%u scanner, %u hardware threads)\n",
+                worker_count, worker_count ? 1u : 0u, TlgThreads::Available());
 }
 
 DrawPreparation::~DrawPreparation() {

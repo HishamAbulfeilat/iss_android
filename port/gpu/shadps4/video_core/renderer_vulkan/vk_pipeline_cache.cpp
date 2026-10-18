@@ -643,8 +643,25 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     // tlg: the compiler threads always exist; the in-game menu switches async compilation live
     // (TlgSettings::async_shaders, TLG_ASYNC_SHADERS at start).
     {
-        const auto count = std::clamp(TlgThreads::Available() / 2, 1u, 6u);
-        const auto capture_count = std::min(2u, std::max(1u, TlgThreads::Available() / 4));
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        constexpr bool native_bionic = true;
+#else
+        constexpr bool native_bionic = false;
+#endif
+        // GoW3 Bionic's mobile CPU budget: leave more execution time for FEX and
+        // command recording during shader misses, while retaining async compilation.
+        auto count = native_bionic ? 2u : std::clamp(TlgThreads::Available() / 2, 1u, 6u);
+        const auto capture_count = native_bionic ? 1u :
+            std::min(2u, std::max(1u, TlgThreads::Available() / 4));
+        if (const char* requested = std::getenv("TLG_GPU_COMPILER_WORKERS")) {
+            char* end = nullptr;
+            const auto parsed = std::strtoul(requested, &end, 10);
+            if (end && *end == '\0' && parsed >= 1 && parsed <= 6) {
+                count = static_cast<unsigned>(parsed);
+            }
+        }
+        std::printf("GPU: shader workers: %u compile, %u capture (native Bionic=%d)\n",
+                    count, capture_count, int(native_bionic));
         for (unsigned i = 0; i < count; ++i) {
             auto [result, worker_cache] = instance.GetDevice().createPipelineCacheUnique({});
             ASSERT_MSG(result == vk::Result::eSuccess, "Failed to create compiler pipeline cache");
@@ -652,7 +669,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         }
         capture_compiler = std::make_unique<AsyncCompiler>(capture_count, 8, [](unsigned index) {
             Common::SetCurrentThreadName(("tlg:ShaderCapture" + std::to_string(index)).c_str());
-            Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+            Common::SetCurrentThreadPriority(native_bionic ? Common::ThreadPriority::Low
+                                                         : Common::ThreadPriority::High);
         });
         compiler = std::make_unique<AsyncCompiler>(count, 64, [](unsigned index) {
             Common::SetCurrentThreadName(("tlg:ShaderCompile" + std::to_string(index)).c_str());

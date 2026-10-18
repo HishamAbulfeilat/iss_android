@@ -88,6 +88,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         draw_pipe = std::make_unique<DrawPipe>(&RunDrawPacket, this);
         scheduler.SetOwnerHook(&SchedulerOwnerHook, this);
     }
+    std::printf("GPU: draw execution: %s\n", draw_pipe ? "two-stage pipeline" : "direct");
     // tlg: this thread joins the texture binding helper before it changes image state.
     runtime.SetImageAccessHook(&JoinBindHelper, this);
     scheduler.SetSubmitCallback([this](Vulkan::SubmitInfo& info) {
@@ -403,6 +404,12 @@ bool Rasterizer::DrawPipeWanted() {
     if (env && env[0]) {
         return env[0] == '1';
     }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // GoW3 Bionic uses the direct draw path on Android. Eight heterogeneous cores
+    // do not establish that another draw consumer and its handoffs improve throughput.
+    // Keep TLG_DRAW_PIPE=1 as an explicit A/B override, including the owner safeguards.
+    return false;
+#endif
     // Stage B spins while draws flow. Measured ahead with 16 threads (+19%) and with 4 cores /
     // 8 threads (taskset, Steam Deck-like: +18%).
     return TlgThreads::Available() >= 8;
