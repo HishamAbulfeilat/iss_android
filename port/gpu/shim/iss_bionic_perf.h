@@ -21,6 +21,8 @@ struct Counter { std::atomic<std::uint64_t> ns{0}, calls{0}; };
 struct Sample { std::uint64_t ns{}, calls{}; };
 inline std::array<Counter, static_cast<unsigned>(Stage::Count)> counters{};
 inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
+inline std::atomic<std::uint64_t> descriptor_template_calls{0}, descriptor_template_bytes{0},
+    descriptor_legacy_calls{0};
 enum class Thread : unsigned { Command, Draw, Recorder };
 inline std::array<std::atomic<int>, 3> thread_clocks{-1, -1, -1};
 
@@ -130,6 +132,10 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
         static_cast<unsigned long long>(host_copy_required.exchange(0)),
         static_cast<unsigned long long>(host.calls), host.ns/1e6,
         static_cast<unsigned long long>(recorder.calls), recorder.ns/1e6);
+    std::printf("BionicDescriptors: template_calls=%llu legacy_calls=%llu payload_bytes=%llu\n",
+                static_cast<unsigned long long>(descriptor_template_calls.exchange(0)),
+                static_cast<unsigned long long>(descriptor_legacy_calls.exchange(0)),
+                static_cast<unsigned long long>(descriptor_template_bytes.exchange(0)));
     std::fflush(stdout);
     start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;
     return true;

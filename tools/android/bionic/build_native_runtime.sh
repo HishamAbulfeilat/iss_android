@@ -28,10 +28,12 @@ done
 includes=(-Iport -Iport/src -Iport/gpu -I"$prefix/include" -I"$prefix/include/freetype2")
 objects=()
 compile_failed=0
+build_commit=$(git rev-parse --verify HEAD)
 for source in port/src/probe.c port/src/runtime*.c; do
   object="$out/runtime-objects/$(basename "${source%.c}").o"
   # Continue on errors and identify *every* incompatible HLE source in one pass.
-  if ! "$cc" -std=gnu11 -O2 -g -Wall -Wextra -pthread -fPIE "${includes[@]}" -c "$source" -o "$object"; then
+  if ! "$cc" -std=gnu11 -O2 -g -Wall -Wextra -pthread -fPIE \
+      "-DTLG_BUILD_COMMIT=\"$build_commit\"" "${includes[@]}" -c "$source" -o "$object"; then
     printf 'ISS Bionic C compilation failed: %s\n' "$source" >&2
     compile_failed=1
   fi

@@ -77,6 +77,7 @@ GraphicsPipeline::GraphicsPipeline(
     ASSERT_MSG(layout_result == vk::Result::eSuccess,
                "Failed to create graphics pipeline layout: {}", vk::to_string(layout_result));
     pipeline_layout = std::move(layout);
+    BuildDescriptorTemplate(descriptor_bindings);
     SetObjectName(device, *pipeline_layout, "Graphics PipelineLayout {}", debug_str);
 
     if (!preloading) {
@@ -575,6 +576,7 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
         }
     }
     uses_push_descriptors = binding < instance.MaxPushDescriptors();
+    descriptor_bindings.assign(bindings.begin(), bindings.end());
     const auto flags = uses_push_descriptors
                            ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
                            : vk::DescriptorSetLayoutCreateFlagBits{};

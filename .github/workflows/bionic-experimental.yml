@@ -53,6 +53,11 @@ jobs:
           echo "ISS_NDK=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
           echo "ISS_BIONIC_HEADERS=$CONDA_PREFIX" >> "$GITHUB_ENV"
           bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - name: Validate compact descriptors against the pinned Vulkan-Headers
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_descriptor_templates.py' -v
       - name: Stage pinned StevenMXZ Turnip Gen8 V37 Patched
         shell: bash -el {0}
         run: |
