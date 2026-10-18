@@ -99,6 +99,7 @@ public final class BionicMainActivity extends Activity {
  private void chooseSave(boolean importing){
   if(busy)return;
   try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+   BionicSaveArchive.recover(saves());
    if(importing)BionicSaveArchive.readTitle(new File(getSharedPreferences("iss",0).getString("game_dir","")));
    else if(!BionicSaveArchive.hasSaves(saves()))throw new IOException("Ainda não há saves para exportar.");
   }catch(Exception e){status.setText(e.getMessage());return;}

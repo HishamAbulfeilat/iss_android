@@ -136,6 +136,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    audio.start();if(!audio.awaitReady(5000)){error("Audio FIFO did not start");return;}
    worker.execute(()->{
     try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+     BionicSaveArchive.recover(new File(base,"user/savedata"));
      synchronized(this){
       if(destroyed)return;
       record("Executing native Bionic inFAMOUS");

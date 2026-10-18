@@ -85,6 +85,19 @@ public class BionicSaveArchiveTest {
    b.putInt(32,Integer.MAX_VALUE);put(temp,"sce_sys/param.sfo",sfo);
    try{BionicSaveArchive.readTitle(temp);throw new AssertionError();}catch(IOException expected){}break;
   }
+  case "recovery": {
+   File journal=new File(temp,".save-import-"+UUID.randomUUID());
+   put(journal,"previous/1/"+TITLE+"/infamousssAuto0/data","original");
+   put(journal,"replacement/1/"+TITLE+"/infamousssAuto0/data","incomplete");
+   BionicSaveArchive.recover(root);
+   assert get(root,"1/"+TITLE+"/infamousssAuto0/data").equals("original");
+   assert !journal.exists();
+   // A crash after both renames keeps the committed root, not the old journal.
+   put(journal,"previous/1/"+TITLE+"/infamousssAuto0/data","obsolete");
+   BionicSaveArchive.recover(root);
+   assert get(root,"1/"+TITLE+"/infamousssAuto0/data").equals("original");
+   assert !journal.exists();break;
+  }
   case "lock": {
    try(BionicSession.Guard guard=BionicSession.acquire(temp)){
     try{BionicSession.acquire(temp);throw new AssertionError("Concurrent access accepted");}catch(IOException expected){}

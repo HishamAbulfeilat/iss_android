@@ -33,6 +33,8 @@ class SaveArchiveTests(unittest.TestCase):
         self.run_case("crc")
     def test_title_id_is_read_and_bounds_checked(self):
         self.run_case("title")
+    def test_interrupted_import_is_recovered_before_launch(self):
+        self.run_case("recovery")
     def test_game_and_save_transfers_cannot_overlap(self):
         self.run_case("lock")
 

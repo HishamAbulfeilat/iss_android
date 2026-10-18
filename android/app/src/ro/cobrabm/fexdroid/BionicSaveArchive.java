@@ -29,6 +29,7 @@ public final class BionicSaveArchive {
  private static void transfer(InputStream in,OutputStream out)throws IOException {byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}
  public static boolean hasSaves(File root){if(!root.isDirectory())return false;File[] a=root.listFiles();if(a==null)return false;for(File f:a){if(f.isFile())return true;if(f.isDirectory()&&!Files.isSymbolicLink(f.toPath())&&hasSaves(f))return true;}return false;}
  public static void exportSaves(File root,OutputStream output)throws IOException {
+  recover(root);
   if(!hasSaves(root))throw new IOException("Ainda não há saves para exportar.");
   // Do not close the SAF stream: finish the archive before the caller closes it.
   ZipOutputStream zip=new ZipOutputStream(output);zip.setLevel(1);
@@ -73,6 +74,7 @@ public final class BionicSaveArchive {
  }
  public static int importSaves(File root,InputStream input,String title)throws IOException {
   if(title==null||!title.matches("CUSA[0-9]{5}"))throw new IOException("Selecione a pasta do jogo antes de importar saves.");
+  recover(root);
   File parent=root.getAbsoluteFile().getParentFile();mkdir(parent);
   File work=new File(parent,".save-import-"+UUID.randomUUID());mkdir(work);
   File previous=new File(work,"previous"), replacement=new File(work,"replacement");boolean committed=false;
@@ -94,6 +96,7 @@ public final class BionicSaveArchive {
     count++;
    }
    File memory=new File(source.getParentFile(),title+".memory");
+   if(!memory.isDirectory())memory=new File(source,title+".memory");
    if(memory.isDirectory()){File dest=new File(destination.getParentFile(),title+".memory");remove(dest);copy(memory,dest);}
    if(count==0)throw new IOException("Nenhum slot de save reconhecido.");
    // Rename on the same filesystem: a rejected/truncated ZIP never touches the live saves.
@@ -107,6 +110,20 @@ public final class BionicSaveArchive {
    // Keep recovery data if a filesystem error prevented rollback.
    if(committed||!previous.exists())try{remove(work);}catch(IOException ignored){}
   }
+ }
+ /** Recover the old root if Android killed an import between its two directory renames.
+  * Caller holds BionicSession, including the game before it starts the native writer. */
+ public static void recover(File root)throws IOException {
+  File parent=root.getAbsoluteFile().getParentFile();if(!parent.isDirectory())return;
+  List<File> work=new ArrayList<>(),previous=new ArrayList<>();
+  for(File f:children(parent))if(f.getName().matches("\\.save-import-[0-9a-fA-F-]{36}")&&f.isDirectory()){
+   work.add(f);File old=new File(f,"previous");if(old.isDirectory())previous.add(old);
+  }
+  if(!root.exists()&&!previous.isEmpty()){
+   if(previous.size()!=1||!previous.get(0).renameTo(root))throw new IOException("Não foi possível recuperar a transferência interrompida. Os saves anteriores continuam preservados.");
+  }
+  if(root.exists()&&!root.isDirectory())throw new IOException("Pasta de saves inválida.");
+  for(File f:work)remove(f);
  }
  public static String readTitle(File game)throws IOException {
   File sfo=new File(game,"sce_sys/param.sfo");
