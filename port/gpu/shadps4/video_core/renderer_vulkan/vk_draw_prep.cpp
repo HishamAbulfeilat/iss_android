@@ -396,6 +396,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         const u64 gpu = gpu_seq.load(std::memory_order_acquire);
         for (const auto& submission : submissions) {
             if (submission->seq >= gpu && submission->seq >= tail_seq &&
+                submission->num_draws != 0 &&
+                !submission->gpu_done.load(std::memory_order_acquire) &&
                 submission->scanned.load(std::memory_order_acquire) &&
                 !submission->claimed.load(std::memory_order_relaxed)) {
                 return submission;
@@ -443,7 +445,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             // Past the GPU thread the draws are no longer worth preparing.
             if (ordinal < target->num_draws &&
-                target->seq >= gpu_seq.load(std::memory_order_acquire)) {
+                target->seq >= gpu_seq.load(std::memory_order_acquire) &&
+                !target->gpu_done.load(std::memory_order_acquire)) {
                 auto& draw = target->draws[ordinal];
                 prep_worker.stages.clear();
                 prep_worker.failed = false;

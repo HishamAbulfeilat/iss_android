@@ -40,7 +40,7 @@ public:
         }
         const auto in_use = [&] { return at + size > Capacity && at + size - Capacity > retired; };
         if (in_use()) {
-            Retire();
+            Retire(at + size - Capacity);
             if (in_use()) {
                 return std::nullopt;
             }
@@ -88,14 +88,26 @@ private:
         last_published = end;
     }
 
-    void Retire() {
+    void Retire(u64 required) {
         auto* semaphore = scheduler.GetWorkSemaphore();
-        semaphore->Refresh();
         u64 at = stamps_tail.load(std::memory_order_relaxed);
         const u64 head = stamps_head.load(std::memory_order_acquire);
-        while (at < head && semaphore->IsFree(stamps[at % stamps.size()].tick)) {
-            retired = stamps[at % stamps.size()].end;
-            ++at;
+        const auto retire_known = [&] {
+            while (at < head && semaphore->IsFree(stamps[at % stamps.size()].tick)) {
+                retired = stamps[at % stamps.size()].end;
+                ++at;
+                if (retired >= required) {
+                    break;
+                }
+            }
+        };
+        // Completion cached by submissions/waits can already free enough space. An empty
+        // stamp queue, or a stamp still being recorded, cannot be helped by querying Turnip.
+        retire_known();
+        if (retired < required && at < head &&
+            stamps[at % stamps.size()].tick < semaphore->CurrentTick()) {
+            semaphore->Refresh();
+            retire_known();
         }
         stamps_tail.store(at, std::memory_order_release);
     }
