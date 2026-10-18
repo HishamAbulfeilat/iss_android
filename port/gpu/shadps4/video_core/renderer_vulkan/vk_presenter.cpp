@@ -12,6 +12,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+#include "video_core/renderer_vulkan/vk_ahb_acquire_wait.h"
 #include "tlg_overlay.h"
 #include "tlg_settings.h"
 #include "tlg_graphics.h"
@@ -672,6 +673,9 @@ void Presenter::PresentLoadingFrame() {
     const vk::Image image = swapchain.Image();
     const vk::Extent2D extent = swapchain.GetExtent();
     const auto cmdbuf = present_scheduler.CommandBuffer();
+    const auto acquire_queues = swapchain.AcquireQueues();
+    const auto release_queues = swapchain.ReleaseQueues();
+    const auto present_layout = swapchain.PresentLayout();
     const vk::ImageSubresourceRange range{
         .aspectMask = vk::ImageAspectFlagBits::eColor,
         .levelCount = 1,
@@ -686,8 +690,12 @@ void Presenter::PresentLoadingFrame() {
                                    .dstAccessMask = dst,
                                    .oldLayout = from,
                                    .newLayout = to,
-                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .srcQueueFamilyIndex =
+                                       from == vk::ImageLayout::eUndefined ? acquire_queues.first
+                                       : to == present_layout ? release_queues.first : VK_QUEUE_FAMILY_IGNORED,
+                                   .dstQueueFamilyIndex =
+                                       from == vk::ImageLayout::eUndefined ? acquire_queues.second
+                                       : to == present_layout ? release_queues.second : VK_QUEUE_FAMILY_IGNORED,
                                    .image = image,
                                    .subresourceRange = range,
                                });
@@ -700,10 +708,10 @@ void Presenter::PresentLoadingFrame() {
     barrier(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eColorAttachmentOptimal,
             vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eColorAttachmentWrite);
     TlgOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
-    barrier(vk::ImageLayout::eColorAttachmentOptimal, vk::ImageLayout::ePresentSrcKHR,
+    barrier(vk::ImageLayout::eColorAttachmentOptimal, present_layout,
             vk::AccessFlagBits::eColorAttachmentWrite, {});
     SubmitInfo info{};
-    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    AddImageAcquiredWait(info, swapchain.GetImageAcquiredSemaphore());
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     present_scheduler.Flush(info);
     {
@@ -757,6 +765,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // tlg: the game frame is blitted (letterboxed) straight into the swapchain image.
     const vk::Image swapchain_image = swapchain.Image();
+    const auto acquire_queues = swapchain.AcquireQueues();
+    const auto release_queues = swapchain.ReleaseQueues();
     auto& scheduler = present_scheduler;
     const auto cmdbuf = scheduler.CommandBuffer();
 
@@ -782,8 +792,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
                 .oldLayout = vk::ImageLayout::eUndefined,
                 .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .srcQueueFamilyIndex = acquire_queues.first,
+                .dstQueueFamilyIndex = acquire_queues.second,
                 .image = swapchain_image,
                 .subresourceRange = color_range,
             },
@@ -823,9 +833,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                          : vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eTransferDstOptimal,
                 .newLayout = overlay ? vk::ImageLayout::eColorAttachmentOptimal
-                                     : vk::ImageLayout::ePresentSrcKHR,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                     : swapchain.PresentLayout(),
+                .srcQueueFamilyIndex = overlay ? VK_QUEUE_FAMILY_IGNORED : release_queues.first,
+                .dstQueueFamilyIndex = overlay ? VK_QUEUE_FAMILY_IGNORED : release_queues.second,
                 .image = swapchain_image,
                 .subresourceRange = color_range,
             },
@@ -849,9 +859,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eNone,
                 .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
-                .newLayout = vk::ImageLayout::ePresentSrcKHR,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .newLayout = swapchain.PresentLayout(),
+                .srcQueueFamilyIndex = release_queues.first,
+                .dstQueueFamilyIndex = release_queues.second,
                 .image = swapchain_image,
                 .subresourceRange = color_range,
             };
@@ -867,7 +877,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     // Flush vulkan commands.
 
     SubmitInfo info{};
-    info.AddWait(swapchain.GetImageAcquiredSemaphore());
+    AddImageAcquiredWait(info, swapchain.GetImageAcquiredSemaphore());
     info.AddWait(frame->ready_semaphore, frame->ready_tick);
     info.AddSignal(swapchain.GetPresentReadySemaphore());
     info.AddSignal(frame->present_done);
