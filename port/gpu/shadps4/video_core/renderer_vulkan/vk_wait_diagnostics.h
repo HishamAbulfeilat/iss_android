@@ -50,8 +50,8 @@ public:
         static WaitDiagnostics stats;
         return stats;
     }
-    static void Report() {
-        if (!Enabled()) return;
+    static void Report(bool force = false) {
+        if (!force && !Enabled()) return;
         auto rows = Get().Take();
         std::sort(rows.begin(), rows.end(), [](const Entry& a, const Entry& b) {
             return a.submit_ns + a.wait_ns > b.submit_ns + b.wait_ns;

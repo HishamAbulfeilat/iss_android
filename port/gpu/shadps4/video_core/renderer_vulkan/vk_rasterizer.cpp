@@ -1876,9 +1876,9 @@ u64 Rasterizer::Flush() {
     return current_tick;
 }
 
-void Rasterizer::Finish() {
+void Rasterizer::Finish(std::source_location caller) {
     DrainDrawPipe();
-    scheduler.Finish();
+    scheduler.Finish(caller);
 }
 
 // tlg (i3-pc 25f247c): a game that binds a heap whole and read-only (inFAMOUS: 0.5 and 2.5 GB

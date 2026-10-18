@@ -96,7 +96,7 @@ struct Semaphore {
     bool IsFree(u64 tick) const {return KnownGpuTick()>=tick;}
     int Handle() const {return semaphore.get();}
     void Refresh();
-    void Wait(u64);
+    void Wait(u64,std::source_location caller=std::source_location::current());
 };
 struct SubmitInfo {
     std::array<int,4> wait_semas{},signal_semas{};
@@ -137,7 +137,10 @@ void Check(vk::Result result) {assert(result==vk::Result::eSuccess);}
 
 MAIN = r'''
 } // namespace Vulkan
-int main() {
+int main(int argc,char**) {
+    const bool compare=argc>1;
+    setenv("ISS_COMPARE_STATS",compare ? "1" : "0",1);
+    setenv("TLG_PERF_DIAG","0",1);
     Driver driver;
     Instance instance{&driver};
     Vulkan::Scheduler scheduler{instance};
@@ -179,6 +182,14 @@ int main() {
     lagging.num_pending_ops=1;
     lagging.PopPendingOperations();
     assert(calls==1 && lagging.num_pending_ops==0);
+    // Count actual driver waits, not cached completions or polling. Collection can be off.
+    u64 recorded=0;
+    for(const auto& row: Vulkan::WaitDiagnostics::Get().Take()) {
+        if(!row.calls) continue;
+        assert(row.file.find("window.cpp")!=std::string_view::npos && row.line>0);
+        recorded+=row.calls;
+    }
+    assert(recorded==(compare ? slow.waits : 0));
 }
 '''
 
@@ -190,7 +201,7 @@ class BionicSubmissionWindowTests(unittest.TestCase):
         semaphore = (VK / "vk_semaphore.cpp").read_text()
         source = PREAMBLE + "\n".join([
             method(semaphore, "void Semaphore::Refresh()"),
-            method(semaphore, "void Semaphore::Wait(u64 tick)"),
+            method(semaphore, "void Semaphore::Wait(u64 tick,"),
             method(scheduler, "void Scheduler::PopPendingOperations()"),
             method(scheduler, "void Scheduler::SubmitExecution(SubmitInfo& info)"),
             method(scheduler, "void Scheduler::Finish(std::source_location caller)"),
@@ -205,6 +216,7 @@ class BionicSubmissionWindowTests(unittest.TestCase):
                                      str(cpp), "-o", str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             subprocess.run([str(binary)], check=True, timeout=20)
+            subprocess.run([str(binary), "compare"], check=True, timeout=20)
 
 
 if __name__ == "__main__":

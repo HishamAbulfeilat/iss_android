@@ -5,6 +5,7 @@
 #include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
 
 #include "common/assert.h"
 
@@ -46,7 +47,7 @@ void Semaphore::Refresh() {
                                              std::memory_order_relaxed));
 }
 
-void Semaphore::Wait(u64 tick) {
+void Semaphore::Wait(u64 tick, std::source_location caller) {
     // No need to wait if the GPU is ahead of the tick
     if (IsFree(tick)) {
         return;
@@ -59,6 +60,11 @@ void Semaphore::Wait(u64 tick) {
 
     // If none of the above is hit, fallback to a regular wait
     const IssBionicPerf::Scope timer{IssBionicPerf::Stage::TimelineWait};
+    // Attribute only real Vulkan waits, including the submission-window and resource-pool
+    // paths that bypass Scheduler::Wait. Keep the legacy full diagnostics from double-counting.
+    const bool compare = IssBionicPerf::Enabled() && !WaitDiagnostics::Enabled();
+    const auto start = compare ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
     const vk::SemaphoreWaitInfo wait_info = {
         .semaphoreCount = 1,
         .pSemaphores = &semaphore.get(),
@@ -66,6 +72,11 @@ void Semaphore::Wait(u64 tick) {
     };
 
     while (instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT) != vk::Result::eSuccess) {
+    }
+    if (compare) {
+        WaitDiagnostics::Get().Add(caller.file_name(), caller.line(), 0,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count());
     }
     Refresh();
 }

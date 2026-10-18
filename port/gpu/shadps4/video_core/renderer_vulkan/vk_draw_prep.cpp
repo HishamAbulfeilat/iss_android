@@ -9,6 +9,7 @@
 
 #include "tlg_threads.h"
 #include "tlg_toggles.h"
+#include "iss_bionic_perf.h"
 #include "common/thread.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -488,7 +489,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
 
 void DrawPreparation::Count(bool was_used) {
     ++(was_used ? used : unused);
-    static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
+    static const bool stats = TlgStats::enabled || IssBionicPerf::Enabled();
     // The clock is read every 1024 draws: per draw it was 8% of the GPU thread.
     if (!stats || ((used + unused) & 1023) != 0) {
         return;

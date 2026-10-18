@@ -403,7 +403,7 @@ void Scheduler::Wait(u64 tick, std::source_location caller, u64 submit_ns) {
     }
     TlgStats::WaitTimer timer{TlgStats::tick_wait_ns};
     const auto submitted = diagnose ? std::chrono::steady_clock::now() : start;
-    work_semaphore.Wait(tick);
+    work_semaphore.Wait(tick, caller);
     if (diagnose) {
         const auto completed = std::chrono::steady_clock::now();
         WaitDiagnostics::Get().Add(caller.file_name(), caller.line(),

@@ -86,8 +86,8 @@ inline Sample Take(Stage stage) {
 
 // Called by the single AHB presentation thread. Times are sums of host durations in the
 // window; queue_submit is a subset of submission_host, not an additional GPU-time measurement.
-inline void OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
-    if (!Enabled()) return;
+inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
+    if (!Enabled()) return false;
     using Clock=std::chrono::steady_clock;
     static auto start=Clock::now();
     static auto previous_cpu=CpuTimes();
@@ -96,7 +96,7 @@ inline void OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
     ++frames;
     const auto now=Clock::now();
     const double seconds=std::chrono::duration<double>(now-start).count();
-    if (seconds<5.0) return;
+    if (seconds<5.0) return false;
     const auto cpu=CpuTimes();
     std::array<double, 4> cpu_ms{};
     for (unsigned i = 0; i < cpu.size(); ++i) {
@@ -124,5 +124,6 @@ inline void OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
         compiles-previous_compiles,(compile_ns-previous_compile_ns)/1e6);
     std::fflush(stdout);
     start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;
+    return true;
 }
 } // namespace IssBionicPerf

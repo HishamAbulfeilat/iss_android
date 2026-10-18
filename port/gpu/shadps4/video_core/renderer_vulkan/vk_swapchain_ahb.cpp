@@ -11,6 +11,7 @@
 #include "common/assert.h"
 #include "tlg_settings.h"
 #include "iss_bionic_perf.h"
+#include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
 #include "common/logging/log.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -444,8 +445,10 @@ bool Swapchain::Present() {
         close(fence_fd);
     }
     buffers[image_index].acquire_imported = false;
-    IssBionicPerf::OnPresent(g_tlg_compiles.load(std::memory_order_relaxed),
-                             g_tlg_compile_ns.load(std::memory_order_relaxed));
+    if (IssBionicPerf::OnPresent(g_tlg_compiles.load(std::memory_order_relaxed),
+                                g_tlg_compile_ns.load(std::memory_order_relaxed))) {
+        WaitDiagnostics::Report(true);
+    }
     return !needs_recreation;
 }
 
