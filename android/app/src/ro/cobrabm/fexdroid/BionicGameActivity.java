@@ -21,6 +21,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private SurfaceView surface;
  private TextView status;
  private TextView fpsHud;
+ private android.app.AlertDialog graffitiGuideDialog;
  private boolean showFps;
  private long fpsSampleFrames=-1;
  private long fpsSampleNs;
@@ -147,8 +148,30 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    poll();
   }catch(Exception ex){error(ex.toString());}
  }
+ private void showGraffitiGuideIfRequested(){
+  if(destroyed || failed || graffitiGuideDialog!=null)return;
+  // The native GPU records a guide request without touching an unavailable
+  // ImGui context. Show the full instructions using the Android Activity.
+  final File marker=new File(base,"android-pad.state.guide");
+  if(!marker.isFile())return;
+  graffitiGuideDialog=new android.app.AlertDialog.Builder(this)
+   .setTitle("Grafite sem giroscópio")
+   .setMessage("L3 + R3: ativar ou desativar o modo sensor e segurar a lata de lado.\n\n"
+      +"✕ (X): sacudir a lata.\n\n"
+      +"R2: pintar. Mire com o analógico esquerdo; movimentos pequenos dão mais precisão.\n\n"
+      +"L3 + R3 novamente: voltar a andar.")
+   .setPositiveButton("Entendi",(dialog,which)->{})
+   .create();
+  graffitiGuideDialog.setOnDismissListener(dialog->{
+   if(marker.exists()&&!marker.delete())record("Could not delete graffiti guide marker");
+   graffitiGuideDialog=null;
+  });
+  graffitiGuideDialog.show();
+  record("Native Android graffiti guide displayed (no ImGui Vulkan dependency)");
+ }
  private void poll(){
   if(destroyed)return;
+  showGraffitiGuideIfRequested();
   long n=IssPresent.frames();
   if(!failed&&n>0)status.setVisibility(View.GONE);
   if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
@@ -183,6 +206,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  }
  @Override protected void onDestroy(){
   destroyed=true;main.removeCallbacksAndMessages(null);
+  if(graffitiGuideDialog!=null){
+   graffitiGuideDialog.setOnDismissListener(null);
+   graffitiGuideDialog.dismiss();
+   graffitiGuideDialog=null;
+  }
   if(game!=null)game.destroy();IssPresent.stop();if(audio!=null)audio.stop();
   worker.shutdownNow();super.onDestroy();
  }

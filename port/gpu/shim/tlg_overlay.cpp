@@ -2021,7 +2021,22 @@ bool CapturesInput() {
 
 void ShowGraffitiGuide(bool force) {
     std::scoped_lock lock{imgui_mutex};
-    if (!force && TlgSettings::Get().graffiti_guide_seen) {
+    auto& settings = TlgSettings::Get();
+    if (!force && settings.graffiti_guide_seen) {
+        return;
+    }
+    // On direct Android Vulkan HAL, ImGui_ImplVulkan_LoadFunctions may fail.
+    // Init then destroys the ImGui context, and OpenGuide() calling
+    // ImGui::GetIO() used to crash (SIGSEGV libtlggpu+0x9b20b4).
+    // The game sensor/graffiti mode itself must keep working: request the
+    // Android-native guide via the existing pad-state marker instead.
+    if (!initialized) {
+#ifdef ISS_ANDROID_BIONIC
+        WriteAndroidGuideMarker(true);
+        if (!settings.graffiti_guide_seen.exchange(true)) {
+            TlgSettings::Save();
+        }
+#endif
         return;
     }
     OpenGuide();
@@ -2029,6 +2044,13 @@ void ShowGraffitiGuide(bool force) {
 
 void BeginSaveList(int kind, std::vector<SaveRow> rows, std::vector<TlgPng::Image> pictures, int focus) {
     std::scoped_lock lock{imgui_mutex};
+    // No ImGui context: do not trap the guest or dereference GetIO().
+    // Report cancellation until a native Android save picker is implemented.
+    if (!initialized) {
+        choice_active = false;
+        choice_result = -2;
+        return;
+    }
     RetireChoiceTextures();
     choice_pictures = std::move(pictures);
     choice_pictures.resize(rows.size());
@@ -2051,6 +2073,11 @@ int PollSaveList() {
 void BeginSaveMessage(int kind, int code, u64 value, const std::string& text, int buttons,
                       const SaveRow* entry, TlgPng::Image picture) {
     std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        message_active = false;
+        message_result = 2; // Cancel / No: never silently accept a destructive dialog
+        return;
+    }
     RetireChoiceTextures();
     message_has_entry = entry != nullptr;
     if (entry) {
@@ -2079,6 +2106,13 @@ int PollSaveMessage() {
 
 void CloseSaveDialog() {
     std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        choice_active = false;
+        message_active = false;
+        choice_result = -2;
+        message_result = 2;
+        return;
+    }
     if (choice_active.exchange(false)) {
         choice_result = -2;
     }
