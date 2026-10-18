@@ -62,7 +62,17 @@ def check_game_layout(game):
 
 
 def setup_environment(env, user_dir):
+    bionic = env.get("ISS_BIONIC") == "1"
+    if bionic:
+        # Device-tested in the glibc port: avoid Precise buffer page-read traps.
+        # probe.c still honors an explicit TLG_READBACKS ahead of the ISS alias.
+        env.setdefault("ISS_READBACKS", "1")
     for key, value in ISS_DEFAULTS.items():
+        if bionic and key == "ISS_GC_BUDGET_MB":
+            # Adreno's heap usage also includes several GiB of guest buffer residency.
+            # Use the renderer's live VK_EXT_memory_budget query instead of forcing
+            # texture eviction permanently above a 3.5 GiB process-wide threshold.
+            continue
         env.setdefault(key, value)
     # Save/config and shader caches are in the APK's private writable directory.
     env.setdefault("ISS_CONFIG", str(user_dir / "tlg.ini"))
@@ -104,7 +114,9 @@ def main():
     user = data / "user"
     user.mkdir(parents=True, exist_ok=True)
     setup_environment(env, user)
-    print("ISS boot defaults: inFAMOUS PC preset, precise readbacks, temporal upscale off", flush=True)
+    readbacks = env.get("TLG_READBACKS", env["ISS_READBACKS"])
+    mode = {"0": "Disabled", "1": "Relaxed", "2": "Precise"}.get(readbacks, readbacks)
+    print(f"ISS boot defaults: inFAMOUS preset, readbacks={mode} ({readbacks}), temporal upscale off", flush=True)
 
     def run_step(script, *arguments):
         name = BASE / "scripts" / (script + ".py")

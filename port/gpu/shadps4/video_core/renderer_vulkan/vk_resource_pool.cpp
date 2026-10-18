@@ -16,7 +16,9 @@ ResourcePool::ResourcePool(Semaphore* work_semaphore_, std::size_t grow_step_)
 
 std::size_t ResourcePool::CommitResource() {
     u64 gpu_tick = work_semaphore->KnownGpuTick();
-    const auto search = [this, gpu_tick](std::size_t begin,
+    // The refreshed GPU tick must be observed by both searches. Capturing it by value
+    // kept searching with the pre-refresh tick and grew pools whose resources were already free.
+    const auto search = [this, &gpu_tick](std::size_t begin,
                                          std::size_t end) -> std::optional<std::size_t> {
         for (std::size_t iterator = begin; iterator < end; ++iterator) {
             if (gpu_tick >= ticks[iterator]) {
@@ -26,25 +28,22 @@ std::size_t ResourcePool::CommitResource() {
         }
         return std::nullopt;
     };
+    const auto search_all = [&] {
+        auto found = search(hint_iterator, ticks.size());
+        return found ? found : search(0, hint_iterator);
+    };
 
-    // Try to find a free resource from the hinted position to the end.
-    auto found = search(hint_iterator, ticks.size());
-    if (!found) {
-        // Refresh semaphore to query updated results
+    // Search both sides of the hint with the known tick before querying the driver.
+    auto found = search_all();
+    if (!found && !ticks.empty()) {
         work_semaphore->Refresh();
         gpu_tick = work_semaphore->KnownGpuTick();
-        found = search(hint_iterator, ticks.size());
+        found = search_all();
     }
     if (!found) {
-        // Search from beginning to the hinted position.
-        found = search(0, hint_iterator);
-        if (!found) {
-            // Both searches failed, the pool is full; handle it.
-            const std::size_t free_resource = ManageOverflow();
-
-            ticks[free_resource] = work_semaphore->CurrentTick();
-            found = free_resource;
-        }
+        const std::size_t free_resource = ManageOverflow();
+        ticks[free_resource] = work_semaphore->CurrentTick();
+        found = free_resource;
     }
 
     // Free iterator is hinted to the resource after the one that's been commited.
@@ -153,6 +152,11 @@ vk::DescriptorSet DescriptorHeap::Commit(vk::DescriptorSetLayout set_layout) {
                    result == vk::Result::eErrorFragmentedPool,
                "Unexpected error during descriptor set allocation: {}", vk::to_string(result));
     pending_pools.emplace_back(curr_pool, work_semaphore->CurrentTick());
+    // Relaxed readbacks perform fewer timeline refreshes. Refresh only on pool exhaustion,
+    // before deciding that a completed descriptor pool must be replaced by a new allocation.
+    if (!work_semaphore->IsFree(pending_pools.front().second)) {
+        work_semaphore->Refresh();
+    }
     if (const auto [pool, tick] = pending_pools.front(); work_semaphore->IsFree(tick)) {
         curr_pool = pool;
         pending_pools.pop_front();

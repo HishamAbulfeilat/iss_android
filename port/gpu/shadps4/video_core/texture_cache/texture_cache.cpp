@@ -1076,6 +1076,11 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
 
+    // Protect the enlarged guest range before either upload. Tracking only after recording
+    // the copy let a concurrent guest write escape invalidation while this new view was filled.
+    // The new watcher also keeps the old range protected when FreeImage drops its watcher.
+    TrackImage(new_image_id);
+
     // A pool write may have dirtied the old view before a larger array/mip view is requested.
     // Copying that stale host image over the freshly uploaded destination resurrects old texels.
     // Refresh the source first; clean GPU-authored images take the existing no-op path.
@@ -1088,7 +1093,6 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     }
 
     FreeImage(image_id);
-    TrackImage(new_image_id);
     return new_image_id;
 }
 
@@ -1775,7 +1779,8 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
 void TextureCache::GarbageCollectImages() {
     TlgStats::Timer gc_timer{TlgStats::t_gc};
     if (instance.CanReportMemoryUsage()) {
-        total_used_memory = instance.GetDeviceMemoryUsage();
+        const auto memory_budget = instance.GetMemoryBudgetSnapshot();
+        total_used_memory = memory_budget.usage;
         // tlg: on integrated GPUs (Steam Deck) the usage covers system-memory heaps holding
         // much more than images (buffers backing guest memory), and the startup budget left
         // ~1 GB after its 8 GB system reserve: usage stayed above the critical mark, so the
@@ -1787,7 +1792,7 @@ void TextureCache::GarbageCollectImages() {
             return env ? std::strtoull(env, nullptr, 10) << 20 : 0;
         }();
         if (instance.IsIntegrated() || forced_budget) {
-            const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+            const u64 budget = forced_budget ? forced_budget : memory_budget.budget;
             if (budget != 0) {
                 trigger_gc_memory = budget / 10 * 7;
                 pressure_gc_memory = budget / 100 * 85;

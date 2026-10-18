@@ -504,6 +504,13 @@ public:
         return supports_memory_budget;
     }
 
+    struct MemoryBudgetSnapshot {
+        u64 usage{};
+        u64 budget{};
+    };
+    /// Usage and budget from a single driver query of the same heaps.
+    [[nodiscard]] MemoryBudgetSnapshot GetMemoryBudgetSnapshot() const;
+
     /// Returns the amount of memory used.
     [[nodiscard]] u64 GetDeviceMemoryUsage() const;
 
