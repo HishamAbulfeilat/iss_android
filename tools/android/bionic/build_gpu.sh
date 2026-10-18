@@ -18,7 +18,7 @@ touch "$build/.cmake/api/v1/query/codemodel-v2"
 cmake -S port/gpu -B "$build" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-$api -DANDROID_STL=c++_shared \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DISS_ANDROID_BIONIC=ON -DTLG_LTO=OFF -DTLG_PGO=off \
+  -DCMAKE_BUILD_TYPE=Release -DISS_ANDROID_BIONIC=ON -DTLG_LTO=ON -DTLG_PGO=off \
   -DCMAKE_FIND_ROOT_PATH="$prefix" -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
   "-DCMAKE_PREFIX_PATH=$prefix;$headers" \

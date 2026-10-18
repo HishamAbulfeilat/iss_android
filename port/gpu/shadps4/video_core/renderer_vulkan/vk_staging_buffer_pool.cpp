@@ -6,6 +6,7 @@
 #include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -110,16 +111,20 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
     auto& cache = large_caches[u32(type)];
     const u64 max_size = std::max(size + size / 4, RoundAllocationSize(size));
 
+    // Query the GPU completion timeline at most once per cache scan. The
+    // previous loop refreshed it for every in-flight matching allocation:
+    // each refresh can involve a Vulkan driver ioctl on Android/Turnip.
+    // A later completion is simply picked up by the next RequestLarge().
+    bool refreshed = false;
     LargeBuffer* best{};
     for (LargeBuffer& entry : cache) {
         const u64 entry_size = entry.buffer->SizeBytes();
         if (entry.held || entry_size < size || entry_size > max_size ||
-            !scheduler.IsFree(entry.tick)) {
+            (best && entry_size >= best->buffer->SizeBytes()) ||
+            !GpuTickComplete(entry.tick, refreshed)) {
             continue;
         }
-        if (!best || entry_size < best->buffer->SizeBytes()) {
-            best = &entry;
-        }
+        best = &entry;
     }
 
     if (!best) {
@@ -159,26 +164,58 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
     it->last_used_frame = frame;
 }
 
+bool StagingBufferPool::GpuTickComplete(u64 tick, bool& refreshed) {
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+    auto* timeline = scheduler.GetWorkSemaphore();
+    // Already-completed ticks require no device query. On the first miss,
+    // refresh once for this entire staging scan (not once per candidate).
+    if (timeline->IsFree(tick)) {
+        return true;
+    }
+    if (!refreshed) {
+        timeline->Refresh();
+        refreshed = true;
+    }
+    return timeline->IsFree(tick);
+#else
+    return scheduler.IsFree(tick);
+#endif
+}
+
 void StagingBufferPool::TickFrame() {
     ++frame;
+    // Bachata's GPU buffer-cache GC bounds the number of evictions per pass.
+    // inFAMOUS streams much larger staging uploads and has a *different*
+    // sparse memory cache: do not copy that GC or its game-specific patches.
+    // Instead, bound the destructors of idle Vulkan staging allocations so
+    // hundreds of 16-MiB rings / large uploads cannot all be destroyed in a
+    // single frame. Keep their 3000-frame retention and GPU completion checks.
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+    size_t remaining_deletions = 4; // 4 total, not 4 for each memory pool
+#else
+    size_t remaining_deletions = std::numeric_limits<size_t>::max();
+#endif
+    bool refreshed = false; // Shared across all ring and dedicated pools this frame.
     for (Ring& ring : rings) {
-        TrimRing(ring);
+        TrimRing(ring, remaining_deletions, refreshed);
     }
     for (auto& cache : large_caches) {
-        TrimLarge(cache);
+        TrimLarge(cache, remaining_deletions, refreshed);
     }
     PublishStats();
 }
 
-void StagingBufferPool::TrimRing(Ring& ring) {
+void StagingBufferPool::TrimRing(Ring& ring, size_t& remaining_deletions, bool& refreshed) {
     auto& blocks = ring.blocks;
     for (size_t i = blocks.size(); i-- > 0;) {
+        if (remaining_deletions == 0) break;
         const Block& block = blocks[i];
         if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RING_IDLE_FRAMES ||
-            !scheduler.IsFree(block.buffer->LastTick())) {
+            !GpuTickComplete(block.buffer->LastTick(), refreshed)) {
             continue;
         }
         blocks.erase(blocks.begin() + i);
+        --remaining_deletions;
         if (i < ring.current) {
             --ring.current;
         } else if (i == ring.current) {
@@ -190,10 +227,17 @@ void StagingBufferPool::TrimRing(Ring& ring) {
     }
 }
 
-void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
-    std::erase_if(cache, [this](const LargeBuffer& entry) {
-        return !entry.held && frame - entry.last_used_frame >= LARGE_IDLE_FRAMES &&
-               scheduler.IsFree(entry.tick);
+void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache,
+                                  size_t& remaining_deletions, bool& refreshed) {
+    if (remaining_deletions == 0) return;
+    std::erase_if(cache, [this, &remaining_deletions, &refreshed](const LargeBuffer& entry) {
+        if (remaining_deletions == 0 || entry.held ||
+            frame - entry.last_used_frame < LARGE_IDLE_FRAMES ||
+            !GpuTickComplete(entry.tick, refreshed)) {
+            return false;
+        }
+        --remaining_deletions;
+        return true;
     });
 }
 

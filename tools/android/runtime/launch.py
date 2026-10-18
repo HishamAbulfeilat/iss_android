@@ -24,7 +24,7 @@ ISS_DEFAULTS = {
     "ISS_UPSCALER": "off",
     "ISS_JITTER": "0",
     "ISS_OBJECT_MOTION": "0",
-    "ISS_FRAME_STATS": "1",
+    # Per-packet timing is opt-in; leave TLG_FRAME_STATS unset in normal runs.
 }
 
 
