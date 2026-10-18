@@ -41,6 +41,9 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
     AllocateWorkerCommandBuffers();
+    if (IssBionicPerf::Enabled()) {
+        std::printf("GPU: host copy range tracking: %s\n", HostCopyRangesEnabled() ? "on" : "off");
+    }
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
 }
@@ -256,7 +259,45 @@ void Scheduler::WaitDeferredSignals() {
     }
 }
 
+bool Scheduler::HostCopyRangesEnabled() {
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_HOST_COPY_RANGES");
+        return !(env && *env == '0');
+#else
+        return false;
+#endif
+    }();
+    return enabled;
+}
+
+void Scheduler::NoteHostCopySource(u64 address, u64 size) {
+    if (HostCopyRangesEnabled()) host_copy_sources.Note(address, size);
+}
+
+void Scheduler::WaitHostCopiesFor(u64 address, u64 size) {
+    if (HostCopyRangesEnabled() && !host_copy_sources.Overlaps(address, size)) {
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::host_copy_skipped.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    if (IssBionicPerf::Enabled()) {
+        IssBionicPerf::host_copy_required.fetch_add(1, std::memory_order_relaxed);
+    }
+    WaitHostCopies();
+}
+
 void Scheduler::WaitHostCopies() {
+    const IssBionicPerf::Scope host_timer{IssBionicPerf::Stage::HostCopies};
+    // A copy registered while this wait runs must not be forgotten by its completion.
+    auto* sources = HostCopyRangesEnabled() ? &host_copy_sources : nullptr;
+    const u64 seen = sources ? sources->Snapshot() : 0;
+    struct Retire {
+        HostCopySources* sources;
+        u64 seen;
+        ~Retire() { if (sources) sources->RetireThrough(seen); }
+    } retire{sources, seen};
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
         TlgStats::WaitTimer timer{TlgStats::host_copies_wait_ns};
         TlgStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
@@ -309,6 +350,7 @@ void Scheduler::SyncRecording() {
     if (!recording_threaded) {
         return;
     }
+    const IssBionicPerf::Scope record_timer{IssBionicPerf::Stage::RecorderSync};
     KickRecording(true);
     TlgStats::WaitTimer timer{TlgStats::sync_recording_ns};
     std::unique_lock lk{recorder_mutex};

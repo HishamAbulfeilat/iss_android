@@ -113,6 +113,12 @@ public:
         scheduler.WaitHostCopies();
     }
 
+    void WaitHostCopiesFor(VAddr address, u64 size) {
+        // Source notes from stage B must be visible before testing for an overlap.
+        DrainDrawPipe();
+        scheduler.WaitHostCopiesFor(address, size);
+    }
+
     /// tlg: GPU command thread: waits until the draw recording thread has recorded every
     /// draw handed to it (vk_draw_pipe.h); no-op on other threads.
     /// `line`/`function`: the caller, for the statistics of where stage A waits.

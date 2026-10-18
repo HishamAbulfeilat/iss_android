@@ -15,11 +15,12 @@
 namespace IssBionicPerf {
 enum class Stage : unsigned {
     FrameSlot, AhbAcquire, AhbImport, AhbExport, AhbSend, Submission, DriverSubmit,
-    TimelineQuery, TimelineWait, Count
+    TimelineQuery, TimelineWait, HostCopies, RecorderSync, Count
 };
 struct Counter { std::atomic<std::uint64_t> ns{0}, calls{0}; };
 struct Sample { std::uint64_t ns{}, calls{}; };
 inline std::array<Counter, static_cast<unsigned>(Stage::Count)> counters{};
+inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
 enum class Thread : unsigned { Command, Draw, Recorder };
 inline std::array<std::atomic<int>, 3> thread_clocks{-1, -1, -1};
 
@@ -108,7 +109,8 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
     const auto slot=Take(Stage::FrameSlot), acquire=Take(Stage::AhbAcquire),
                acquire_import=Take(Stage::AhbImport), export_=Take(Stage::AhbExport), send=Take(Stage::AhbSend),
                submit=Take(Stage::Submission), driver=Take(Stage::DriverSubmit),
-               query=Take(Stage::TimelineQuery), wait=Take(Stage::TimelineWait);
+               query=Take(Stage::TimelineQuery), wait=Take(Stage::TimelineWait),
+               host=Take(Stage::HostCopies), recorder=Take(Stage::RecorderSync);
     std::printf("BionicPerf: present_fps=%.2f window_s=%.2f frames=%llu submits=%llu "
                 "submission_host_ms=%.2f queue_submit_ms=%.2f frame_slot_ms=%.2f "
                 "ahb_acquire_ms=%.2f ahb_import_ms=%.2f ahb_export_ms=%.2f ahb_send_ms=%.2f "
@@ -122,6 +124,12 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
         static_cast<unsigned long long>(wait.calls), wait.ns/1e6,
         cpu_ms[0], cpu_ms[1], cpu_ms[2], cpu_ms[3],
         compiles-previous_compiles,(compile_ns-previous_compile_ns)/1e6);
+    std::printf("BionicHostCopies: skipped=%llu required=%llu all_waits=%llu wait_ms=%.2f "
+                "recorder_syncs=%llu recorder_sync_ms=%.2f\n",
+        static_cast<unsigned long long>(host_copy_skipped.exchange(0)),
+        static_cast<unsigned long long>(host_copy_required.exchange(0)),
+        static_cast<unsigned long long>(host.calls), host.ns/1e6,
+        static_cast<unsigned long long>(recorder.calls), recorder.ns/1e6);
     std::fflush(stdout);
     start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;
     return true;

@@ -151,11 +151,18 @@ void BufferCache::RunGuestCopy(const TlgCopy::Item& item) {
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
 void BufferCache::SmallGuestCopy(const TlgCopy::Item& item) {
-    if (scheduler.IsRecordingDeferred() && !TlgToggle::Disabled(TlgToggle::PoolSmallCopies)) {
-        scheduler.RecordHostCopy([item] { item.run(item); });
+    if (Vulkan::Scheduler::HostCopyRangesEnabled() && !scheduler.IsRecordingDeferred()) {
+        // In direct mode the snapshot must precede the commands that consume it and any
+        // subsequent WRITE_DATA of its source; a per-thread batch could run too late.
+        item.run(item);
         return;
     }
-    TlgCopy::QueueCopy(item);
+    if (scheduler.IsRecordingDeferred() && !TlgToggle::Disabled(TlgToggle::PoolSmallCopies)) {
+        scheduler.RecordHostCopy([item] { item.run(item); });
+    } else {
+        TlgCopy::QueueCopy(item);
+    }
+    scheduler.NoteHostCopySource(item.source, item.size);
 }
 
 void BufferCache::ExtendWriteFault(VAddr device_addr) {
@@ -571,6 +578,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_add
                 SmallGuestCopy(item);
             } else {
                 TlgCopy::Async([item] { item.run(item); });
+                scheduler.NoteHostCopySource(item.source, item.size);
             }
         }
         return {staging.buffer, staging.offset};
@@ -1429,6 +1437,9 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
                 }
                 staging.Flush();
             });
+            for (const auto& copy : *group) {
+                scheduler.NoteHostCopySource(copy.source, copy.size);
+            }
         };
         for (auto& copy : copies) {
             group->push_back({copy.dstOffset, staging.mapped + copy.srcOffset, copy.size});
