@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+
+namespace IssBionicPerf {
+enum class Stage : unsigned { FrameSlot, AhbAcquire, AhbImport, AhbExport, AhbSend, Submission, DriverSubmit, Count };
+struct Counter { std::atomic<std::uint64_t> ns{0}, calls{0}; };
+struct Sample { std::uint64_t ns{}, calls{}; };
+inline std::array<Counter, static_cast<unsigned>(Stage::Count)> counters{};
+
+inline bool Enabled() {
+#ifdef ISS_ANDROID_BIONIC
+    static const bool value = [] {
+        const char* flag=std::getenv("ISS_COMPARE_STATS");
+        return flag && flag[0]=='1';
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
+// Only frame/resource waits and actual queue submissions are timed. No per-draw clocks,
+// cycle-counter barriers, packet atomics, guest memory reads or changes to GPU synchronization.
+class Scope {
+    Stage stage;
+    bool enabled;
+    std::chrono::steady_clock::time_point start;
+public:
+    explicit Scope(Stage s) : stage{s}, enabled{Enabled()},
+        start{enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}} {}
+    ~Scope() {
+        if (!enabled) return;
+        auto& c=counters[static_cast<unsigned>(stage)];
+        c.ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now()-start).count(), std::memory_order_relaxed);
+        c.calls.fetch_add(1,std::memory_order_relaxed);
+    }
+};
+
+inline Sample Take(Stage stage) {
+    auto& c=counters[static_cast<unsigned>(stage)];
+    return {c.ns.exchange(0,std::memory_order_relaxed),c.calls.exchange(0,std::memory_order_relaxed)};
+}
+
+// Called by the single AHB presentation thread. Times are sums of host durations in the
+// window; queue_submit is a subset of submission_host, not an additional GPU-time measurement.
+inline void OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
+    if (!Enabled()) return;
+    using Clock=std::chrono::steady_clock;
+    static auto start=Clock::now();
+    static std::uint64_t frames=0, previous_compile_ns=compile_ns;
+    static std::uint32_t previous_compiles=compiles;
+    ++frames;
+    const auto now=Clock::now();
+    const double seconds=std::chrono::duration<double>(now-start).count();
+    if (seconds<5.0) return;
+    const auto slot=Take(Stage::FrameSlot), acquire=Take(Stage::AhbAcquire),
+               acquire_import=Take(Stage::AhbImport), export_=Take(Stage::AhbExport), send=Take(Stage::AhbSend),
+               submit=Take(Stage::Submission), driver=Take(Stage::DriverSubmit);
+    std::printf("BionicPerf: present_fps=%.2f window_s=%.2f frames=%llu submits=%llu "
+                "submission_host_ms=%.2f queue_submit_ms=%.2f frame_slot_ms=%.2f "
+                "ahb_acquire_ms=%.2f ahb_import_ms=%.2f ahb_export_ms=%.2f ahb_send_ms=%.2f "
+                "compiles=%u compile_ms=%.2f\n",
+        frames/seconds, seconds, static_cast<unsigned long long>(frames),
+        static_cast<unsigned long long>(submit.calls), submit.ns/1e6, driver.ns/1e6,
+        slot.ns/1e6, acquire.ns/1e6, acquire_import.ns/1e6, export_.ns/1e6, send.ns/1e6,
+        compiles-previous_compiles,(compile_ns-previous_compile_ns)/1e6);
+    std::fflush(stdout);
+    start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;
+}
+} // namespace IssBionicPerf

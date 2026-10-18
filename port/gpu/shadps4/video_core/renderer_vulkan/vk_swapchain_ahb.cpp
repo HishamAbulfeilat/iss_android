@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include "common/assert.h"
 #include "tlg_settings.h"
+#include "iss_bionic_perf.h"
 #include "common/logging/log.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -17,6 +18,9 @@
 #include "video_core/renderer_vulkan/vk_swapchain_ahb.h"
 
 namespace Vulkan {
+
+extern std::atomic<u32> g_tlg_compiles;
+extern std::atomic<u64> g_tlg_compile_ns;
 
 namespace {
 
@@ -328,6 +332,7 @@ void Swapchain::HandleRelease(IssPresent::Release& release) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    const IssBionicPerf::Scope timer{IssBionicPerf::Stage::AhbAcquire};
     if (zero_extent || buffers.empty()) {
         needs_recreation = true;
         return false;
@@ -366,6 +371,7 @@ bool Swapchain::AcquireNextImage() {
 }
 
 void Swapchain::ImportAcquire(u32 index) {
+    const IssBionicPerf::Scope timer{IssBionicPerf::Stage::AhbImport};
     Buffer& buffer = buffers[index];
     buffer.acquire_imported = false;
     const int fd = buffer.release_fd;
@@ -398,6 +404,7 @@ void Swapchain::ImportAcquire(u32 index) {
 }
 
 int Swapchain::ExportPresentReady() {
+    const IssBionicPerf::Scope timer{IssBionicPerf::Stage::AhbExport};
     const auto [result, fd] = instance.GetDevice().getSemaphoreFdKHR({
         .semaphore = present_ready[image_index],
         .handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd,
@@ -423,6 +430,7 @@ bool Swapchain::Present() {
     const int fence_fd = ExportPresentReady();
     ++frame_counter;
     if (client.Connected()) {
+        const IssBionicPerf::Scope send_timer{IssBionicPerf::Stage::AhbSend};
         if (!client.SendFrame(generation, image_index, frame_counter, width, height, fence_fd)) {
             PeerGone();
         }
@@ -436,6 +444,8 @@ bool Swapchain::Present() {
         close(fence_fd);
     }
     buffers[image_index].acquire_imported = false;
+    IssBionicPerf::OnPresent(g_tlg_compiles.load(std::memory_order_relaxed),
+                             g_tlg_compile_ns.load(std::memory_order_relaxed));
     return !needs_recreation;
 }
 

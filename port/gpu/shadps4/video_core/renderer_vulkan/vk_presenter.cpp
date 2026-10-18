@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_ahb_acquire_wait.h"
 #include "tlg_overlay.h"
+#include "iss_bionic_perf.h"
 #include "tlg_settings.h"
 #include "tlg_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
@@ -898,6 +899,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 }
 
 Frame* Presenter::GetRenderFrame() {
+    const IssBionicPerf::Scope slot_timer{IssBionicPerf::Stage::FrameSlot};
     // Wait for free presentation frames
     Frame* frame;
     {

@@ -12,6 +12,7 @@
 #include <functional>
 
 #include "tlg_copy.h"
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
@@ -461,6 +462,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    const IssBionicPerf::Scope submit_timer{IssBionicPerf::Stage::Submission};
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
     work_since_submit.store(0, std::memory_order_relaxed);
@@ -514,7 +516,11 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    vk::Result submit_result;
+    {
+        const IssBionicPerf::Scope driver_timer{IssBionicPerf::Stage::DriverSubmit};
+        submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();
