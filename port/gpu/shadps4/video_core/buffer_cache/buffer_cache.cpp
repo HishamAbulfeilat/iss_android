@@ -67,6 +67,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
+    std::printf("GPU: buffer deferred readbacks: %s (mode=%d, publication=%s)\n",
+                DeferredReadbackEnabled() ? "enabled" : "disabled",
+                static_cast<int>(EmulatorSettings.GetReadbacksMode()),
+                EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
+                    ? "cache owner" : "guest thread");
     // tlg: TLG_MAX_BUFFER_MB lowers the driver's buffer size limit as the arenas see it
     // (diagnostics: reproduces AMD on Windows 2048, RADV 4095 on any GPU).
     u64 max_buffer = instance.GetMaxBufferSize();
@@ -275,7 +280,28 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 memory_tracker->MarkRegionAsCpuModified(device_addr, size);
             }
         });
-        if (readback && !FinishDeferredReadback(*readback, true)) {
+        bool applied = false;
+        if (readback) {
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+                // Relaxed leaves CPU reads unprotected. Keep publication and the CPU-write
+                // state transition on the cache owner, in order with subsequent GPU uses.
+                // Only the faulting guest waits for the copy; the command processor remains
+                // free to record other work. Revalidate staleness after the queue round trip.
+                scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                liverpool->SendCommand<true, true>([&] {
+                    applied = FinishDeferredReadback(*readback, false);
+                    if (applied && is_write) {
+                        memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                    }
+                });
+            } else {
+                applied = FinishDeferredReadback(*readback, true);
+                if (applied && is_write) {
+                    memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                }
+            }
+        }
+        if (readback && !applied) {
             // The GPU (or a CPU write without a fault) changed the memory after the copy was
             // recorded: download it the old way, which first recovers the stale copy's ranges.
             if (queued_at) {
@@ -283,10 +309,6 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             }
             liverpool->SendCommand<true, true>(flush_request);
         } else if (readback) {
-            if (is_write) {
-                // After the data is back; see MarkRegionAsCpuModifiedUnlessGpu.
-                memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
-            }
             if (queued_at) {
                 Readbacks().deferred_ns.fetch_add(NowNs() - queued_at);
                 Readbacks().applied.fetch_add(1);
@@ -1010,7 +1032,24 @@ bool BufferCache::TryEagerRead(VAddr addr, u64 size) {
 bool BufferCache::DeferredReadbackEnabled() {
     static const bool enabled = [] {
         const char* e = std::getenv("TLG_DEFERRED_READBACK");
-        return e && *e == '1' && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise;
+        if (!e || *e != '1') {
+            return false;
+        }
+        const auto mode = EmulatorSettings.GetReadbacksMode();
+        if (mode == GpuReadbacksMode::Precise) {
+            return true;
+        }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        // Relaxed write faults still need the GPU bytes they are not overwriting.
+        // ReadMemory uses owner-thread publication for this mode, never a guest-thread
+        // writeback that could race with Relaxed cache mutation.
+        // Hot-page tracking deliberately keeps some CPU pages writable. Without write
+        // faults, a guest could change a prefetched page before its copy is published.
+        const char* hot = std::getenv("TLG_HOT_PAGES");
+        return mode == GpuReadbacksMode::Relaxed && !(hot && *hot == '1');
+#else
+        return false;
+#endif
     }();
     return enabled;
 }
