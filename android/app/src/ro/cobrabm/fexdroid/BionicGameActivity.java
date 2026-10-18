@@ -29,7 +29,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private AudioBridge audio;
  private final Handler main=new Handler(Looper.getMainLooper());
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
- private Process game;
+ private volatile Process game;
  private boolean destroyed,started,failed;
  private String files,base,screenMode;
  private long lastFrames=-1;
@@ -135,15 +135,26 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    if(!result.startsWith("bridge running:")){error(result);return;}
    audio.start();if(!audio.awaitReady(5000)){error("Audio FIFO did not start");return;}
    worker.execute(()->{
-    try{
-     record("Executing native Bionic inFAMOUS");
-     game=process("/system/bin/sh",base+"/run-bionic.sh");
+    try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+     synchronized(this){
+      if(destroyed)return;
+      record("Executing native Bionic inFAMOUS");
+      game=process("/system/bin/sh",base+"/run-bionic.sh");
+     }
+     try{
      try(InputStream in=game.getInputStream();FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
       byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
      }
      int exit=game.waitFor();record("Bionic game exited "+exit);
      if(!destroyed)error("Game stopped ("+exit+"). Export log.");
-    }catch(Exception ex){error(ex.toString());}
+     }finally{
+      // Hold the save lock until the native writer has actually exited, even on Activity teardown.
+      if(game.isAlive())game.destroyForcibly();
+      boolean interrupted=false;
+      for(;;)try{game.waitFor();break;}catch(InterruptedException e){interrupted=true;}
+      if(interrupted)Thread.currentThread().interrupt();
+     }
+    }catch(Exception ex){if(!destroyed)error(ex.toString());}
    });
    poll();
   }catch(Exception ex){error(ex.toString());}
@@ -205,13 +216,14 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(audio!=null)audio.resume();
  }
  @Override protected void onDestroy(){
-  destroyed=true;main.removeCallbacksAndMessages(null);
+  synchronized(this){destroyed=true;if(game!=null)game.destroyForcibly();}
+  main.removeCallbacksAndMessages(null);
   if(graffitiGuideDialog!=null){
    graffitiGuideDialog.setOnDismissListener(null);
    graffitiGuideDialog.dismiss();
    graffitiGuideDialog=null;
   }
-  if(game!=null)game.destroy();IssPresent.stop();if(audio!=null)audio.stop();
-  worker.shutdownNow();super.onDestroy();
+  IssPresent.stop();if(audio!=null)audio.stop();
+  worker.shutdown();super.onDestroy();
  }
 }

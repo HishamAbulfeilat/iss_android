@@ -11,6 +11,8 @@ import android.widget.*;
 import java.io.*;
 public final class BionicMainActivity extends Activity {
  private TextView status; private boolean busy;
+ private final java.util.ArrayList<Button> actions=new java.util.ArrayList<>();
+ private static final int IMPORT_SAVE=10, EXPORT_SAVE=11;
  @Override public void onCreate(Bundle saved){super.onCreate(saved);
   LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(32,48,32,32);
   TextView title=new TextView(this);title.setText("inFAMOUS SECOND SON\nDaedalus Android Fork\nAndroid Bionic + FEX — Experimental");title.setTextSize(24);l.addView(title);
@@ -76,17 +78,62 @@ public final class BionicMainActivity extends Activity {
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
   TextView caveat=new TextView(this);caveat.setText("Os XMLs enviados não possuem patch de sombras. Fullscreen sem corte estica a proporção 16:9 do jogo, sem perder HUD.");l.addView(caveat);
   button(l,"Select game folder",this::choose);button(l,"Launch game",this::launch);
+  TextView saveLabel=new TextView(this);saveLabel.setText("Saves — importar e exportar");saveLabel.setTextSize(20);saveLabel.setPadding(0,20,0,8);l.addView(saveLabel);
+  TextView saveHelp=new TextView(this);saveHelp.setText("Feche o jogo antes de transferir saves. Importe um ZIP descriptografado do port ou Bachata, da mesma região do jogo. Os slots presentes no ZIP substituem os correspondentes; os demais são mantidos.");l.addView(saveHelp);
+  button(l,"Importar saves (ZIP)",()->chooseSave(true));
+  button(l,"Exportar saves (ZIP)",()->chooseSave(false));
   button(l,"Export latest log",()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
   TextView help=new TextView(this);help.setText("Use o dump inFAMOUS com eboot.bin e art/. CUSA00004 01.00 aceita os patches integrados.\n\nGraffiti: L3 + R3 toggles sensor mode; Cross shakes, R2 sprays, left stick aims.\n\nBased on HayatoG/iss_pc, FEX-Emu and shadPS4. Android infrastructure adapted from God of War III — Daedalus Fork, Bloodborne-Android and fexdroid.\n\nNo game files included.");l.addView(help);ScrollView sc=new ScrollView(this);sc.addView(l);setContentView(sc);refresh();
   if(!access())requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);
  }
- private void button(LinearLayout l,String text,Runnable action){Button b=new Button(this);b.setText(text);b.setOnClickListener(v->action.run());l.addView(b);}
+ private void button(LinearLayout l,String text,Runnable action){Button b=new Button(this);b.setText(text);b.setOnClickListener(v->{if(!busy)action.run();});actions.add(b);l.addView(b);}
  private boolean access(){return Build.VERSION.SDK_INT>=30&&Environment.isExternalStorageManager()||checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED;}
  private void refresh(){status.setText(getSharedPreferences("iss",0).getString("game_dir","Select the extracted game folder."));}
  private void choose(){if(!access()){requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);return;}startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),2);}
- private void launch(){if(busy)return;String path=getSharedPreferences("iss",0).getString("game_dir","");if(!new File(path,"eboot.bin").canRead()||!new File(path,"art").isDirectory()||!new File(path,"art").canRead()){status.setText("Choose the inFAMOUS game folder containing eboot.bin and readable art/.");return;}
-  busy=true;status.setText("Preparing runtime…");new Thread(()->{try{BionicRuntimeInstaller.install(this);runOnUiThread(()->{busy=false;refresh();startActivity(new Intent(this,BionicGameActivity.class).putExtra("game_dir",path));});}catch(Exception e){runOnUiThread(()->{busy=false;status.setText(e.toString());});}},"runtime-install").start();}
- @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;
+ private void launch(){if(busy)return;
+  try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){}catch(IOException e){status.setText(e.getMessage());return;}
+  String path=getSharedPreferences("iss",0).getString("game_dir","");if(!new File(path,"eboot.bin").canRead()||!new File(path,"art").isDirectory()||!new File(path,"art").canRead()){status.setText("Choose the inFAMOUS game folder containing eboot.bin and readable art/.");return;}
+  setBusy(true);status.setText("Preparing runtime…");new Thread(()->{try{BionicRuntimeInstaller.install(this);runOnUiThread(()->{setBusy(false);refresh();startActivity(new Intent(this,BionicGameActivity.class).putExtra("game_dir",path));});}catch(Exception e){runOnUiThread(()->{setBusy(false);status.setText(e.toString());});}},"runtime-install").start();}
+ private void setBusy(boolean value){busy=value;for(Button b:actions)b.setEnabled(!value);}
+ private File saves(){return new File(getFilesDir(),"issport/user/savedata");}
+ private void chooseSave(boolean importing){
+  if(busy)return;
+  try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+   if(importing)BionicSaveArchive.readTitle(new File(getSharedPreferences("iss",0).getString("game_dir","")));
+   else if(!BionicSaveArchive.hasSaves(saves()))throw new IOException("Ainda não há saves para exportar.");
+  }catch(Exception e){status.setText(e.getMessage());return;}
+  Intent picker=new Intent(importing?Intent.ACTION_OPEN_DOCUMENT:Intent.ACTION_CREATE_DOCUMENT);
+  picker.addCategory(Intent.CATEGORY_OPENABLE);
+  if(importing)picker.setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES,new String[]{"application/zip","application/x-zip-compressed","application/octet-stream"});
+  else picker.setType("application/zip").putExtra(Intent.EXTRA_TITLE,"inFAMOUS-Saves-"+new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",java.util.Locale.US).format(new java.util.Date())+".zip");
+  setBusy(true);
+  try{startActivityForResult(picker,importing?IMPORT_SAVE:EXPORT_SAVE);}catch(Exception e){setBusy(false);status.setText(e.getMessage());}
+ }
+ private void transferSave(Uri uri,boolean importing){
+  setBusy(true);status.setText(importing?"Importando e validando saves…":"Exportando saves…");
+  new Thread(()->{
+   String message;
+   try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+    if(importing){
+     String title=BionicSaveArchive.readTitle(new File(getSharedPreferences("iss",0).getString("game_dir","")));
+     try(InputStream in=getContentResolver().openInputStream(uri)){
+      if(in==null)throw new IOException("Não foi possível abrir o ZIP.");
+      int slots=BionicSaveArchive.importSaves(saves(),in,title);message=slots+" slot(s) importado(s) para "+title+". Pronto para testar.";
+     }
+    }else try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){
+     if(out==null)throw new IOException("Não foi possível criar o ZIP.");
+     BionicSaveArchive.exportSaves(saves(),out);message="Saves exportados com sucesso.";
+    }
+   }catch(Exception e){message="Falha na transferência: "+e.getMessage();}
+   final String result=message;runOnUiThread(()->{setBusy(false);status.setText(result);});
+  },"iss-save-transfer").start();
+ }
+ @Override protected void onActivityResult(int req,int result,Intent data){super.onActivityResult(req,result,data);
+  if(req==IMPORT_SAVE||req==EXPORT_SAVE){
+   if(result==RESULT_OK&&data!=null&&data.getData()!=null)transferSave(data.getData(),req==IMPORT_SAVE);
+   else {setBusy(false);refresh();}return;
+  }
+  if(result!=RESULT_OK||data==null||data.getData()==null)return;
   try{if(req==3){try(InputStream in=new FileInputStream(new File(getFilesDir(),"iss.log"));OutputStream out=getContentResolver().openOutputStream(data.getData())){byte[] b=new byte[65536];int n;while((n=in.read(b))>0)out.write(b,0,n);}return;}
    if(req!=2)return;Uri uri=data.getData();String id=DocumentsContract.getTreeDocumentId(uri);int colon=id.indexOf(':');if(colon<0)throw new IOException("Choose internal storage or an SD card.");
    String vol=id.substring(0,colon);File base="primary".equalsIgnoreCase(vol)?Environment.getExternalStorageDirectory():new File("/storage/"+vol);File dir=new File(base,id.substring(colon+1)).getCanonicalFile();

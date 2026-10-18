@@ -113,7 +113,17 @@ void TextureCache::WatchReadback(VAddr address, u64 size) {
 }
 
 void TextureCache::RetireReadbacks() {
-    pending_readbacks.Retire([this](u64 tick) { return scheduler.IsFree(tick); },
+    // One timeline refresh per retirement pass, rather than a driver query for each pending copy.
+    auto* timeline = scheduler.GetWorkSemaphore();
+    bool refreshed = false;
+    pending_readbacks.Retire([&](u64 tick) {
+        if (timeline->IsFree(tick)) return true;
+        if (!refreshed) {
+            timeline->Refresh();
+            refreshed = true;
+        }
+        return timeline->IsFree(tick);
+    },
         [this](auto& entry) {
             if (entry.valid) {
                 entry.payload.Invalidate();
@@ -169,7 +179,7 @@ bool TextureCache::ResolveReadbacks(VAddr address, u64 size, bool assume_locks,
             waited = !scheduler.IsFree(tick);
             const auto start = diag ? std::chrono::steady_clock::now()
                                     : std::chrono::steady_clock::time_point{};
-            scheduler.Wait(tick);
+            if (waited) scheduler.Wait(tick);
             if (diag) {
                 wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                               std::chrono::steady_clock::now() - start).count();
@@ -1066,6 +1076,10 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
 
+    // A pool write may have dirtied the old view before a larger array/mip view is requested.
+    // Copying that stale host image over the freshly uploaded destination resurrects old texels.
+    // Refresh the source first; clean GPU-authored images take the existing no-op path.
+    RefreshImage(src_image);
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
 
@@ -1417,17 +1431,11 @@ void TextureCache::RefreshImage(Image& image) {
 
     if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
         False(image.flags & ImageFlagBits::CpuDirty)) {
-        // The image size should be less than page size to be considered MaybeCpuDirty
-        // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
+        // MarkAsMaybeDirty hashes the whole guest range. Comparing only an 8x8 prefix
+        // both mismatched that baseline and missed later changes to mips/layers or other texels.
+        // This rare path covers images whose page tracking was removed by neighboring writes.
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+        const u64 hash = XXH3_64bits(addr, image.info.guest_size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
@@ -1816,6 +1824,12 @@ void TextureCache::GarbageCollectImages() {
             return true;
         }
         auto& image = slot_images[image_id];
+        // Retained GPU images need neither a CPU readback wait nor staging invalidation.
+        // Pending copies are retired by ProcessDownloadImages even when this GC skips them.
+        if (image.SafeToDownload() && (image.info.IsTiled() || !pressured)) {
+            lru_cache.Touch(image.lru_id, gc_tick);
+            return false;
+        }
         ResolveReadbacks(image.info.guest_address, image.info.guest_size, true,
                          ReadbackSource::CacheCleanup);
         const bool download = image.SafeToDownload();
