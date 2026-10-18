@@ -12,6 +12,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/time.h>
+#if defined(__ANDROID__) && defined(__BIONIC__)
+#include <sys/prctl.h>
+#endif
 #ifdef GUEST_CPU_NATIVE
 #include <x86intrin.h>
 #endif
@@ -124,8 +127,35 @@ uint64_t runtime_process_time_us(void) { return process_time(); }
 uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
 uint64_t runtime_tsc_frequency(void) { return tsc_frequency(); }
 uint64_t runtime_read_tsc(void) { return read_tsc(); }
+/* Release 0.2.5 enables this for CUSA00004 (compatibility flag +24).
+ * Its short sleep path, 0xa8393c..0xa83994, sets PR_SET_TIMERSLACK to 1 ns
+ * once per thread for requests below 1 ms. This is independent of shader DMA.
+ * Keep the requested duration and ordinary nanosleep/EINTR behavior unchanged. */
+void runtime_prepare_short_sleep(uint64_t ns) {
+#if defined(__ANDROID__) && defined(__BIONIC__)
+    if (ns >= UINT64_C(1000000)) return;
+    static __thread int attempted;
+    if (attempted) return;
+    attempted=1;
+    const int saved_errno=errno;
+    const char *setting=getenv("TLG_SHORT_SLEEP_SLACK");
+    if (setting && setting[0]=='0') { errno=saved_errno; return; }
+    const long previous=prctl(PR_GET_TIMERSLACK,0UL,0UL,0UL,0UL);
+    const int result=prctl(PR_SET_TIMERSLACK,1UL,0UL,0UL,0UL);
+    const int failure=result<0 ? errno : 0;
+    const long actual=result==0 ? prctl(PR_GET_TIMERSLACK,0UL,0UL,0UL,0UL) : previous;
+    printf("BionicSleep: thread=%lu timer_slack_before_ns=%ld timer_slack_after_ns=%ld "
+           "set_result=%d errno=%d first_request_ns=%llu\n",
+           (unsigned long)pthread_self(),previous,actual,result,failure,
+           (unsigned long long)ns);
+    errno=saved_errno;
+#else
+    (void)ns;
+#endif
+}
 static int sleep_ns(uint64_t ns,uintptr_t frame) {
     int e=0;
+    runtime_prepare_short_sleep(ns);
     runtime_wait_begin("sleep",(const void *)(uintptr_t)(ns/1000),NULL,NULL,frame); /* object: microseconds */
 #ifdef _WIN32
     compat_sleep_ns(ns);

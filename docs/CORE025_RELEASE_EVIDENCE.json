@@ -16,5 +16,14 @@
     "successful mapping"
   ],
   "actual_mapping_or_fps_observed": false,
-  "instructions_checked": 24
+  "short_sleep": {
+    "enabled_for_serial": true,
+    "feature_flag_offset": 24,
+    "settings_offset": 3148,
+    "max_duration_ns": 999999,
+    "timer_slack_ns": 1,
+    "once_per_thread": true,
+    "independent_of_shader_dma_setting": true
+  },
+  "instructions_checked": 44
 }

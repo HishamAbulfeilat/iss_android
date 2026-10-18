@@ -76,6 +76,26 @@ def audit(data):
         0x11EE400: 0x52A08009,  # mov w9, #67108864
         0x11EE404: 0xEB09015F,  # cmp x10, x9 (buffer size)
         0x11EE408: 0x540006A8,  # b.hi: coarse tick for >64 MiB
+        0x13AEAC0: 0x39402289,  # load ninth serial byte
+        0x13AEAC4: 0xEB16011F,  # compare CUSA0000 prefix
+        0x13AEAC8: 0x52800688,  # ASCII '4'
+        0x13AEACC: 0x7A480120,  # compare ninth byte on prefix match
+        0x13AEAD0: 0x540004A0,  # b.eq 0x13aeb64
+        0x13AEB64: 0x52800028,  # flag value 1
+        0x13AEB6C: 0x39006268,  # strb w8, [x19, #24]
+        0xA8388C: 0x528847E8,  # short sleep threshold, low half
+        0xA83894: 0x72A001E8,  # threshold high half: 999999 ns
+        0xA83898: 0xEB08001F,  # compare duration / threshold
+        0xA8389C: 0x54000788,  # b.hi: normal sleep without timer adjustment
+        0xA8393C: 0x39713308,  # flag at settings + 3148 (3124 + 24)
+        0xA83954: 0x39400109,  # TLS attempted flag
+        0xA83958: 0x370001A9,  # skip repeated adjustment
+        0xA83964: 0x528003A0,  # PR_SET_TIMERSLACK (29)
+        0xA83968: 0x52800021,  # slack 1 ns
+        0xA8397C: 0x39000109,  # mark attempted on this thread
+        0xA83980: 0x97F11C2C,  # prctl
+        0xA83994: 0x97F428E6,  # ordinary AccurateSleep
+        0x78DD7C: 0x97FCF3F9,  # nanosleep, including duration zero
     }
     for address, instruction in instructions.items():
         elf.require(address, instruction)
@@ -106,6 +126,15 @@ def audit(data):
         "per_page_tracking_max_buffer_bytes": 64 * 1024 * 1024,
         "mapped_readback_requires": ["last write tick < current tick", "successful mapping"],
         "actual_mapping_or_fps_observed": False,
+        "short_sleep": {
+            "enabled_for_serial": True,
+            "feature_flag_offset": 24,
+            "settings_offset": 3148,
+            "max_duration_ns": 999999,
+            "timer_slack_ns": 1,
+            "once_per_thread": True,
+            "independent_of_shader_dma_setting": True,
+        },
         "instructions_checked": len(instructions),
     }
 

@@ -48,6 +48,7 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 // runtime_kernel.c: one clock for guest and GPU timestamps
 uint64_t runtime_process_time_us(void);
+void runtime_prepare_short_sleep(uint64_t ns);
 uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 uint64_t runtime_read_tsc(void);
@@ -186,6 +187,7 @@ s32 PS4_SYSV_ABI sceKernelGetCompiledSdkVersion(s32* ver) {
     return ORBIS_OK;
 }
 s32 PS4_SYSV_ABI sceKernelUsleep(u32 microseconds) {
+    runtime_prepare_short_sleep(uint64_t{microseconds} * 1000);
     std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
     return ORBIS_OK;
 }

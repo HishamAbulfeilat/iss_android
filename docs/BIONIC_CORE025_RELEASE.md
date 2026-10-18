@@ -122,8 +122,9 @@ novo prioritário é a publicação direta de buffers mapeáveis, associada a
 rastreamento de escritas por página e habilitada por ID para CUSA00004. Agrupamento e retenção de staging já
 existem no nosso core e não justificam uma nova revisão de runtime isoladamente.
 
-Esta revisão registra evidências e método; não altera configuração nem código
-de execução e não afirma corrigir a diferença de FPS. O APK de `7c1ff82`
+A etapa inicial registrou evidências e método sem alterar o código de execução.
+A adaptação posterior de timer slack está descrita ao final e ainda não tem
+medição de FPS no aparelho. O APK de `7c1ff82`
 continua sendo o que testa a adaptação de cópias host do Bloodborne. Para
 implementar o caminho mapeado com segurança ainda faltam propriedade das
 alocações, visibilidade GPU→host e cobertura dos produtores de ticks. A
@@ -158,7 +159,7 @@ independentemente daquele Setting. O diagnóstico recente com Direct Memory
 Access false não permite descartar este outro mecanismo.
 
 A ferramenta `tools/android/runtime/core025_release_audit.py` lê o ELF ou o APK,
-rejeita SHA-256 desconhecido, confere 24 instruções da cadeia, reconstrói o
+rejeita SHA-256 desconhecido, confere 44 instruções da cadeia, reconstrói o
 ID e calcula o destino do branch. Não executa o core. Exemplo:
 
 ```sh
@@ -247,3 +248,72 @@ de gameplay; readback continua aparecendo como espera relevante. Nenhuma
 dessas somas por threads identifica isoladamente o gargalo do frame.
 Não há medição de execução GPU nem evidência suficiente para afirmar que a
 última adaptação aumentou o FPS, ou para confirmar ausência de flicker.
+
+
+## Continuação com DMA desativado: ajuste de esperas curtas
+
+O usuário confirmou que **DMA não foi usado nos testes**. Essa condição foi
+mantida. O mecanismo de buffers mapeáveis não exige o modo shader DMA, mas
+sua utilização real no aparelho continua não medida; não é uma causa provada
+da diferença de FPS. A investigação prosseguiu para outras flags do release.
+
+Foi encontrada uma segunda otimização específica de compatibilidade, que não
+depende daquele caminho nem de DMA:
+
+- O mesmo prefixo `CUSA0000` e nono byte ASCII `4` são comparados em
+  `0x13aeac0–0x13aead0`. O branch vai a `0x13aeb64`, define 1 e grava a
+  flag **+24** em `0x13aeb6c`. Na instância, `3124 + 24 = 3148`.
+- O wrapper de sono em `0xa83828` valida o timespec e calcula a duração
+  total em nanossegundos. Em `0xa8388c–0xa8389c`, só entra no caminho de
+  ajuste para duração **até 999999 ns**, incluindo zero.
+- `0xa8393c` consulta exatamente o byte `settings +3148`. Um byte TLS evita
+  repetir o ajuste na mesma thread. `0xa83964–0xa83980` chama
+  `prctl(PR_SET_TIMERSLACK=29, 1, 0, 0, 0)`.
+- Em seguida, `0xa83994` chama `AccurateSleep`; essa função continua usando
+  `nanosleep`, inclusive para duração zero (`0x78dd7c`). Não troca a duração
+  do jogo por 1 us nem depende de o patch externo de sleep ter sido aplicado.
+
+Timer slack é a tolerância que o kernel pode usar para agrupar despertares.
+Reduzi-lo não garante acordar no prazo exato e não elimina atrasos do
+escalonador. É distinto de afinidade, prioridade ou busy waiting. Referência:
+[Linux PR_SET_TIMERSLACK](https://man7.org/linux/man-pages/man2/PR_SET_TIMERSLACK.2const.html).
+
+Na máquina host da análise, um diagnóstico com 300 amostras por caso e
+`nanosleep` via ctypes observou mediana de ~59,6 us para pedido de 1 us
+com slack de 50000 ns, contra ~15,2 us com slack de 1 ns. Para pedido zero,
+~58,7 contra ~15,1 us. Esses números incluem overhead Python/ctypes e são
+**somente um diagnóstico host do mecanismo**, não medição do Snapdragon,
+nem previsão de FPS. O valor original foi restaurado no processo do teste.
+
+### Adaptação aplicada no port
+
+`runtime_prepare_short_sleep` em `port/src/runtime_kernel.c` aplica o ajuste
+uma vez por thread, limitado a Android/Bionic e a pedidos abaixo de 1 ms.
+O caminho real `sleep_ns` chama essa função antes de dormir; as bibliotecas
+vendorizadas também passam por ela em `Libraries::Kernel::sceKernelUsleep`.
+Sono pedido, tratamento de EINTR e retorno de erro do loop permanecem os mesmos.
+
+`TLG_SHORT_SLEEP_SLACK=0` recupera a política anterior para A/B. Se `prctl`
+falhar, a thread continua com a política de sono do sistema; não há falha
+fatal nem repetição da syscall em todo sleep. O errno anterior é preservado.
+O log `BionicSleep` registra uma vez por thread o valor anterior/atual,
+resultado da configuração e primeiro pedido. Ele permite verificar se o
+jogo realmente alcançou o caminho e se o Android aceitou o ajuste.
+
+Os testes compilam as funções C de produção com syscalls controladas:
+limiares incluindo zero e 1 ms, uma aplicação por thread sob concorrência,
+falha/override, errno, pedido original e continuação após EINTR. Também
+verificam que o caminho não-Bionic não modifica timer slack. Nenhum ganho de
+FPS é declarado antes do teste do APK no aparelho.
+
+### Outras flags ativas verificadas
+
+A leitura da tabela completa de compatibilidade para CUSA00004 também levou
+a flags de afinidade em `0x11d5e7c`, `0x11d5fd4`, `0x11d6134`. O log do
+release identifica o mecanismo como `Big-core affinity target=GpuComm`.
+Foi apenas identificado, não adaptado, conforme a restrição do usuário.
+
+O byte `+3126` eleva o modo de readback ao mínimo Relaxed, sem transformar
+Relaxed em Precise (`0x13abfd0–0x13abff0`). Como os testes já usam modo 1,
+essa regra não oferece uma otimização adicional. As flags usadas pelo helper
+`0x13af1b4` pertencem a outros IDs; não foram transplantadas para inFAMOUS.
