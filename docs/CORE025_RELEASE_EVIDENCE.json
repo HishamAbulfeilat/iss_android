@@ -25,5 +25,29 @@
     "once_per_thread": true,
     "independent_of_shader_dma_setting": true
   },
-  "instructions_checked": 44
+  "fragment_contraction": {
+    "enabled_for_serial": true,
+    "feature_flag_offset": 9,
+    "settings_offset": 3133,
+    "profile_flag_offset": 56,
+    "requires": [
+      "fragment stage",
+      "no depth export",
+      "at most one color export target"
+    ],
+    "omitted_decoration": "NoContraction (42)",
+    "color_target_weights": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128
+    ],
+    "independent_of_shader_dma_setting": true,
+    "device_fps_measured": false
+  },
+  "instructions_checked": 73
 }

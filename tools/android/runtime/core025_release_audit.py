@@ -96,6 +96,35 @@ def audit(data):
         0xA83980: 0x97F11C2C,  # prctl
         0xA83994: 0x97F428E6,  # ordinary AccurateSleep
         0x78DD7C: 0x97FCF3F9,  # nanosleep, including duration zero
+        0x13AF194: 0x52800028,  # flag 9 is enabled at initializer tail
+        0x13AF198: 0x39002668,  # store compatibility flag +9
+        0x12640A4: 0x3970F748,  # load settings +3133 (3124 +9)
+        0x12640AC: 0x910642A4,  # profile = pipeline cache +400
+        0x12640BC: 0x390722A8,  # store profile +56
+        0x115E0F0: 0xF9008E77,  # EmitContext profile reference at +280
+        0x1155300: 0xF9408C08,  # load profile reference
+        0x1155308: 0x3940E108,  # load contraction policy +56
+        0x1155310: 0x54000261,  # disabled policy keeps NoContraction
+        0x1155318: 0xB95D4909,  # hardware shader stage
+        0x115531C: 0x35000209,  # non-fragment keeps NoContraction
+        0x1155324: 0x39796909,  # depth export byte (info+7770)
+        0x1155328: 0x370001A9,  # depth component zero exported: keep NoContraction
+        0x115532C: 0x91394908,  # color export bytes at info+7762
+        0x1155330: 0xFD400100,  # load eight color export masks
+        0x115533C: 0x0E209800,  # compare export bytes to zero
+        0x1155340: 0x0E601C20,  # mask with 1,2,4,8,16,32,64,128
+        0x1155344: 0x0E31B800,  # sum into target bit mask
+        0x115534C: 0x51000509,  # target mask - 1
+        0x1155350: 0x0A090108,  # mask & (mask - 1)
+        0x1155354: 0x72001D1F,  # test nonzero means multiple targets
+        0x1155358: 0x540000C1,  # multiple targets keep NoContraction
+        0x1155360: 0x52800542,  # SPIR-V decoration 42: NoContraction
+        0x115536C: 0x9410F10F,  # call Sirit Decorate
+        0x1161FC8: 0x5283CA5A,  # color output definitions start at info+7762
+        0x116240C: 0x5283CB49,  # depth output definitions inspect info+7770
+        0x1162418: 0x38696909,  # load depth export mask
+        0x116241C: 0x37000C69,  # test exported depth component zero
+        0x11625AC: 0x91002E82,  # depth output BuiltIn FragDepth = 22 (11+11)
     }
     for address, instruction in instructions.items():
         elf.require(address, instruction)
@@ -113,6 +142,10 @@ def audit(data):
     target = 0x13AE91C + imm * 4
     if serial != "CUSA00004" or target != 0x13AE9B4:
         raise ValueError("Unexpected whitelist branch")
+
+    target_weights = data[elf.offset(0x2A64DE0):elf.offset(0x2A64DE0) + 8]
+    if target_weights != bytes(1 << i for i in range(8)):
+        raise ValueError("Unexpected fragment color target weights")
 
     return {
         "host_elf_sha256": digest,
@@ -134,6 +167,17 @@ def audit(data):
             "timer_slack_ns": 1,
             "once_per_thread": True,
             "independent_of_shader_dma_setting": True,
+        },
+        "fragment_contraction": {
+            "enabled_for_serial": True,
+            "feature_flag_offset": 9,
+            "settings_offset": 3133,
+            "profile_flag_offset": 56,
+            "requires": ["fragment stage", "no depth export", "at most one color export target"],
+            "omitted_decoration": "NoContraction (42)",
+            "color_target_weights": list(target_weights),
+            "independent_of_shader_dma_setting": True,
+            "device_fps_measured": False,
         },
         "instructions_checked": len(instructions),
     }

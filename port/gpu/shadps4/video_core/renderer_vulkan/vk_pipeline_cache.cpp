@@ -28,6 +28,7 @@
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
+#include "shader_recompiler/backend/spirv/fragment_contraction.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/recompiler_toggles.h"
@@ -604,6 +605,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .dref_broadcast = LightingTest::Current().dref,
         .block1d_as_2d = AmdGpu::Block1DAs2D(),
         .bc_tiny_decode = AmdGpu::BcTinyDecode(),
+        .fragment_contraction_policy = Shader::Backend::SPIRV::FragmentContractionEnabled(),
     };
     // tlg: the recompiler switches (ISS_ names arrive as TLG_), one line each on stdout (the run
     // log keeps it; LOG_INFO is filtered out there), for A/B reports.
@@ -613,6 +615,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     Common::Backports::LogStates();
     std::printf("GPU: host subgroup size %u, LDS barriers %s\n", profile.subgroup_size,
                 profile.needs_lds_barriers ? "on" : "off");
+    std::printf("GPU: fragment contraction %s (no depth export, at most one color target)\n",
+                profile.fragment_contraction_policy ? "on" : "off");
 
     // tlg: BP08, start from the driver blob saved by an earlier session (same GPU and driver).
     std::vector<u8> driver_blob;

@@ -3,6 +3,7 @@
 
 #include "common/assert.h"
 #include "common/div_ceil.h"
+#include "shader_recompiler/backend/spirv/fragment_contraction.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -72,6 +73,15 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
                          Bindings& binding_)
     : Sirit::Module(profile_.supported_spirv), info{info_}, runtime_info{runtime_info_},
       profile{profile_}, hw_stage{info.hw_stage}, sw_stage{info.sw_stage}, binding{binding_} {
+    u32 color_targets = 0;
+    for (u32 i = 0; i < IR::NumRenderTargets; ++i) {
+        if (info.stores.GetAny(IR::Attribute::RenderTarget0 + i)) {
+            color_targets |= 1u << i;
+        }
+    }
+    allow_fp_contraction =
+        CanContractFragment(profile.fragment_contraction_policy == 1, hw_stage == HwStage::Fragment,
+                            info.stores.Get(IR::Attribute::Depth), color_targets);
     if (info.uses_dma || VertexMotion()) {
         SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
     } else {

@@ -159,7 +159,7 @@ independentemente daquele Setting. O diagnóstico recente com Direct Memory
 Access false não permite descartar este outro mecanismo.
 
 A ferramenta `tools/android/runtime/core025_release_audit.py` lê o ELF ou o APK,
-rejeita SHA-256 desconhecido, confere 44 instruções da cadeia, reconstrói o
+rejeita SHA-256 desconhecido, confere 73 instruções da cadeia, reconstrói o
 ID e calcula o destino do branch. Não executa o core. Exemplo:
 
 ```sh
@@ -317,3 +317,73 @@ O byte `+3126` eleva o modo de readback ao mínimo Relaxed, sem transformar
 Relaxed em Precise (`0x13abfd0–0x13abff0`). Como os testes já usam modo 1,
 essa regra não oferece uma otimização adicional. As flags usadas pelo helper
 `0x13af1b4` pertencem a outros IDs; não foram transplantadas para inFAMOUS.
+
+
+## Continuação: contração aritmética em fragment shaders
+
+A flag interna `+9`, ainda sem equivalente no nosso port, foi rastreada até
+seu consumidor. No release ela é escrita com valor 1 no final do inicializador
+(`0x13af194–0x13af198`), inclusive no caminho CUSA00004. Não depende de DMA.
+Em `0x12640a4–0x12640bc`, o compilador carrega `settings+3133` e grava
+`PipelineCache+456`: o perfil começa em `+400`, portanto é `Profile+56`.
+O construtor do contexto SPIR-V guarda a referência ao perfil em `+280`
+(`0x115e0f0`). Esse rastreamento evita confundir o byte `+56` do objeto de
+logging, usado por muitas funções, com o byte `+56` do perfil.
+
+O helper `0x11552f4–0x1155380` e suas versões inline nos emissores de FP
+consultam esse campo. A decoração `NoContraction` (valor SPIR-V 42) só é
+omitida quando todos os seguintes testes passam:
+
+- Flag do perfil ativa (`0x1155300–0x1155310`).
+- Hardware stage 0, fragment (`0x1155318–0x115531c`).
+- Ausência do componente zero do export de profundidade: bit 0 em
+  `Info+7770` (`0x1155324–0x1155328`). O mesmo campo seleciona a definição
+  da saída FragDepth, BuiltIn 22, em `0x116240c–0x116241c` e `0x11625ac`.
+- No máximo um alvo de cor exportado: oito bytes `Info+7762..+7769`
+  viram bits por comparação com zero, máscara de pesos
+  `[1,2,4,8,16,32,64,128]` (constante `0x2a64de0`) e soma horizontal;
+  `mask & (mask - 1)` testa se há mais de um bit (`0x115532c–0x1155358`).
+  A rotina de definição das saídas de cor também usa a base `7762`
+  (`0x1161fc8`). Contam-se alvos, não componentes RGBA.
+
+Em todos os demais casos chama Sirit Decorate com 42
+(`0x115535c–0x115536c`). Zero alvos também satisfaz a regra do release.
+O port e a fonte pública fixada decoravam essas operações incondicionalmente;
+portanto é uma diferença efetiva do executável distribuído, não apenas uma
+opção encontrada por nome ou uma inferência a partir da árvore pública.
+
+### Adaptação
+
+O perfil Bionic habilita a regra acima e o contexto calcula a elegibilidade
+uma vez por shader. Os emissores deixam de impor `NoContraction` apenas no
+caso elegível. O driver pode formar FMA em cadeias multiply/add; isso não
+obriga fusão e não ativa FP16 nem flags gerais de fast math. Outros estágios,
+MRTs e shaders com export de profundidade mantêm a decoração.
+
+`TLG_FRAGMENT_CONTRACTION=0` restaura a emissão anterior. O modo aparece no
+log de inicialização (`GPU: fragment contraction on/off`). O novo campo faz
+parte da comparação serializada de `Shader::Profile`, incluindo a troca A/B;
+o campo da política usa uma palavra de 32 bits para ampliar o tamanho do
+perfil, sem interpretar padding antigo como bool. A versão do binário de
+shader sobe de 9 para 10 para rejeitar metadados/SPIR-V anteriores.
+Não é preciso apagar saves. A primeira sessão recompila shaders; comparar
+sessões já aquecidas de cada modo, no mesmo trecho, driver e configurações.
+
+A contração muda arredondamento de algumas expressões: precisa conferir a
+imagem no aparelho, particularmente pós-processamento/iluminação. A regra
+restrita preserva a política mais conservadora do release para profundidade
+e múltiplos alvos, mas não comprova ausência de regressão visual no port.
+Também não comprova aumento de FPS: os testes host verificam a política e a
+emissão da decoração com sink simulado, não executam shaders no Adreno.
+
+A auditoria reproduzível passou de 44 a 73 instruções verificadas e confere os
+oito pesos da constante. Os testes novos compilam o header/perfil reais e o
+helper `Decorate` real com um sink de SPIR-V: percorrem todas as 256 máscaras
+de alvo e combinações de habilitação/estágio/profundidade, verificam o
+retorno da instrução, presença/ausência da decoração, override, isolamento
+não-Bionic e diferença de perfil para invalidação do cache.
+
+Validação final: 71 testes host passaram (39,120 s); auditoria do APK original
+e do ELF extraído concorda, 73 instruções e constante de pesos verificadas.
+Compilação Android e desempenho/qualidade visual no aparelho ainda dependem
+do workflow e do teste do APK.
