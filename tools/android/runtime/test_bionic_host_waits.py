@@ -69,6 +69,13 @@ int main() {
 int main() {
     using namespace IssBionicPerf;
     assert(Enabled()==EXPECTED_ENABLED);
+    RegisterThread(Thread::Command);
+    const auto cpu=CpuTimes();
+    if (EXPECTED_ENABLED) {
+        assert(cpu[0]>0 && cpu[3]>=cpu[0]);
+    } else {
+        for(auto value:cpu) assert(value==0);
+    }
     std::vector<std::thread> workers;
     for (unsigned i=0;i<4;++i) workers.emplace_back([] {
         for (unsigned j=0;j<1000;++j) {

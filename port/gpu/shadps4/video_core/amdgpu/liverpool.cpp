@@ -8,6 +8,7 @@
 #endif
 #include <time.h>
 #include "tlg_copy.h"
+#include "iss_bionic_perf.h"
 #include "tlg_toggles.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
@@ -113,6 +114,7 @@ void Liverpool::ProcessCommands() {
 }
 
 void Liverpool::Process(std::stop_token stoken) {
+    IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Command);
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
 #ifndef _WIN32
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {

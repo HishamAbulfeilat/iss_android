@@ -13,6 +13,7 @@
 
 #include <cstdlib>
 #include "tlg_threads.h"
+#include "iss_bionic_perf.h"
 
 #include <array>
 #include <atomic>
@@ -209,6 +210,7 @@ private:
     }
 
     void Run(std::stop_token stop) {
+        IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Draw);
         Common::SetCurrentThreadName("tlg:DrawRec");
         on_stage_b = true;
         stage_b_tid.store(static_cast<u32>(gettid()), std::memory_order_release);

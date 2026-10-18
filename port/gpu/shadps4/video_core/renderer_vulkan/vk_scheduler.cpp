@@ -316,6 +316,7 @@ void Scheduler::SyncRecording() {
 }
 
 void Scheduler::RecorderThread(std::stop_token stoken) {
+    IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Recorder);
     Common::SetCurrentThreadName("tlg:VkRecorder");
     while (true) {
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
@@ -379,6 +380,10 @@ void Scheduler::Finish(std::source_location caller) {
     const u64 submit_ns = diagnose ? std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count() : 0;
     Wait(presubmit_tick, caller, submit_ns);
+#ifdef ISS_ANDROID_BIONIC
+    // The explicit wait advanced the cached timeline; reclaim without another driver query.
+    PopPendingOperations();
+#endif
 }
 
 void Scheduler::WaitSubmitted(std::source_location caller) {
@@ -412,18 +417,19 @@ void Scheduler::PopPendingOperations() {
         return; // every draw comes here
     }
     std::unique_lock lk(pending_ops_mutex);
-    // tlg: this runs on every draw and dispatch. Querying the timeline semaphore is an
-    // ioctl, so it is skipped when nothing waits and done once per 32 calls (~0.3 ms; reading
-    // the clock per draw instead was itself a hot spot).
     if (pending_ops.empty()) {
         return;
     }
+#ifndef ISS_ANDROID_BIONIC
+    // Legacy platforms poll at most once per 32 draw/dispatch calls when a callback waits.
+    // Bionic uses completion cached by the submission window, waits and resource-pool misses.
     if (!work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         if ((++pending_polls & 31) != 0 && !TlgToggle::Disabled(TlgToggle::PendingPollLimit)) {
             return;
         }
         work_semaphore.Refresh();
     }
+#endif
     // tlg: a callback can submit (the fault buffer's ObtainBuffer, which may upload in parts or
     // wait for the GPU to free memory) and so come back here on this thread while it is still
     // the front op: running it again, or popping it, would corrupt the queue. The outer loop
@@ -465,6 +471,15 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     const IssBionicPerf::Scope submit_timer{IssBionicPerf::Stage::Submission};
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
+#ifdef ISS_ANDROID_BIONIC
+    // Keep up to eight submitted command buffers in flight. Unlike a counter query after
+    // every submit, Wait first checks cached completion, so one query can retire a batch.
+    // Bound the backlog before reusing command buffers/descriptors or running callbacks.
+    constexpr u64 MaxInFlightSubmissions = 8;
+    if (signal_value > MaxInFlightSubmissions) {
+        work_semaphore.Wait(signal_value - MaxInFlightSubmissions);
+    }
+#endif
     work_since_submit.store(0, std::memory_order_relaxed);
 
 #if TRACY_GPU_ENABLED
@@ -523,7 +538,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
+#ifndef ISS_ANDROID_BIONIC
     work_semaphore.Refresh();
+#endif
     AllocateWorkerCommandBuffers();
 
     // Apply pending operations

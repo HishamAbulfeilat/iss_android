@@ -58,7 +58,13 @@ std::size_t ResourcePool::ManageOverflow() {
     return old_capacity;
 }
 
+#ifdef ISS_ANDROID_BIONIC
+// Eight submissions plus the command buffer being recorded must fit without a pool-miss
+// timeline query halfway through the batch. Grow in the same units if the GPU falls behind.
+constexpr std::size_t COMMAND_BUFFER_POOL_SIZE = 16;
+#else
 constexpr std::size_t COMMAND_BUFFER_POOL_SIZE = 4;
+#endif
 
 CommandPool::CommandPool(const Instance& instance, Semaphore* work_semaphore)
     : ResourcePool{work_semaphore, COMMAND_BUFFER_POOL_SIZE}, instance{instance} {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <limits>
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
@@ -29,6 +30,7 @@ Semaphore::Semaphore(const Instance& instance_) : instance{instance_} {
 Semaphore::~Semaphore() = default;
 
 void Semaphore::Refresh() {
+    const IssBionicPerf::Scope timer{IssBionicPerf::Stage::TimelineQuery};
     u64 this_tick{};
     u64 counter{};
     do {
@@ -56,6 +58,7 @@ void Semaphore::Wait(u64 tick) {
     }
 
     // If none of the above is hit, fallback to a regular wait
+    const IssBionicPerf::Scope timer{IssBionicPerf::Stage::TimelineWait};
     const vk::SemaphoreWaitInfo wait_info = {
         .semaphoreCount = 1,
         .pSemaphores = &semaphore.get(),
