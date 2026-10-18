@@ -38,7 +38,21 @@ public final class BionicSaveArchive {
  private static void zipTree(File file,String name,ZipOutputStream zip)throws IOException {
   if(Files.isSymbolicLink(file.toPath()))throw new IOException("Link simbólico não permitido no save");
   ZipEntry e=new ZipEntry(name);e.setTime(file.lastModified());zip.putNextEntry(e);
-  if(file.isDirectory()){zip.closeEntry();for(File c:children(file))zipTree(c,name+c.getName()+(c.isDirectory()?"/":""),zip);}
+  if(file.isDirectory()){
+   zip.closeEntry();
+   File metadata=slot(file.getName())?new File(file.getParentFile(),file.getName()+".sce_sys"):null;
+   for(File c:children(file)){
+    String child=c.getName();
+    // Export the usual decrypted shadPS4/Bachata layout, not this runtime's adjacent sidecars.
+    if(child.endsWith(".sce_sys")){
+     String owner=child.substring(0,child.length()-8);
+     if(slot(owner)&&new File(file,owner).isDirectory())continue;
+    }
+    if(metadata!=null&&metadata.isDirectory()&&child.equals("sce_sys"))continue;
+    zipTree(c,name+child+(c.isDirectory()?"/":""),zip);
+   }
+   if(metadata!=null&&metadata.isDirectory())zipTree(metadata,name+"sce_sys/",zip);
+  }
   else {try(InputStream in=new FileInputStream(file)){transfer(in,zip);}zip.closeEntry();}
  }
  private static void unzip(InputStream input,File target)throws IOException {

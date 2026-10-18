@@ -33,6 +33,14 @@ public class BionicSaveArchiveTest {
    File large=new File(source,"1/"+TITLE+"/infamousssAuto0/large");
    try(RandomAccessFile f=new RandomAccessFile(large,"rw")){f.setLength(27*1024*1024);f.seek(f.length()-1);f.write(42);}
    ByteArrayOutputStream out=new ByteArrayOutputStream();BionicSaveArchive.exportSaves(source,out);
+   boolean portableMeta=false;
+   try(ZipInputStream z=new ZipInputStream(new ByteArrayInputStream(out.toByteArray()))){
+    ZipEntry entry;while((entry=z.getNextEntry())!=null){
+     if(entry.getName().equals("savedata/1/"+TITLE+"/infamousssAuto0/sce_sys/param.bin"))portableMeta=true;
+     assert !entry.getName().contains("infamousssAuto0.sce_sys/");
+    }
+   }
+   assert portableMeta;
    put(root,"1/"+TITLE+"/infamousssAuto0/obsolete","remove");
    put(root,"1/"+TITLE+"/infamousssAuto1/data","keep");
    put(root,"1/CUSA99999/infamousssAuto0/data","other region");
