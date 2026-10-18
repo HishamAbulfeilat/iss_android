@@ -180,6 +180,40 @@ void Scheduler::EndRendering() {
     });
 }
 
+void Scheduler::RecordVertexInput(
+    std::span<const vk::VertexInputBindingDescription2EXT> bindings,
+    std::span<const vk::VertexInputAttributeDescription2EXT> attributes) {
+    CheckOwner(__builtin_return_address(0));
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_VERTEX_INPUT_CACHE");
+        const bool on = !(env && *env == '0');
+        std::printf("GPU: vertex input state reuse: %s\n", on ? "on" : "off");
+        return on;
+#else
+        return false;
+#endif
+    }();
+    if (enabled && vertex_input_state.Matches(bindings, attributes)) {
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::vertex_input_skipped.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    ReserveRecordData(bindings.size_bytes() + attributes.size_bytes() + 128);
+    const auto saved_bindings = RecordData(bindings);
+    const auto saved_attributes = RecordData(attributes);
+    Record([saved_bindings, saved_attributes](vk::CommandBuffer cmdbuf) {
+        cmdbuf.setVertexInputEXT(saved_bindings, saved_attributes);
+    });
+    if (enabled) {
+        vertex_input_state.Store(bindings, attributes);
+    }
+    if (IssBionicPerf::Enabled()) {
+        IssBionicPerf::vertex_input_issued.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void Scheduler::TraceDirectRecording(void* caller) {
     static const bool enabled = [] {
         const char* env = std::getenv("TLG_RECORDER_TRACE");
@@ -498,6 +532,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
+    vertex_input_state.Invalidate();
 
 #if TRACY_GPU_ENABLED
     auto* profiler_ctx = instance.GetProfilerContext();

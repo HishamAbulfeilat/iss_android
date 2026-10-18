@@ -28,6 +28,7 @@
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/host_copy_sources.h"
+#include "video_core/renderer_vulkan/vertex_input_state.h"
 
 namespace tracy {
 class VkCtxScope;
@@ -744,7 +745,20 @@ public:
             direct_recordings.fetch_add(1, std::memory_order_relaxed);
             TraceDirectRecording(__builtin_return_address(0));
         }
+        // Raw callers may bind a graphics pipeline with static vertex input. Even if
+        // already in direct mode, do not reuse state across an untracked command stream.
+        vertex_input_state.Invalidate();
         return current_cmdbuf;
+    }
+
+    /// Records dynamic vertex format only when changed. Buffer addresses remain per draw.
+    void RecordVertexInput(std::span<const vk::VertexInputBindingDescription2EXT> bindings,
+                           std::span<const vk::VertexInputAttributeDescription2EXT> attributes);
+
+    /// Call before recording a helper graphics pipeline with static vertex input.
+    void InvalidateVertexInput() {
+        CheckOwner(__builtin_return_address(0));
+        vertex_input_state.Invalidate();
     }
 
     /// TLG_RECORDER_TRACE=1: prints the most frequent CommandBuffer() callers every 2000 calls.
@@ -941,6 +955,7 @@ private:
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;
+    VertexInputState vertex_input_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
     std::condition_variable_any event_cv;

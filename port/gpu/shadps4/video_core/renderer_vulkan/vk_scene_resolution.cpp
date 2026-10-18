@@ -246,6 +246,8 @@ void SceneTargets::Resample(vk::Image src, vk::Image dst, const VideoCore::Image
     });
     const auto pipeline = ResamplePipeline(format, stencil);
     const auto layout = *resample_layout;
+    // This helper binds a static vertex-input pipeline, disturbing the dynamic format.
+    scheduler.InvalidateVertexInput();
     scheduler.Record([=](vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView = target_view,
