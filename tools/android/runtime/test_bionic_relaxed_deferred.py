@@ -37,12 +37,12 @@ struct {GpuReadbacksMode mode=GpuReadbacksMode::Relaxed;
     auto GetReadbacksMode() {return mode;}} EmulatorSettings;
 namespace TlgToggle {enum {DeferredReadback}; bool Disabled(int) {return false;}}
 bool ReadbackStatsEnabled() {return false;} s64 NowNs() {return 0;}
-struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{};};
+struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{};};
 Counters& Readbacks() {static Counters c;return c;} void ReportReadbacks() {}
 struct Queue {
     std::mutex mutex;std::condition_variable cv;
     std::deque<std::function<void()>> jobs;bool stop=false;
-    std::thread::id owner;
+    std::thread::id owner;std::atomic<unsigned> submitted{0};
     std::thread worker;
     Queue() {
         std::promise<void> ready;auto f=ready.get_future();
@@ -64,7 +64,7 @@ struct Queue {
         assert(std::this_thread::get_id()!=owner);
         auto job=std::make_shared<std::packaged_task<void()>>(std::forward<F>(func));
         auto done=job->get_future();
-        {std::lock_guard lock(mutex);jobs.emplace_back([job]{(*job)();});}
+        {std::lock_guard lock(mutex);++submitted;jobs.emplace_back([job]{(*job)();});}
         cv.notify_one();assert(done.wait_for(3s)==std::future_status::ready);done.get();
     }
 };
@@ -87,8 +87,7 @@ struct Tracker {
     Queue* queue;std::mutex mutex;bool gpu=true,cpu=false;unsigned marks=0;
     void MarkRegionAsCpuModified(VAddr,u64) {queue->CheckOwner();cpu=true;++marks;}
     void MarkRegionAsCpuModifiedUnlessGpu(VAddr,u64) {
-        // The fixture exercises owner-thread publication in Relaxed.
-        if(EmulatorSettings.mode==GpuReadbacksMode::Relaxed) queue->CheckOwner();
+        // Same per-region locked GPU-bit recheck as production, also safe on guest threads.
         std::lock_guard lock(mutex);if(!gpu) {cpu=true;++marks;}
     }
     template<class P,class W> bool ApplyGpuCopyIf(VAddr start,u64 size,P&& pred,W&& write) {
@@ -114,12 +113,14 @@ struct BufferCache {
         struct Staging {u8* mapped;u64 offset=0;void Invalidate() {}} staging;
         VAddr arena_base=0x1000,start=0x1000,end=0x1010;u64 tick=1;
         std::atomic<bool> applied{},recovered{},stale{};std::mutex mutex;
+        std::once_flag relaxed_completion;
         std::vector<Copy> copies{Copy{}};
         DeferredReadback():staging{snapshot.data()} {snapshot.fill(7);}
     };
     Queue* liverpool;Scheduler scheduler;Tracker* memory_tracker;Memory* memory;
     Buffer arena;std::shared_ptr<DeferredReadback> pending=std::make_shared<DeferredReadback>();
-    bool empty=false;unsigned downloads=0,starts=0;
+    bool empty=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
+    std::mutex starts_mutex;std::condition_variable starts_cv;
     BufferCache(Queue* q,Tracker* t,Memory* m):liverpool(q),memory_tracker(t),memory(m) {
         scheduler.timeline.queue=q;
     }
@@ -128,8 +129,12 @@ struct BufferCache {
         liverpool->CheckOwner();++downloads;memory->bytes.fill(9);memory_tracker->gpu=false;
     }
     auto StartDeferredReadback(VAddr,u64) {
-        liverpool->CheckOwner();++starts;
+        liverpool->CheckOwner();{std::lock_guard lock(starts_mutex);++starts;}starts_cv.notify_all();
         return empty ? std::shared_ptr<DeferredReadback>{} : pending;
+    }
+    void WaitForStarts(unsigned count) {
+        std::unique_lock lock(starts_mutex);
+        assert(starts_cv.wait_for(lock,2s,[&]{return starts>=count;}));
     }
     static bool DeferredReadbackEnabled();
     bool FinishDeferredReadback(DeferredReadback&,bool);
@@ -164,11 +169,12 @@ int main(int argc,char** argv) {
     }
     auto fault=std::async(std::launch::async,[&]{cache.ReadMemory(0x1000,8,write,false);});
     cache.scheduler.timeline.WaitForGuests(1);
-    std::future<void> second;
-    if(scenario=="join") {
-        second=std::async(std::launch::async,[&]{cache.ReadMemory(0x1008,8,true,false);});
-        cache.scheduler.timeline.WaitForGuests(2);
+    std::vector<std::future<void>> others;
+    const unsigned guests=scenario=="many" ? 16 : scenario=="join" ? 2 : 1;
+    for(unsigned i=1;i<guests;++i) {
+        others.push_back(std::async(std::launch::async,[&]{cache.ReadMemory(0x1008,8,true,false);}));
     }
+    cache.WaitForStarts(guests);
     // Crucial regression: command recording progresses while the faulting guest waits.
     bool progressed=false;
     queue.SendCommand<true,true>([&] {
@@ -185,7 +191,12 @@ int main(int argc,char** argv) {
         });
     } else cache.scheduler.timeline.Complete();
     assert(fault.wait_for(3s)==std::future_status::ready);fault.get();
-    if(second.valid()) {assert(second.wait_for(3s)==std::future_status::ready);second.get();}
+    for(auto& other:others) {assert(other.wait_for(3s)==std::future_status::ready);other.get();}
+    if(guests>1) {
+        // One start request per guest, a single publication and the progress probe above.
+        assert(cache.scheduler.timeline.waiters==1);
+        assert(queue.submitted==guests+2);
+    }
     bool stale=scenario=="stale"||scenario=="race";
     assert(cache.downloads==unsigned(stale));
     assert(memory.publications==unsigned(!stale));
@@ -213,7 +224,7 @@ class RelaxedDeferredTests(unittest.TestCase):
                                      str(ROOT / "port/gpu/shadps4"), str(src), "-o", str(binary)],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for case in ("success", "read", "join", "stale", "race", "inline", "empty",
+            for case in ("success", "read", "join", "many", "stale", "race", "inline", "empty",
                          "disabled", "off", "hot", "precise"):
                 with self.subTest(bionic=bionic, case=case):
                     result = subprocess.run([str(binary), case], capture_output=True,
@@ -225,6 +236,63 @@ class RelaxedDeferredTests(unittest.TestCase):
 
     def test_other_platforms_keep_precise_only_policy(self):
         self.run_config(False)
+
+    def test_guest_cpu_transition_cannot_unprotect_a_newer_gpu_write(self):
+        source = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/memory_tracker.h").read_text()
+        body = method(source, "void MarkRegionAsCpuModifiedUnlessGpu(VAddr dirty_cpu_addr, u64 query_size)")
+        code = r'''
+#include <cassert>
+#include <cstdint>
+#include <mutex>
+#include <future>
+#include <chrono>
+using u64=uint64_t;using VAddr=u64;using namespace std::chrono_literals;
+enum class Type {GPU,CPU};
+struct RegionManager {
+    std::mutex lock;bool gpu=true,cpu=false,writeable=false;
+    u64 GetCpuAddr() {return 0;}
+    template<Type t> bool IsRegionModified(u64,u64) {
+        static_assert(t==Type::GPU);return gpu;
+    }
+    template<Type t,bool enable> void ChangeRegionState(u64,u64) {
+        static_assert(t==Type::CPU && enable);cpu=true;writeable=true;
+    }
+};
+struct MemoryTracker {
+    RegionManager region;
+    template<bool create,class F> void IteratePages(VAddr addr,u64 size,F&& func) {
+        static_assert(!create);func(&region,addr,size);
+    }
+''' + body + r'''
+};
+int main() {
+    MemoryTracker tracker;
+    tracker.MarkRegionAsCpuModifiedUnlessGpu(0,8);
+    assert(!tracker.region.cpu && !tracker.region.writeable);
+    tracker.region.gpu=false; // completed snapshot has been published
+    tracker.MarkRegionAsCpuModifiedUnlessGpu(0,8);
+    assert(tracker.region.cpu && tracker.region.writeable);
+    tracker.region.cpu=false;tracker.region.writeable=false;
+    std::unique_lock owner_lock(tracker.region.lock);
+    std::promise<void> started;auto ready=started.get_future();
+    auto guest=std::async(std::launch::async,[&] {
+        started.set_value();tracker.MarkRegionAsCpuModifiedUnlessGpu(0,8);
+    });
+    ready.get();assert(guest.wait_for(0s)!=std::future_status::ready);
+    tracker.region.gpu=true; // GPU reused the page before the guest could mark it
+    owner_lock.unlock();
+    assert(guest.wait_for(2s)==std::future_status::ready);guest.get();
+    assert(!tracker.region.cpu && !tracker.region.writeable);
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            src = Path(directory) / "transition.cpp"
+            binary = Path(directory) / "transition"
+            src.write_text(code)
+            result = subprocess.run([CXX, "-std=c++20", "-O2", "-pthread", str(src), "-o", str(binary)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            subprocess.run([str(binary)], check=True, timeout=5)
 
 
 if __name__ == "__main__":

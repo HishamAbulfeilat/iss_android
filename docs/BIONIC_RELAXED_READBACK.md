@@ -33,9 +33,16 @@ Precise e os padrões dos outros sistemas continuam com suas políticas.
 2. A thread guest espera pelo tick dessa cópia. A thread de comandos pode
    continuar processando outros comandos durante a espera.
 3. Em Relaxed, a publicação da cópia é enviada novamente à thread de comandos.
-   Ela revalida a cópia e faz a transição de estado CPU/GPU em ordem com os
-   outros usos do cache. Não publica o snapshot diretamente pela thread guest.
-4. Se uma nova escrita tornou a cópia obsoleta, o caminho existente recupera
+   Ela revalida a cópia em ordem com os outros usos do cache. Não publica o
+   snapshot diretamente pela thread guest. Os solicitantes de uma mesma cópia
+   compartilham a espera e a publicação por `std::call_once`, sem segurar locks
+   do cache durante a espera.
+4. Após a publicação, cada thread guest faz sua transição de escrita sob o lock
+   da região, pelo método existente `MarkRegionAsCpuModifiedUnlessGpu`. Se a GPU
+   já modificou a página novamente, esse método mantém a proteção: a instrução
+   guest volta a falhar e recupera os novos dados antes de escrever. É a mesma
+   verificação usada pelo caminho Precise.
+5. Se uma nova escrita tornou a cópia obsoleta, o caminho existente recupera
    os intervalos e usa o download síncrono. O snapshot antigo não é publicado.
 
 A aplicação mantém as verificações por páginas efetivamente copiadas, os
@@ -55,6 +62,30 @@ preservação de bytes, duas threads compartilhando a cópia, snapshot obsoleto
 antes e depois da conclusão da GPU, falha inline, janela sem dados, variável
 desativada, readbacks Disabled, hot pages e manutenção do caminho Precise e
 da restrição dos outros sistemas.
+
+## Redução de conclusões repetidas, após o log 23
+
+O log 23 registrou 3.960 cópias e 7.229 pedidos que compartilharam cópias.
+Antes deste ajuste cada solicitante fazia seu próprio `Semaphore::Wait` e
+enviava um callback de publicação, mesmo que outros solicitantes estivessem
+esperando exatamente o mesmo snapshot. A GPU copiava uma vez, mas o host
+repetia o trabalho de conclusão por solicitante.
+
+Agora um solicitante espera no driver e pede a publicação pelo owner; os
+demais aguardam essa conclusão compartilhada. O teste com 16 solicitantes
+confere uma espera no driver e uma publicação, mantendo uma requisição
+inicial por solicitante. O teste compila os métodos reais e falha com o
+código anterior. Outro teste compila o método real de transição CPU e
+verifica que uma escrita mais nova da GPU, sob o lock da região, impede
+que a thread guest torne a página gravável.
+
+O contador `relaxed shared completions` informa os líderes de espera/publicação.
+O tempo de espera acumulado em `BionicPerf` pode cair simplesmente porque
+agora mede uma espera no driver por snapshot; os seguidores esperam no host.
+Isso não representa redução equivalente de trabalho da GPU. Avaliar o ganho
+pelos FPS no mesmo trecho, pelos tempos de CPU e pelos resultados de readback.
+Não altera tamanho da janela, frequência de submissão, resolução, afinidade,
+driver, preparação de draws, write merge ou eager readback.
 
 Esses testes validam o comportamento de software com mocks. O ganho de FPS,
 a frequência de fallback e o resultado gráfico em Adreno precisam ser

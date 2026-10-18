@@ -178,6 +178,7 @@ struct ReadbackStats {
     /// Deferred readbacks: recorded, joined, applied by guest threads, stale (fell back to the
     /// download), guest time from the request to the copy applied, bytes copied.
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
+    std::atomic<u64> shared_completions{0};
     /// Eager copies: pages copied, used by a fault, gone stale unread, skipped for backoff.
     std::atomic<u64> eager_copied{0}, eager_used{0}, eager_stale{0}, eager_skipped{0};
     std::atomic<s64> window_start{0};
@@ -221,6 +222,8 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.eager_used.exchange(0)),
                 static_cast<unsigned long long>(r.eager_stale.exchange(0)),
                 static_cast<unsigned long long>(r.eager_skipped.exchange(0)));
+    std::printf("  relaxed shared completions: %llu GPU wait/publication leaders\n",
+                static_cast<unsigned long long>(r.shared_completions.exchange(0)));
     std::fflush(stdout);
 }
 } // namespace
@@ -283,17 +286,25 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         bool applied = false;
         if (readback) {
             if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
-                // Relaxed leaves CPU reads unprotected. Keep publication and the CPU-write
-                // state transition on the cache owner, in order with subsequent GPU uses.
-                // Only the faulting guest waits for the copy; the command processor remains
-                // free to record other work. Revalidate staleness after the queue round trip.
-                scheduler.GetWorkSemaphore()->Wait(readback->tick);
-                liverpool->SendCommand<true, true>([&] {
-                    applied = FinishDeferredReadback(*readback, false);
-                    if (applied && is_write) {
-                        memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                // One GPU wait and owner publication per shared snapshot, not per fault.
+                // Followers sleep in call_once without holding cache/region locks. The
+                // command processor never enters this flag (inline faults use flush_request).
+                std::call_once(readback->relaxed_completion, [&] {
+                    if (ReadbackStatsEnabled()) {
+                        Readbacks().shared_completions.fetch_add(1, std::memory_order_relaxed);
                     }
+                    scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                    liverpool->SendCommand<true, true>([&] {
+                        FinishDeferredReadback(*readback, false);
+                    });
                 });
+                applied = readback->applied.load(std::memory_order_acquire);
+                if (applied && is_write) {
+                    // As in Precise, this transition holds the region lock and checks the
+                    // GPU bit again. A newer GPU write keeps the page protected and the
+                    // guest store faults again; it cannot unprotect newer GPU data.
+                    memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                }
             } else {
                 applied = FinishDeferredReadback(*readback, true);
                 if (applied && is_write) {

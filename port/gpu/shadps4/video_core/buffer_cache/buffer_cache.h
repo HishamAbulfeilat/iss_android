@@ -234,6 +234,9 @@ private:
         /// Won't be applied; its ranges are back in gpu_modified_ranges.
         std::atomic<bool> recovered{};
         std::mutex mutex;
+        // Guest threads sharing a Relaxed snapshot also share its GPU wait and
+        // owner-thread publication. Only guest callers enter this once flag.
+        std::once_flag relaxed_completion;
         // Only pages actually copied from the GPU can become stale. The 512 KiB
         // prefetch window is a scheduling envelope, not a set of copied bytes.
         bool CopiesTouchPages(VAddr addr, VAddr end) const noexcept {
