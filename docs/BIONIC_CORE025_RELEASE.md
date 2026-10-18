@@ -60,7 +60,8 @@ No helper `0x11fe3d0`:
   o fluxo escalar e NEON seleciona o maior valor para o intervalo solicitado.
 - Em `0x11fe480` é consultada a flag do cache em `+13921`; o construtor a
   recebe de um campo de configuração em `+3141` (`0x11ecbfc–0x11ecc04`).
-  O nome e o valor padrão dessa configuração não foram recuperados.
+  A análise adicional identificou a origem como uma flag do bloco interno de
+  compatibilidade por jogo; não é a opção de menu Direct Memory Access.
 - Com a flag ativa, tick anterior ao tick corrente e mapeamento disponível,
   fornece um callback para `DownloadBufferMemory` em `0x11fe4ec`.
 - `0x11e9f94` obtém o ponteiro de mapeamento existente ou tenta mapeamento
@@ -77,9 +78,10 @@ No helper `0x11fe3d0`:
 Portanto há uma otimização concreta que a fonte pública de `ReadMemory` /
 `DownloadBufferMemory` consultada não representa: para buffers elegíveis,
 pode evitar uma nova cópia e esperar pela última escrita relevante.
-**Sua existência não demonstra que esteja ativa para inFAMOUS/Adreno.**
-É necessário identificar a configuração, tipos de alocação usados pelo jogo,
-e todos os produtores dos ticks antes de adaptar. No nosso modelo, arenas
+**A análise adicional abaixo confirma a flag habilitada para CUSA00004.**
+Isso ainda não comprova sucesso do mapeamento ou frequência de uso no aparelho.
+É necessário verificar os tipos de alocação usados pelo jogo e todos os
+produtores dos ticks antes de adaptar. No nosso modelo, arenas
 sparse não oferecem um ponteiro contíguo mapeado equivalente. Esperar um tick
 antigo sem rastrear todas as escritas ou ignorar invalidação/barreira Vulkan
 pode publicar dados antigos e reintroduzir o flicker. Não basta mudar `Finish()`.
@@ -117,11 +119,131 @@ nossos pools por causa do número 512 MiB.
 
 A comparação pública anterior não cobria integralmente o release. O achado
 novo prioritário é a publicação direta de buffers mapeáveis, associada a
-rastreamento de escritas por página. Agrupamento e retenção de staging já
+rastreamento de escritas por página e habilitada por ID para CUSA00004. Agrupamento e retenção de staging já
 existem no nosso core e não justificam uma nova revisão de runtime isoladamente.
 
 Esta revisão registra evidências e método; não altera configuração nem código
 de execução e não afirma corrigir a diferença de FPS. O APK de `7c1ff82`
 continua sendo o que testa a adaptação de cópias host do Bloodborne. Para
-implementar o caminho mapeado com segurança ainda faltam configuração ativa,
-propriedade das alocações e cobertura dos produtores de ticks no release.
+implementar o caminho mapeado com segurança ainda faltam propriedade das
+alocações, visibilidade GPU→host e cobertura dos produtores de ticks. A
+elegibilidade por ID foi confirmada na investigação adicional abaixo.
+
+
+## Investigação adicional após os logs 25 e 26
+
+### CUSA00004 habilita o caminho; a flag foi rastreada até sua origem
+
+A hipótese de uma configuração não identificada foi resolvida:
+
+1. `Run`, em `0x13a46b4–0x13a46c0`, passa tamanho, dados do serial e o
+   bloco da instância de settings em `+3124` para `0x13ae324`.
+2. O inicializador desse bloco compara vários IDs e escreve suas flags.
+   `0x13ae33c`, `0x13ae348` e `0x13ae354` montam `CUSA0000` em `x22`.
+3. `0x13ae910` compara os primeiros oito bytes; `0x13ae914–0x13ae918`
+   compara o nono com ASCII 52 (`4`). O branch de igualdade em `0x13ae91c`
+   vai a `0x13ae9b4`, onde o caminho escreve **1** na flag `+17`
+   (`0x13ae9b8`, `0x13ae9c4`). Portanto o ID é **CUSA00004**.
+4. `3124 + 17 = 3141`: esse é precisamente o byte que o construtor do
+   buffer cache lê em `0x11ecbfc` e guarda em `cache + 13921`.
+5. O helper de readback consulta `cache + 13921` em `0x11fe478–0x11fe488`.
+   Depois verifica tick e mapeamento; se ambos permitem, usa o callback
+   de espera do intervalo. Mapeamento indisponível mantém o fallback.
+
+**A elegibilidade é confirmada estaticamente para o jogo, não observada em
+execução.** Não foi recuperado o nome original do campo em C++; o seu papel
+é determinado pelo consumo no código de máquina. Ele não é a opção
+`GPU.direct_memory_access_enabled`: seu valor vem da comparação de serial,
+independentemente daquele Setting. O diagnóstico recente com Direct Memory
+Access false não permite descartar este outro mecanismo.
+
+A ferramenta `tools/android/runtime/core025_release_audit.py` lê o ELF ou o APK,
+rejeita SHA-256 desconhecido, confere 24 instruções da cadeia, reconstrói o
+ID e calcula o destino do branch. Não executa o core. Exemplo:
+
+```sh
+python tools/android/runtime/core025_release_audit.py --apk /caminho/bachatas4-0.2.5-release.apk
+```
+
+A saída verificada foi preservada em `docs/CORE025_RELEASE_EVIDENCE.json`.
+A desmontagem completa foi feita com LLVM; a ferramenta reduzida deixa as
+instruções da conclusão principal verificáveis sem dependência do LLVM.
+
+### Alocação e rastreamento: como o release torna o caminho possível
+
+O release usa buffers por intervalo, em vez das nossas arenas sparse:
+`0x11f8b54–0x11f8b68` constrói um Buffer com MemoryUsage 0 (DeviceLocal).
+O construtor chama a alocação, consulta propriedades físicas e guarda
+host-coherent / host-visible (`0x11e9e5c–0x11e9e94`). `0x11e9f94` usa um
+mapeamento existente ou tenta obtê-lo sob demanda quando host-visible. Essa
+caminhada chega à camada VMA em `0x1229808`; há retorno de falha e o
+readback mantém a cópia convencional. A tabela de flags de VMA em
+`0x210b910` é `{0, 0x404, 0x804, 0x404}`: não há evidência de uma troca
+universal de DeviceLocal para memória host pelo simples fato de ativar a flag.
+
+`0x11ee3f4` registra o tick corrente do buffer. O fluxo seguinte limita o
+vetor por página a buffers de **até 64 MiB**, com índice por **4 KiB**;
+buffers maiores preservam o tick coarse. O vetor é inicializado com um
+tick conservador antes de receber atualizações por intervalo. Atualizações
+inline equivalentes aparecem em caminhos de cópia/escrita e na junção de
+buffers (`0x11f3b44–0x11f3c2c`, `0x11f9274–0x11f9360`, entre outros).
+Não se deve confundir o helper standalone com a cobertura total: o compilador
+inlined os produtores em múltiplas funções.
+
+No nosso core, `arena_memory_type_index` já escolhe um tipo DeviceLocal,
+mas `Backing` guarda apenas VkDeviceMemory e offset. Não expõe um ponteiro
+CPU das alocações residentes. Isso não significa que o hardware não permita
+mapear: significa que a nossa camada não implementa esse acesso. As arenas
+podem ter gigabytes; copiar o vetor de ticks de um Buffer pequeno para cada
+arena inteira também mudaria custo e precisão.
+
+Uma adaptação adequada exige:
+
+- Mapear/invalidate **as alocações residentes**, traduzindo cada intervalo
+  através de Backing e seu offset; não presumir um ponteiro contíguo da arena.
+- Manter alocações/mapeamentos vivos enquanto houver leitores; contemplar
+  rollback de alocação, migração, unmap e desligamento.
+- Rastrear os ticks de todos os produtores, incluindo uploads, fill/copy,
+  shader writes e image→buffer. Tick de uso/leitura não substitui tick de escrita.
+- Garantir visibilidade GPU→host antes de esperar o tick já submetido. Esperar
+  um número antigo ou invalidar cache CPU isoladamente não estabelece toda
+  a dependência de memória. Referência: documentação Khronos de
+  [sincronização](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
+  e [invalidate](https://github.com/KhronosGroup/Vulkan-Docs/blob/main/chapters/memory.adoc).
+- Impedir leitura concorrente com escritas GPU posteriores e preservar bytes
+  CPU modificados; integrar invalidação por página aos readbacks diferidos.
+
+O motivo para priorizar esse caminho é o que ele evita: no nosso
+`StartDeferredReadback`, `runtime.CopyBuffer` e `scheduler.Flush` criam um
+novo trabalho antes da espera. No release, um intervalo mapeável cujo tick
+já foi submetido pode aguardar a escrita anterior e publicar sem essa cópia
+nem forçar submissão do command buffer aberto. O ganho depende da frequência
+real desses casos; não foi medido. Agrupamento de staging não obtém o mesmo efeito.
+
+### O que acrescenta o log 26
+
+Logs 25 e 26 mostram a mesma data de compilação (`18/10 17:54:58`), configurações
+observáveis e host-copy tracking ativo. O log não imprime SHA do executável;
+portanto isso identifica a mesma revisão aparente, não prova identidade binária.
+
+| Amostra | Primeiras oito janelas de gameplay | Duração | Média gameplay completa |
+| --- | --- | --- | --- |
+| Log 24 | 35,984 FPS | 40,10 s | 36,615 FPS em 45,12 s |
+| Log 25 | 35,921 FPS | 40,12 s | 35,921 FPS em 40,12 s |
+| Log 26 | 37,655 FPS | 40,37 s | 38,231 FPS em 45,39 s |
+
+Médias ponderadas por `window_s`, excluindo as primeiras três janelas de
+boot/menu/transição em cada arquivo. Alinhamento por janela não assegura
+mesma câmera, trajeto ou estado térmico. O log 26 supera o 25 em ~4,8% no
+recorte, mas não há mudança de código observável entre eles a que atribuir
+esse ganho. Os pipelines também estavam mais aquecidos no segundo teste:
+warm-up de 0,51 s contra 0,75 s e tempo de builds de 0,057 contra 1,266 thread-s.
+
+O fallback stale foi 136/(11033+136) = **1,218%** no log 26,
+contra 288/(10376+288) = **2,701%** no 25. Esses contadores têm janelas
+próprias e incluem uma transição; não são exatamente o recorte da tabela.
+A espera acumulada do gravador no log 26 fica entre ~237 e 629 ms por janela
+de gameplay; readback continua aparecendo como espera relevante. Nenhuma
+dessas somas por threads identifica isoladamente o gargalo do frame.
+Não há medição de execução GPU nem evidência suficiente para afirmar que a
+última adaptação aumentou o FPS, ou para confirmar ausência de flicker.
