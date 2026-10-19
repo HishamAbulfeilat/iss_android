@@ -18,6 +18,7 @@ export ISS_BIONIC=1 ISS_ANDROID_INPUT=1 TLG_ANDROID_INPUT=1
 export ISS_COMPARE_STATS="${ISS_COMPARE_STATS:-1}"
 # Readback outcomes distinguish successful deferred copies from stale-copy fallbacks.
 export TLG_READBACK_STATS="${TLG_READBACK_STATS:-$ISS_COMPARE_STATS}"
+export TLG_FAULT_PROFILE="${TLG_FAULT_PROFILE:-$ISS_COMPARE_STATS}"
 # Native Bionic deliberately has no optional temporal or spatial upscaling.
 export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 TLG_FSR1=0 TLG_RCAS=0
 export TLG_PAD_FILE="$base/android-pad.state"

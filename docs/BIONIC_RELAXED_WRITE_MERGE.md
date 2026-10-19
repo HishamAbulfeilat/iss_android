@@ -68,3 +68,42 @@ whether the game's measured scene actually uses the path. Set
 `TLG_RELAXED_WRITE_MERGE=0` to disable this extension, or `TLG_WRITE_MERGE=0` to
 disable all write merge. Compare the same save, camera, resolution, driver and
 warm-up; device FPS and visual checks remain necessary before claiming a gain.
+
+## Device result: 7d21076
+
+The next full device log, `iss-android.log (3)(1).txt`, confirms the new build,
+Relaxed, write merge enabled, and the same Adreno/driver/output configuration.
+**Every CPU write merge report has zero applied and zero rejected.** Rejection
+counts only queued owner/backend failures, so this does not distinguish missing
+HLE calls from early size/source/policy exclusions. It does establish that no
+reported write took the optimized path during this test.
+
+Excluding the first three boot/menu windows, its first seven gameplay windows
+contain 1370 frames / 35.06 s = 39.0759 FPS. The previous e9ba502 log had
+1372 / 35.07 s = 39.1218 FPS. Gameplay windows 3–7 give 40.5826 vs 40.9273 FPS.
+There is no measured improvement attributable to this optimization. Readback
+wait calls remain about 64.88/s in those latter windows. The first seven readback
+reports contain 41 final synchronous downloads, versus 33 previously; their
+boundaries are separate from the performance windows.
+
+The remaining bottleneck cannot be assigned to bulk HLE writes from these
+counters. Native FEX stores, reads requiring GPU results, memmove, and early HLE
+exclusions remain distinct possibilities. In particular, the wait-site source
+line alone does not classify the original instruction as a CPU read or write.
+
+### Targeted next capture
+
+The Bionic comparison wrapper now enables the existing fault-origin profiler,
+limited to handled faults taking at least 0.5 ms. It reports the eight origins
+with most aggregate host time in five-second windows, separating read/write
+and FEX guest / native host-call / host, with guest PC, thread, accessed address,
+and the faulting ARM word when readable. ARM instruction reads use a fallible
+self `process_vm_readv`; an unavailable PC cannot cause a recursive fault. The
+old direct dereference of the guest stack was removed. Errno is preserved.
+
+This is a diagnostic build, **not another claimed FPS improvement**. It identifies
+whether the next correction needs precise native-store handling or an actual
+GPU-result read path. `TLG_FAULT_PROFILE=0` disables the profiler; it also defaults
+off with `ISS_COMPARE_STATS=0`. Ordinary short protection faults do not enter the
+map or reconstruct guest registers, and unknown origins are bounded. Its times
+are overlapping host-thread wall times and must not be summed into GPU frame time.

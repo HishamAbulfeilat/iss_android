@@ -6,9 +6,12 @@
 #include "../../../../src/guest_cpu.h"
 #endif
 #include <vector>
+#include <array>
+#include <cerrno>
 #include <chrono>
 #include <algorithm>
-#include <unordered_map>
+#include <map>
+#include <tuple>
 #include <boost/container/small_vector.hpp>
 #include "tlg_toggles.h"
 #include "common/assert.h"
@@ -44,6 +47,8 @@
 #include <mutex>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/uio.h>
+#include <pthread.h>
 #include <sys/syscall.h>
 #else
 #include "common/spin_lock.h"
@@ -75,48 +80,76 @@ struct PageManager::Impl {
 
     virtual void Protect(VAddr address, size_t size, Core::MemoryPermission perms) = 0;
 
-    // tlg: TLG_FAULT_PROFILE=1 prints, every 5 s, the guest instructions whose faults on GPU
-    // tracked pages cost the most time (which game code waits on the GPU, and for what).
-    struct FaultSite { u64 count = 0, ns = 0; VAddr last = 0; u64 caller = 0; bool write = false; };
+    // Diagnose the instructions behind expensive GPU page faults, not every protected store.
+    // No guest stack dereference: profiling must not recursively fault inside this handler.
+    struct FaultSite {
+        u64 count = 0, ns = 0;
+        VAddr last = 0;
+        u64 host_pc = 0;
+        u32 instruction = 0;
+        bool instruction_valid = false;
+        std::array<char, 16> thread{};
+    };
     static void ProfileFault(void* context, VAddr addr, bool write, u64 ns) {
 #ifdef __linux__
-        static const bool enabled = [] { const char* e = std::getenv("TLG_FAULT_PROFILE"); return e && *e == '1'; }();
-        if (!enabled) {
-            return;
-        }
+        static const bool enabled = [] {
+            const char* e = std::getenv("TLG_FAULT_PROFILE");
+            return e && *e == '1';
+        }();
+        if (!enabled || ns < 500'000) return;
+        struct RestoreErrno { int value; ~RestoreErrno() { errno = value; } } restore_errno{errno};
         static std::mutex mutex;
-        static std::unordered_map<u64, FaultSite> sites;
+        using Key = std::tuple<u64, bool, int>;
+        static std::map<Key, FaultSite> sites;
         static auto window = std::chrono::steady_clock::now();
-        const auto* uc = static_cast<ucontext_t*>(context);
-        GuestRegs regs; guest_cpu_signal_regs(uc,&regs);
-        const u64 rip=regs.rip;
-        // The return address at the top of the stack (right for leaf routines such as memcpy).
-        const u64 caller = *reinterpret_cast<const u64*>(regs.gpr[GUEST_RSP]);
+        GuestRegs regs{};
+        const int origin = guest_cpu_signal_regs(context, &regs);
+        const u64 host_pc = guest_cpu_host_pc(context);
+        static thread_local const auto name = [] {
+            std::array<char, 16> value{};
+            pthread_getname_np(pthread_self(), value.data(), value.size());
+            return value;
+        }();
+        u32 instruction = 0;
+        bool instruction_valid = false;
+#if defined(ARCH_ARM64)
+        // Reading a bad/executable-only PC must fail harmlessly, not recurse into SIGSEGV.
+        iovec local{&instruction, sizeof(instruction)};
+        iovec remote{reinterpret_cast<void*>(host_pc), sizeof(instruction)};
+        instruction_valid = process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == static_cast<ssize_t>(sizeof(instruction));
+#endif
         std::scoped_lock lock{mutex};
-        auto& site = sites[rip];
+        Key key{regs.rip, write, origin};
+        // Bound diagnostic storage when many unrelated instructions fault in the same window.
+        if (sites.size() >= 128 && !sites.contains(key)) key = Key{0, write, origin};
+        auto& site = sites[key];
         ++site.count;
         site.ns += ns;
         site.last = addr;
-        site.write = write;
-        site.caller = caller;
+        site.host_pc = host_pc;
+        site.instruction = instruction;
+        site.instruction_valid = instruction_valid;
+        site.thread = name;
         const auto now = std::chrono::steady_clock::now();
-        if (now - window < std::chrono::seconds(5)) {
-            return;
-        }
+        if (now - window < std::chrono::seconds(5)) return;
         window = now;
-        std::vector<std::pair<u64, FaultSite>> top(sites.begin(), sites.end());
+        std::vector<std::pair<Key, FaultSite>> top(sites.begin(), sites.end());
         std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
-        std::printf("Fault profile (5 s):");
+        std::printf("Slow GPU faults (>=0.5 ms, 5 s, aggregate host time):\n");
         for (size_t i = 0; i < top.size() && i < 8; ++i) {
-            const u64 at = top[i].first;
-            const u64 from = top[i].second.caller;
-            std::printf(" [%s %#llx<-%#llx x%llu %.1f ms @%#llx]", top[i].second.write ? "W" : "R",
+            const auto [at, is_write, kind] = top[i].first;
+            const auto& item = top[i].second;
+            const char* source = kind == GUEST_CPU_IN_GUEST ? "guest" :
+                                 kind == GUEST_CPU_IN_HOST_CALL ? "host-call" : "host";
+            std::printf("  %s %s pc=%#llx host_pc=%#llx arm=%s%08x thread=%s "
+                        "calls=%llu time=%.1f ms address=%#llx\n",
+                        is_write ? "W" : "R", source,
                         static_cast<unsigned long long>(at >= 0x800000000ull && at < 0x810000000ull ? at - 0x800000000ull : at),
-                        static_cast<unsigned long long>(from >= 0x800000000ull && from < 0x810000000ull ? from - 0x800000000ull : from),
-                        static_cast<unsigned long long>(top[i].second.count), top[i].second.ns / 1e6,
-                        static_cast<unsigned long long>(top[i].second.last));
+                        static_cast<unsigned long long>(item.host_pc),
+                        item.instruction_valid ? "" : "unavailable:", item.instruction,
+                        item.thread.data(), static_cast<unsigned long long>(item.count),
+                        item.ns / 1e6, static_cast<unsigned long long>(item.last));
         }
-        std::printf("\n");
         std::fflush(stdout);
         sites.clear();
 #else
@@ -128,9 +161,11 @@ struct PageManager::Impl {
         const auto start = std::chrono::steady_clock::now();
         const auto addr = reinterpret_cast<VAddr>(fault_address);
         const bool handled = HandleGuestFault(context, addr);
-        ProfileFault(context, addr, Common::IsWriteError(context),
-                     static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now() - start).count()));
+        if (handled) {
+            ProfileFault(context, addr, Common::IsWriteError(context),
+                         static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now() - start).count()));
+        }
         return handled;
     }
 
