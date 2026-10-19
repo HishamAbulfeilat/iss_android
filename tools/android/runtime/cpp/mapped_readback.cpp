@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <set>
 #include <tuple>
 #include <utility>
 #include "video_core/renderer_vulkan/vk_common.h"
@@ -30,13 +31,14 @@ struct Settings {
 } EmulatorSettings;
 struct Stats {
     std::atomic<u64> mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
-        mapped_bytes{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
+        mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
 Stats& Readbacks(){static Stats s;return s;}
 bool ReadbackStatsEnabled(){return true;}
 static std::map<VkDeviceMemory,std::vector<u8>> device_memory;
 static bool fail_map=false,fail_invalidate=false;
 static unsigned map_calls=0,invalidations=0,barriers=0;
+static VkDeviceMemory forbidden_memory{};static u64 forbidden_start=0,forbidden_end=0;
 static std::vector<std::string> allocation_events;
 static VKAPI_ATTR VkResult VKAPI_CALL Allocate(VkDevice,const VkMemoryAllocateInfo* info,
     const VkAllocationCallbacks*,VkDeviceMemory* out) {
@@ -61,6 +63,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL Invalidate(VkDevice,uint32_t count,const V
     const auto& r=ranges[0];assert(r.offset%256==0);
     assert(r.size%256==0 || r.offset+r.size==device_memory.at(r.memory).size());
     assert(r.offset+r.size<=device_memory.at(r.memory).size());
+    if(r.memory==forbidden_memory)assert(r.offset>=forbidden_end||r.offset+r.size<=forbidden_start);
     return fail_invalidate?VK_ERROR_MEMORY_MAP_FAILED:VK_SUCCESS;
 }
 static VKAPI_ATTR void VKAPI_CALL Barrier(VkCommandBuffer,const VkDependencyInfo* dep) {
@@ -129,11 +132,23 @@ struct Ranges {
 };
 struct Tracker {
     std::vector<std::pair<VAddr,u64>> ranges;bool gpu=true;unsigned publications=0;
+    std::set<VAddr> coherent_pages;
+    bool IsRegionGpuModified(VAddr a,u64 n){
+        for(auto p=a&~u64{4095};p<a+n;p+=4096)if(!coherent_pages.contains(p))return gpu;
+        return false;
+    }
     template<bool Clear,class F> void ForEachDownloadRange(VAddr query,u64 bytes,F&& f){
         for(auto [a,n]:ranges){const u64 lo=std::max(a,query),hi=std::min(a+n,query+bytes);if(lo<hi)f(lo,hi-lo);}
     }
     template<class P,class W>bool ApplyGpuCopyIf(VAddr a,u64 n,P&& p,W&& w){
-        if(!p())return false;if(gpu){w(a,a+n);++publications;}return true;
+        if(!p())return false;
+        if(gpu){
+            for(auto page=a&~u64{4095};page<a+n;page+=4096){
+                if(coherent_pages.contains(page))continue;
+                w(std::max(a,page),std::min(a+n,page+4096));coherent_pages.insert(page);
+            }
+            ++publications;
+        }return true;
     }
 };
 struct Memory {
@@ -180,6 +195,7 @@ struct BufferCache {
     void ApplyEagerSubtractsLocked(){}
     void FlushMergedWrites(const Buffer*,VAddr,u64){}
     void NoteDeviceWrite(VAddr,u64,u64);
+    void MarkDeferredStale(VAddr,u64,bool);
     bool PrepareMappedReadback(DeferredReadback&,u64,bool=false);
     bool CaptureMappedReadback(DeferredReadback&);
     u64 CollectDownloads(const Buffer*,VAddr,u64,boost::container::small_vector<vk::BufferCopy,8>&);
@@ -194,6 +210,8 @@ struct BufferCache {
 
 int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
+    const bool partial=mode.starts_with("partial_");
+    if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
     if(mode=="currentoff")setenv("TLG_MAPPED_READBACK_CURRENT","0",1);
     if(mode=="dma")EmulatorSettings.dma=true;
@@ -232,6 +250,7 @@ int main(int argc,char** argv) {
     c.resident_ranges.Add({{block,block+1},vk::DeviceMemory{m1},2});
     if(mode!="hole")c.resident_ranges.Add({{block+1,block+2},vk::DeviceMemory{m2},1});
     c.tracker.ranges={{base+0x3ff0,32},{base+0x4100,16}};
+    if(mode=="partial_gap")c.tracker.ranges={{base+0x3000,3*4096}};
     for(auto [a,n]:c.tracker.ranges){c.gpu_modified_ranges.Add(a,n);c.write_ticks.Write(a,n,7);}
     if(mode=="outsidecurrent") {
         c.tracker.ranges.emplace_back(base+0x20000,16);
@@ -291,6 +310,79 @@ int main(int argc,char** argv) {
     if(mode=="readyinvalidatefail")assert(!r->applied && c.deferred_count==1);
     auto joined=c.StartDeferredReadback(base+(mode=="onepage"?0x3ff4:0x4100),4);assert(joined==r);
     if(mapped){assert(r->tick==(current?10u:7u));assert(c.mem.published.empty());assert(!c.CaptureMappedReadback(*r));}
+    if(partial) {
+        assert(r->page_scoped);
+        if(mode=="partial_clean"||mode=="partial_disjoint") {
+            if(mode=="partial_disjoint")c.NoteDeviceWrite(base+0x9000,16,10);
+            assert(c.FinishDeferredReadback(*r,true)&&r->applied&&!r->partial&&!r->stale);
+            assert(c.mem.published.size()==48&&Readbacks().mapped_partial==0);
+            assert(!c.tracker.IsRegionGpuModified(base+0x3ff0,32));return 0;
+        }
+        if(mode=="partial_gap") {
+            c.residency_coherent=false;
+            c.NoteDeviceWrite(base+0x4000,4096,10);c.gpu_modified_ranges.Add(base+0x4000,4096);
+            forbidden_memory=m2;forbidden_start=16384;forbidden_end=16384+4096;
+            assert(c.FinishDeferredReadback(*r,true)&&r->partial);
+            assert(c.mem.published.size()==8192&&invalidations==2);
+            assert(!c.tracker.IsRegionGpuModified(base+0x3000,4096));
+            assert(c.tracker.IsRegionGpuModified(base+0x4000,4096));
+            assert(!c.tracker.IsRegionGpuModified(base+0x5000,4096));
+            assert(Readbacks().mapped_partial_kept==8192&&Readbacks().mapped_partial_retry==4096);
+            for(u64 j=0;j<4096;++j){
+                assert(c.mem.published.at(base+0x3000+j)==device_memory[m1][32768+0x3000+j]);
+                assert(c.mem.published.at(base+0x5000+j)==device_memory[m2][16384+4096+j]);
+            }
+            assert(c.gpu_modified_ranges.intervals.size()==1);
+            assert((c.gpu_modified_ranges.intervals[0]==std::pair{base+0x4000,base+0x5000}));
+            c.mem.published[base+0x3000]=201;forbidden_memory={};
+            auto fresh=c.StartDeferredReadback(base+0x4000,4);assert(fresh&&fresh!=r);
+            assert(c.FinishDeferredReadback(*fresh,true));
+            assert(c.mem.published.size()==12288&&c.mem.published.at(base+0x3000)==201);
+            for(u64 j=0;j<4096;++j)assert(c.mem.published.at(base+0x4000+j)==device_memory[m2][16384+j]);
+            return 0;
+        }
+        const bool whole=mode=="partial_all",cpu=mode=="partial_cpu";
+        if(mode=="partial_noncoherent")c.residency_coherent=false;
+        if(mode=="partial_recheck")c.write_ticks.Write(base+0x4200,4,10);
+        else if(mode=="partial_note")c.NoteDeviceWrite(base+0x4200,4,10);
+        else c.MarkDeferredStale(whole?base:base+0x4200,whole?65536:4,cpu);
+        if(cpu){assert(r->stale);assert(!c.FinishDeferredReadback(*r,true));
+            c.RecoverDeferredReadback(*r);assert(c.mem.published.empty());return 0;}
+        assert(!r->stale);
+        c.gpu_modified_ranges.Add(base+0x4200,4);c.tracker.ranges.emplace_back(base+0x4200,4);
+        if(mode=="partial_inflight") {
+            c.SettleDeferredReadbacks(base,base+65536);
+            assert(r->recovered&&!r->applied&&c.scheduler.sem.waited==0);
+            assert(c.mem.published.empty()&&!c.gpu_modified_ranges.intervals.empty());return 0;
+        }
+        // The invalid page's mapping must never be dereferenced at this older tick.
+        // Poison its spans: reading even one rejected byte fails this regression.
+        for(auto& span:r->mapped_spans)if(span.memory==vk::DeviceMemory{m2})
+            span.source=reinterpret_cast<const u8*>(1);
+        if(whole)for(auto& span:r->mapped_spans)span.source=reinterpret_cast<const u8*>(1);
+        const bool ok=c.FinishDeferredReadback(*r,true);
+        if(whole){assert(!ok&&r->stale&&c.mem.published.empty());
+            c.RecoverDeferredReadback(*r);return 0;}
+        assert(ok&&r->applied&&r->partial&&!r->recovered);
+        assert(c.mem.published.size()==16&&Readbacks().mapped_partial==1);
+        assert(Readbacks().mapped_partial_kept==16&&Readbacks().mapped_partial_retry==32);
+        assert(!c.tracker.IsRegionGpuModified(base+0x3ff0,4));
+        assert(c.tracker.IsRegionGpuModified(base+0x4100,4));
+        for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x3ff0+j)==device_memory[m1][32768+0x3ff0+j]);
+        u64 dirty=0;c.gpu_modified_ranges.ForEachInRange(base,0x80000,[&](VAddr a,VAddr b){
+            assert(a>=base+0x4000);dirty+=b-a;});assert(dirty==36);
+        if(mode=="partial_noncoherent")assert(invalidations==1);
+        // A CPU write to the already coherent page survives the newer page's retry.
+        c.mem.published[base+0x3ff0]=201;
+        c.write_ticks.Write(base+0x4100,16,10);
+        auto fresh=c.StartDeferredReadback(base+0x4100,4);assert(fresh&&fresh!=r);
+        assert(c.FinishDeferredReadback(*fresh,true));
+        assert(c.mem.published.at(base+0x3ff0)==201&&c.mem.published.size()==52);
+        for(u64 j=0;j<4;++j)assert(c.mem.published.at(base+0x4200+j)==device_memory[m2][16384+0x200+j]);
+        assert(c.scheduler.sem.waited==10&&!c.tracker.IsRegionGpuModified(base+0x4100,4));
+        for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x4100+j)==device_memory[m2][16384+0x100+j]);
+        c.PruneDeferredReadbacks();assert(c.deferred_readbacks.empty());return 0;
+    }
     if(mode=="replacement" || mode=="replacement_stage" || mode=="replacement_unrelated") {
         // Exercise the actual prune/recover/recollect path used by ReadMemory's
         // retry. The old pending copy removed two dirty islands; none may be lost.

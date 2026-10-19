@@ -87,7 +87,7 @@ int main(int,char** argv){
  assert(result==expected);
  const bool eligible=mode!="dma"&&mode!="precise"&&mode!="off"&&mode!="globaloff"&&mode!="misaligned"&&mode!="nonbionic";
  assert(q.submitted==unsigned(eligible));
- assert(c.readback_fallbacks==unsigned(eligible&&!expected));
+ assert(c.readback_fallbacks==unsigned(eligible&&!expected&&mode!="non-gpu"));
  if(expected){assert(!c.tracker.gpu&&c.tracker.cpu&&c.scheduler.waits==1&&c.scheduler.signals==1);
   assert(c.texture_cache.resolves==2&&c.texture_cache.invalidations==1&&c.stale_marks==1&&c.settled==1);
   for(unsigned i=0;i<4096;++i)assert(memory.bytes[i]==(i>=64&&i<80?55:7));

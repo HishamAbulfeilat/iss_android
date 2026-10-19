@@ -99,6 +99,7 @@ int main() {
                             method(scheduler, "void Scheduler::FlushHostReadBarrier()"))
         signatures = (
             "bool BufferCache::MappedReadbackPolicy()", "void BufferCache::NoteDeviceWrite(",
+            "void BufferCache::MarkDeferredStale(",
             "bool BufferCache::PrepareMappedReadback(", "bool BufferCache::CaptureMappedReadback(",
             "u64 BufferCache::CollectDownloads(",
             "std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadback(",
@@ -112,7 +113,9 @@ int main() {
                  "stale", "recheck", "disjoint", "outsidecurrent", "inside64current", "onepage",
                  "invalidatefail", "ready", "readyinvalidatefail", "off", "dma", "precise",
                  "currentoff", "currentready", "currentstale", "currentmapfail", "currentnoncoherent",
-                 "replacement", "replacement_stage", "replacement_unrelated")
+                 "replacement", "replacement_stage", "replacement_unrelated",
+                 "partial_neighbor", "partial_note", "partial_recheck", "partial_noncoherent",
+                 "partial_all", "partial_cpu", "partial_inflight", "partial_clean", "partial_disjoint", "partial_gap")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))

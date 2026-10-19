@@ -37,7 +37,7 @@ struct {GpuReadbacksMode mode=GpuReadbacksMode::Relaxed;
     auto GetReadbacksMode() {return mode;}} EmulatorSettings;
 namespace TlgToggle {enum {DeferredReadback}; bool Disabled(int) {return false;}}
 bool ReadbackStatsEnabled() {return false;} s64 NowNs() {return 0;}
-struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{},deferred_retries{},retry_applied{};};
+struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},deferred_retries{},retry_applied{};};
 Counters& Readbacks() {static Counters c;return c;} void ReportReadbacks() {}
 struct Queue {
     std::mutex mutex;std::condition_variable cv;
@@ -85,6 +85,7 @@ struct Semaphore {
 struct Scheduler {Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
 struct Tracker {
     Queue* queue;std::mutex mutex;bool gpu=true,cpu=false;unsigned marks=0;
+    bool IsRegionGpuModified(VAddr,u64){std::lock_guard lock(mutex);return gpu;}
     void MarkRegionAsCpuModified(VAddr,u64) {queue->CheckOwner();cpu=true;++marks;}
     void MarkRegionAsCpuModifiedUnlessGpu(VAddr,u64) {
         // Same per-region locked GPU-bit recheck as production, also safe on guest threads.
@@ -109,19 +110,20 @@ struct Buffer {};
 struct BufferCache {
     struct Copy {u64 srcOffset=0,dstOffset=0,size=16;};
     struct DeferredReadback {
-        bool mapped=false;u64 snapshot_size=0;std::vector<u8> mapped_snapshot;
+        bool mapped=false,page_scoped=false,partial=false;u64 snapshot_size=0;std::vector<u8> mapped_snapshot;
         std::array<u8,16> snapshot;
         struct Staging {u8* mapped;u64 offset=0;void Invalidate() {}} staging;
         VAddr arena_base=0x1000,start=0x1000,end=0x1010;u64 tick=1;
         std::atomic<bool> applied{},recovered{},stale{};std::mutex mutex;
         std::once_flag relaxed_completion;
-        std::vector<Copy> copies{Copy{}};
+        std::vector<Copy> copies{Copy{}},publication_copies,retry_copies;
         DeferredReadback():staging{snapshot.data()} {snapshot.fill(7);}
     };
+    struct Ranges {void Add(VAddr,u64){assert(false);}} gpu_modified_ranges;
     Queue* liverpool;Scheduler scheduler;Tracker* memory_tracker;Memory* memory;
     Buffer arena;std::shared_ptr<DeferredReadback> pending=std::make_shared<DeferredReadback>();
     bool CaptureMappedReadback(DeferredReadback&) {assert(false);return false;}
-    bool empty=false,replace_stale=false,empty_on_retry=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
+    bool empty=false,replace_stale=false,replace_partial=false,empty_on_retry=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
     std::mutex starts_mutex;std::condition_variable starts_cv;
     BufferCache(Queue* q,Tracker* t,Memory* m):liverpool(q),memory_tracker(t),memory(m) {
         scheduler.timeline.queue=q;
@@ -135,7 +137,7 @@ struct BufferCache {
         if(pending->stale && empty_on_retry) {
             empty=true;memory_tracker->gpu=false;memory->bytes.fill(13);
         }
-        if(pending->stale && replace_stale) {
+        if((pending->stale && replace_stale) || (starts && replace_partial && pending->partial)) {
             pending=std::make_shared<DeferredReadback>();pending->tick=2;
             pending->snapshot.fill(11); // fresh GPU generation, not the old copy's bytes
         }
@@ -198,6 +200,25 @@ int main(int argc,char** argv) {
         assert(cache.scheduler.timeline.waiters==0 && memory.publications==0);
         assert(tracker.cpu==(scenario=="ready"));
         assert(tracker.gpu==(scenario=="ready_new_write"));return 0;
+    }
+    if(scenario=="partial_valid" || scenario=="partial_retry") {
+        const bool invalid=scenario=="partial_retry";
+        if(!NATIVE_BIONIC)return 0;
+        cache.pending->mapped=true;cache.pending->partial=true;cache.pending->applied=true;
+        tracker.gpu=invalid;
+        if(!invalid){cache.ReadMemory(0x1000,8,true,false);
+            assert(queue.submitted==1&&tracker.cpu&&memory.publications==0);return 0;}
+        // Start's first completed partial snapshot excluded the requested page.
+        // The next Start returns the newer GPU generation, still incomplete.
+        cache.replace_partial=true;
+        auto fault=std::async(std::launch::async,[&]{cache.ReadMemory(0x1000,8,true,false);});
+        cache.WaitForStarts(2);cache.scheduler.timeline.WaitForGuests(1);
+        queue.SendCommand<true,true>([&]{assert(cache.downloads==0&&memory.publications==0);});
+        assert(fault.wait_for(0s)!=std::future_status::ready);
+        cache.scheduler.timeline.Complete(2);
+        assert(fault.wait_for(3s)==std::future_status::ready);fault.get();
+        assert(cache.starts==2&&cache.downloads==0&&memory.publications==1&&tracker.cpu&&!tracker.gpu);
+        for(u8 b:memory.bytes)assert(b==11);return 0;
     }
     if(scenario=="prepare_accept" || scenario=="prepare_reject" || scenario=="prepare_retry" || scenario=="prepare_exhaust") {
         unsigned proofs=0;
@@ -306,7 +327,7 @@ class RelaxedDeferredTests(unittest.TestCase):
             for case in ("success", "read", "join", "many", "stale", "race", "inline", "empty",
                          "disabled", "off", "hot", "precise", "ready", "ready_new_write",
                          "retry", "retry_join", "retry_off", "retry_empty", "obsolete", "recovered",
-                         "prepare_accept", "prepare_reject", "prepare_retry", "prepare_exhaust"):
+                         "prepare_accept", "prepare_reject", "prepare_retry", "prepare_exhaust", "partial_valid", "partial_retry"):
                 with self.subTest(bionic=bionic, case=case):
                     result = subprocess.run([str(binary), case], capture_output=True,
                                             text=True, timeout=10)

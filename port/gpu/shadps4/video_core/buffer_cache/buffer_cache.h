@@ -226,10 +226,10 @@ private:
     /// and submits it; the guest thread that faulted waits for that copy (not for the whole GPU
     /// to go idle) and writes it back and unmarks it itself. Guest threads touching the same
     /// memory meanwhile wait for the same copy. A GPU write to the memory before the copy is
-    /// applied marks it stale (before the memory is marked GPU modified again, see
-    /// MemoryTracker::ApplyGpuCopyIf), and so does a CPU write without a fault (CpuWriteMerge):
-    /// then the guest falls back to the old download. From shadPS4-Infamous-FixBuild ee423726
-    /// and 2d2511fe.
+    /// applied invalidates its copied pages. Native Relaxed mapped reads can publish the
+    /// unaffected pages; staging and CPU writes without a fault invalidate the full snapshot.
+    /// Invalidation precedes GPU protection (MemoryTracker::ApplyGpuCopyIf); an invalid
+    /// requested page retries or falls back. From shadPS4-Infamous-FixBuild ee423726/2d2511fe.
     struct DeferredReadback {
         struct MappedSpan {
             vk::DeviceMemory memory;
@@ -237,6 +237,11 @@ private:
             const u8* source;
         };
         bool mapped = false;
+        // Native Relaxed mapping: GPU writes invalidate individual 4-KiB pages.
+        // The owner alone mutates these fields; applied's release/acquire publishes partial.
+        bool page_scoped = false, partial = false;
+        IntervalList<> invalid_pages;
+        boost::container::small_vector<vk::BufferCopy, 8> publication_copies, retry_copies;
         u64 snapshot_size = 0;
         std::vector<MappedSpan> mapped_spans;
         std::vector<u8> mapped_snapshot;
