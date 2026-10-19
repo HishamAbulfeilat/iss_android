@@ -14,6 +14,7 @@
 #include <tuple>
 #include <boost/container/small_vector.hpp>
 #include "tlg_toggles.h"
+#include "common/arch.h"
 #include "common/assert.h"
 #include "common/spin_lock.h"
 #include "common/debug.h"
