@@ -461,8 +461,11 @@ extern "C" int tlggpu_cpu_write(void* dst, const void* src, int fill, uint64_t s
     auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
     if (rasterizer && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+        const auto address = reinterpret_cast<VAddr>(dst);
+        // The tracker indexes only the guest 40-bit VA space. Validate before querying it.
+        if (!size || address >= (1ULL << 40) || size > (1ULL << 40) - address) return 0;
         // Most libc writes are ordinary RAM. Avoid a thread-id syscall for those.
-        if (!rasterizer->GetBufferCache().IsRegionGpuModified(reinterpret_cast<VAddr>(dst), size)) return 0;
+        if (!rasterizer->GetBufferCache().IsRegionGpuModified(address, size)) return 0;
         if (rasterizer->IsGpuSideThread() || !runtime_memory_cpu_write_can_queue()) return 0;
     }
 #endif

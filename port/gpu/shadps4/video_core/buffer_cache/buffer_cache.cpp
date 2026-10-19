@@ -1575,6 +1575,7 @@ bool BufferCache::CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64
 }
 
 bool BufferCache::CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size) {
+    if (!size || dst >= (1ULL << 40) || size > (1ULL << 40) - dst) return false;
     static const bool enabled = [] {
         const char* e = std::getenv("TLG_WRITE_MERGE");
         return e && *e == '1';

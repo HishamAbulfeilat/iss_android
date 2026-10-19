@@ -94,7 +94,7 @@ enum class GpuReadbacksMode{Relaxed,Precise};
 struct {GpuReadbacksMode GetReadbacksMode(){return GpuReadbacksMode::Relaxed;}}EmulatorSettings;
 bool can_queue=true;int queue_checks=0;
 int runtime_memory_cpu_write_can_queue(){++queue_checks;return can_queue;}
-struct Cache{bool dirty=true;int merges=0;bool IsRegionGpuModified(VAddr,uint64_t){return dirty;}
+struct Cache{bool dirty=true;int merges=0,queries=0;bool IsRegionGpuModified(VAddr,uint64_t){++queries;return dirty;}
  bool CpuWriteMerge(VAddr,const void*,int,uint64_t){++merges;return true;}};
 struct Raster{Cache cache;bool owner=false;int owner_checks=0;Cache& GetBufferCache(){return cache;}
  bool IsGpuSideThread(){++owner_checks;return owner;}};
@@ -103,6 +103,10 @@ namespace Core {struct Memory{Raster* raster=nullptr;static Memory* Instance(){s
 // METHOD
 int main(int,char**){
  assert(!tlggpu_cpu_write(nullptr,nullptr,0,64));Raster r;Core::Memory::Instance()->raster=&r;
+ assert(!tlggpu_cpu_write(reinterpret_cast<void*>(UINT64_MAX-31),nullptr,0,64));
+ assert(!tlggpu_cpu_write(reinterpret_cast<void*>(1ULL<<40),nullptr,0,64));
+ assert(!tlggpu_cpu_write(reinterpret_cast<void*>((1ULL<<40)-32),nullptr,0,64));
+ assert(!tlggpu_cpu_write(nullptr,nullptr,0,0));assert(r.cache.queries==0);
  r.cache.dirty=false;assert(!tlggpu_cpu_write(nullptr,nullptr,0,64));assert(!r.owner_checks&&!queue_checks);
  r.cache.dirty=true;r.owner=true;assert(!tlggpu_cpu_write(nullptr,nullptr,0,64));assert(!queue_checks);
  r.owner=false;can_queue=false;assert(!tlggpu_cpu_write(nullptr,nullptr,0,64));assert(!r.cache.merges);
