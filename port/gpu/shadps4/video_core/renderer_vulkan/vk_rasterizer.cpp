@@ -1489,6 +1489,12 @@ void Rasterizer::SubmitIfWorkPiledUp(const RenderState& next_state) {
         const char* env = std::getenv("TLG_SUBMIT_DRAWS");
         return env && *env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 1024u;
     }();
+    // Do not cut a batch immediately before the existing draw-limit submission:
+    // that would add an empty second command buffer instead of parallel work.
+    if ((limit == 0 || scheduler.WorkSinceSubmit() < limit) &&
+        !FrameRecord::IsRecording() && !FrameCapture::Active()) {
+        scheduler.SplitRecordingAtBoundary(next_state);
+    }
     if (limit == 0 || scheduler.WorkSinceSubmit() < limit ||
         !scheduler.WillBeginRendering(next_state)) {
         return;

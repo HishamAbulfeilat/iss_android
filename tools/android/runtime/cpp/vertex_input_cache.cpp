@@ -85,6 +85,7 @@ struct Scheduler {
     void RecordVertexInput(std::span<const vk::VertexInputBindingDescription2EXT>,
                            std::span<const vk::VertexInputAttributeDescription2EXT>);
     void AllocateWorkerCommandBuffers();
+    void BeginParallelBatch() {}
     // PRODUCTION_INLINE_METHODS
 };
 struct Rasterizer {

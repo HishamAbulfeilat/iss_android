@@ -24,8 +24,9 @@ inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
 inline std::atomic<std::uint64_t> descriptor_template_calls{0}, descriptor_template_bytes{0},
     descriptor_legacy_calls{0};
 inline std::atomic<std::uint64_t> vertex_input_issued{0}, vertex_input_skipped{0};
-enum class Thread : unsigned { Command, Draw, Recorder };
-inline std::array<std::atomic<int>, 3> thread_clocks{-1, -1, -1};
+inline std::atomic<std::uint64_t> parallel_batches{0}, parallel_splits{0};
+enum class Thread : unsigned { Command, Draw, Recorder, Recorder2 };
+inline std::array<std::atomic<int>, 4> thread_clocks{-1, -1, -1, -1};
 
 inline bool Enabled() {
 #ifdef ISS_ANDROID_BIONIC
@@ -60,6 +61,13 @@ inline std::array<std::uint64_t, 4> CpuTimes() {
         if (clock != -1 && clock_gettime(clock, &time) == 0) {
             result[i] = std::uint64_t(time.tv_sec) * 1000000000ull + time.tv_nsec;
         }
+    }
+#endif
+#ifdef ISS_ANDROID_BIONIC
+    const auto second = thread_clocks[static_cast<unsigned>(Thread::Recorder2)].load(std::memory_order_acquire);
+    timespec extra{};
+    if (second != -1 && clock_gettime(second, &extra) == 0) {
+        result[2] += std::uint64_t(extra.tv_sec) * 1000000000ull + extra.tv_nsec;
     }
 #endif
     return result;
@@ -140,6 +148,14 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
     std::printf("BionicVertexInput: issued=%llu skipped=%llu\n",
                 static_cast<unsigned long long>(vertex_input_issued.exchange(0)),
                 static_cast<unsigned long long>(vertex_input_skipped.exchange(0)));
+    const auto batches = parallel_batches.exchange(0);
+    const auto splits = parallel_splits.exchange(0);
+    if (batches) {
+        std::printf("BionicParallelRecording: batches=%llu split=%llu command_buffers=%llu\n",
+                    static_cast<unsigned long long>(batches),
+                    static_cast<unsigned long long>(splits),
+                    static_cast<unsigned long long>(batches + splits));
+    }
     std::fflush(stdout);
     start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;
     return true;

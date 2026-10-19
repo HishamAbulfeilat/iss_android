@@ -26,6 +26,7 @@ PREAMBLE = r'''
 #include <mutex>
 #include <queue>
 #include <source_location>
+#include <span>
 #include <string>
 #include <vector>
 #include "iss_bionic_perf.h"
@@ -55,7 +56,7 @@ struct SubmitInfo {
 }
 struct Driver {
     u64 submitted=0, completed=0, queries=0, waits=0, max_backlog=0;
-    bool finish_batch=true;
+    bool finish_batch=true;unsigned buffers_last=0;
     std::pair<vk::Result,u64> getSemaphoreCounterValue(vk::Semaphore) {
         ++queries;
         return {vk::Result::eSuccess,completed};
@@ -68,6 +69,8 @@ struct Driver {
     }
     vk::Result submit(const vk::SubmitInfo& info,vk::Fence) {
         assert(info.signalSemaphoreCount==1);
+        assert(info.commandBufferCount==1 || info.commandBufferCount==2);
+        buffers_last=info.commandBufferCount;
         assert(*info.pNext->pSignalSemaphoreValues==submitted+1);
         submitted=*info.pNext->pSignalSemaphoreValues;
         max_backlog=std::max(max_backlog,submitted-completed);
@@ -126,6 +129,10 @@ struct Scheduler {
     void SyncRecording() {}
     void WaitHostCopies() {}
     void FlushHostReadBarrier() {}
+    bool parallel=false;std::array<vk::CommandBuffer,2> batch_buffers;
+    std::span<const vk::CommandBuffer> EndRecordingBuffers() {
+        current_cmdbuf.end();return {batch_buffers.data(),parallel ? 2u : 1u};
+    }
     void AllocateWorkerCommandBuffers() {++allocations;}
     void SubmitExecution(SubmitInfo&);
     void PopPendingOperations();
@@ -156,7 +163,10 @@ int main(int argc,char**) {
     assert(driver.queries==0 && callbacks.empty());
     Vulkan::SubmitInfo info{};scheduler.SubmitExecution(info);
     assert(driver.queries==1 && callbacks.size()==1 && callbacks[0]>=1);
-    for(unsigned i=9;i<800;++i) {Vulkan::SubmitInfo next{};scheduler.SubmitExecution(next);}
+    for(unsigned i=9;i<800;++i) {
+        scheduler.parallel=i%2;Vulkan::SubmitInfo next{};scheduler.SubmitExecution(next);
+        assert(driver.buffers_last==(scheduler.parallel ? 2u : 1u));
+    }
     assert(driver.queries<110 && driver.waits==0 && driver.submitted==800);
     assert(driver.max_backlog<=8 && scheduler.allocations==800);
 

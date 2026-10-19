@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/host_copy_sources.h"
 #include "video_core/renderer_vulkan/vertex_input_state.h"
+#include "video_core/renderer_vulkan/parallel_record_queue.h"
 
 namespace tracy {
 class VkCtxScope;
@@ -714,6 +715,9 @@ public:
     /// Ends current rendering scope.
     void EndRendering();
 
+    /// Called before any bindings/dynamic state of the next draw are emitted.
+    void SplitRecordingAtBoundary(const RenderState& next_state);
+
     /// tlg: TLG_FULL_BARRIERS=1 records a full memory barrier around every render pass and
     /// every compute dispatch, to tell a missing barrier from everything else.
     static bool FullBarriers();
@@ -869,8 +873,10 @@ public:
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
-        Record([copy = std::forward<Func>(copy), this,
+        CheckOwner(__builtin_return_address(0));
+        Record([copy = std::forward<Func>(copy), this, lane = parallel_lane,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
+            WaitRecordingPrefix(lane);
             copy();
             host_copies_done.store(seq, std::memory_order_release);
         });
@@ -955,6 +961,13 @@ private:
     std::unique_ptr<RecordChunk> AcquireChunk();
 
     void RecorderThread(std::stop_token stoken);
+    void HandOverParallel();
+    void SplitRecording();
+    void WaitRecordingPrefix(unsigned lane) {
+        if (parallel_recording) parallel_recording->WaitPrefix(lane);
+    }
+    void BeginParallelBatch();
+    std::span<const vk::CommandBuffer> EndRecordingBuffers();
 
     void SubmitExecution(SubmitInfo& info);
 
@@ -964,6 +977,12 @@ private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    std::unique_ptr<CommandPool> parallel_pool;
+    std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
+    unsigned parallel_lane = 0;
+    size_t parallel_bytes = 0;
+    size_t parallel_target = 256 * 1024;
+    std::array<vk::CommandBuffer, 2> submission_buffers{};
     DynamicState dynamic_state;
     bool host_read_barrier = false;
     vk::PipelineStageFlags2 host_read_src_stages{};
