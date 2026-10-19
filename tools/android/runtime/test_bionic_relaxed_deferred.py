@@ -37,7 +37,7 @@ struct {GpuReadbacksMode mode=GpuReadbacksMode::Relaxed;
     auto GetReadbacksMode() {return mode;}} EmulatorSettings;
 namespace TlgToggle {enum {DeferredReadback}; bool Disabled(int) {return false;}}
 bool ReadbackStatsEnabled() {return false;} s64 NowNs() {return 0;}
-struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{};};
+struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{};};
 Counters& Readbacks() {static Counters c;return c;} void ReportReadbacks() {}
 struct Queue {
     std::mutex mutex;std::condition_variable cv;
@@ -109,6 +109,7 @@ struct Buffer {};
 struct BufferCache {
     struct Copy {u64 srcOffset=0,dstOffset=0,size=16;};
     struct DeferredReadback {
+        bool mapped=false;u64 snapshot_size=0;std::vector<u8> mapped_snapshot;
         std::array<u8,16> snapshot;
         struct Staging {u8* mapped;u64 offset=0;void Invalidate() {}} staging;
         VAddr arena_base=0x1000,start=0x1000,end=0x1010;u64 tick=1;
@@ -119,6 +120,7 @@ struct BufferCache {
     };
     Queue* liverpool;Scheduler scheduler;Tracker* memory_tracker;Memory* memory;
     Buffer arena;std::shared_ptr<DeferredReadback> pending=std::make_shared<DeferredReadback>();
+    bool CaptureMappedReadback(DeferredReadback&) {assert(false);return false;}
     bool empty=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
     std::mutex starts_mutex;std::condition_variable starts_cv;
     BufferCache(Queue* q,Tracker* t,Memory* m):liverpool(q),memory_tracker(t),memory(m) {

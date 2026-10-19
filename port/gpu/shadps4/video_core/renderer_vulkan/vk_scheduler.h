@@ -683,6 +683,10 @@ public:
     /// and increments the scheduler timeline semaphore.
     void Flush();
 
+    /// An arena write needs device-to-host visibility at this submission's completion.
+    void RequireHostReadBarrier() { host_read_barrier = true; }
+    void FlushHostReadBarrier();
+
     /// Sends the current execution context to the GPU and waits for it to complete.
     void Finish(std::source_location caller = std::source_location::current());
 
@@ -955,6 +959,7 @@ private:
     Semaphore work_semaphore;
     CommandPool command_pool;
     DynamicState dynamic_state;
+    bool host_read_barrier = false;
     VertexInputState vertex_input_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;

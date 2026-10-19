@@ -919,6 +919,11 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         memo = {range.resource, range.range_start, range.range_end, access_epoch, u32(access)};
     };
     if (src_access & WRITE_MASK) {
+        if (buffer_write_hook && size && handle->mem_type == VideoCore::MemoryType::Sparse) {
+            buffer_write_hook(buffer_write_context, handle->cpu_addr + offset, size,
+                              scheduler.CurrentTick());
+            scheduler.RequireHostReadBarrier();
+        }
         insert(Access::Write);
     }
     if (src_access & READ_MASK) {

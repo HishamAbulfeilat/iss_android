@@ -579,6 +579,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
+    FlushHostReadBarrier();
     Check(current_cmdbuf.end());
 
     const vk::Semaphore timeline = work_semaphore.Handle();
@@ -622,6 +623,19 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     // Apply pending operations
     PopPendingOperations();
+}
+
+void Scheduler::FlushHostReadBarrier() {
+    if (!std::exchange(host_read_barrier, false)) return;
+    const vk::MemoryBarrier2 barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+        .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+    };
+    current_cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .memoryBarrierCount = 1, .pMemoryBarriers = &barrier,
+    });
 }
 
 void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {

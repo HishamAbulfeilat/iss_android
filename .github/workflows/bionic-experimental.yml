@@ -63,6 +63,11 @@ jobs:
         run: |
           VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
             python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_vertex_input.py' -v
+      - name: Validate mapped readback against the pinned Vulkan-Headers
+        shell: bash -el {0}
+        run: |
+          VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
+            python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_mapped_readback.py' -v
       - name: Stage pinned StevenMXZ Turnip Gen8 V37 Patched
         shell: bash -el {0}
         run: |

@@ -22,6 +22,7 @@
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
 #include "video_core/buffer_cache/readback_copy_pages.h"
+#include "video_core/buffer_cache/write_tick_tracker.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
@@ -222,6 +223,15 @@ private:
     /// then the guest falls back to the old download. From shadPS4-Infamous-FixBuild ee423726
     /// and 2d2511fe.
     struct DeferredReadback {
+        struct MappedSpan {
+            vk::DeviceMemory memory;
+            u64 offset, size, destination;
+            const u8* source;
+        };
+        bool mapped = false;
+        u64 snapshot_size = 0;
+        std::vector<MappedSpan> mapped_spans;
+        std::vector<u8> mapped_snapshot;
         Vulkan::StagingBufferRef staging;
         /// Source offsets into the arena, destination offsets into the staging buffer.
         boost::container::small_vector<vk::BufferCopy, 8> copies;
@@ -265,6 +275,10 @@ private:
     void SettleDeferredReadbacks(VAddr start, VAddr end);
     /// Recovers stale copies and frees the staging memory of finished ones. GPU-side threads.
     void PruneDeferredReadbacks();
+    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes);
+    bool CaptureMappedReadback(DeferredReadback& readback);
+    static bool MappedReadbackPolicy();
+    void NoteDeviceWrite(VAddr address, u64 size, u64 tick);
     /// Marks the copies in flight overlapping a range stale. `cpu`: a guest thread is about to
     /// write the memory without a fault, so an apply in progress is waited for. Any thread.
     void MarkDeferredStale(VAddr addr, u64 size, bool cpu);
@@ -337,6 +351,16 @@ private:
     vk::DeviceMemory residency_chunk{};
     u64 residency_chunk_used{};
     u64 residency_allocations{};
+
+    struct ResidencyMapping {
+        u64 size = 0;
+        const u8* data = nullptr;
+        bool failed = false;
+    };
+    std::map<vk::DeviceMemory, ResidencyMapping> residency_mappings;
+    WriteTickTracker write_ticks;
+    bool mapped_readbacks_enabled = false;
+    bool residency_coherent = false;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

@@ -125,6 +125,7 @@ struct Scheduler {
     void EndRendering() {}
     void SyncRecording() {}
     void WaitHostCopies() {}
+    void FlushHostReadBarrier() {}
     void AllocateWorkerCommandBuffers() {++allocations;}
     void SubmitExecution(SubmitInfo&);
     void PopPendingOperations();

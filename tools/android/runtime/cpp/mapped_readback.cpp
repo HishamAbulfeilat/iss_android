@@ -1,0 +1,298 @@
+// Real buffer-cache readback methods and real Vulkan-Hpp, with delayed device completion.
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <cstring>
+#include <cstdlib>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include "video_core/renderer_vulkan/vk_common.h"
+#include "common/interval_set.h"
+#include "video_core/buffer_cache/readback_copy_pages.h"
+#include "video_core/buffer_cache/write_tick_tracker.h"
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+using u8=uint8_t; using u32=uint32_t; using u64=uint64_t; using VAddr=u64;
+namespace boost::container {template<class T,size_t N> using small_vector=std::vector<T>;}
+namespace Common {
+template<class T> T AlignDown(T x,T a){return x/a*a;}
+template<class T> T AlignUp(T x,T a){return (x+a-1)/a*a;}
+}
+enum class GpuReadbacksMode {Disabled,Relaxed,Precise};
+struct Settings {
+    GpuReadbacksMode mode=GpuReadbacksMode::Relaxed; bool dma=false;
+    auto GetReadbacksMode(){return mode;}
+    bool IsDirectMemoryAccessEnabled(){return dma;}
+} EmulatorSettings;
+struct Stats {
+    std::atomic<u64> mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
+        mapped_bytes{},mapped_stale{},joined{},deferred{},deferred_bytes{};
+};
+Stats& Readbacks(){static Stats s;return s;}
+bool ReadbackStatsEnabled(){return true;}
+static std::map<VkDeviceMemory,std::vector<u8>> device_memory;
+static bool fail_map=false,fail_invalidate=false;
+static unsigned map_calls=0,invalidations=0,barriers=0;
+static std::vector<std::string> allocation_events;
+static VKAPI_ATTR VkResult VKAPI_CALL Allocate(VkDevice,const VkMemoryAllocateInfo* info,
+    const VkAllocationCallbacks*,VkDeviceMemory* out) {
+    assert(info->memoryTypeIndex==2 && info->allocationSize==(256ull<<20));
+    *out=reinterpret_cast<VkDeviceMemory>(3);allocation_events.push_back("allocate");return VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL Unmap(VkDevice,VkDeviceMemory memory) {
+    assert(memory==reinterpret_cast<VkDeviceMemory>(3));allocation_events.push_back("unmap");
+}
+static VKAPI_ATTR void VKAPI_CALL Free(VkDevice,VkDeviceMemory memory,const VkAllocationCallbacks*) {
+    assert(memory==reinterpret_cast<VkDeviceMemory>(3));allocation_events.push_back("free");
+}
+#define LOG_WARNING(...) ((void)0)
+static VKAPI_ATTR VkResult VKAPI_CALL Map(VkDevice,VkDeviceMemory memory,VkDeviceSize offset,
+    VkDeviceSize size,VkMemoryMapFlags,void** out) {
+    ++map_calls;assert(offset==0 && size==VK_WHOLE_SIZE);
+    if(fail_map && memory==reinterpret_cast<VkDeviceMemory>(2))return VK_ERROR_MEMORY_MAP_FAILED;
+    *out=device_memory.at(memory).data();return VK_SUCCESS;
+}
+static VKAPI_ATTR VkResult VKAPI_CALL Invalidate(VkDevice,uint32_t count,const VkMappedMemoryRange* ranges) {
+    ++invalidations;assert(count==1);
+    const auto& r=ranges[0];assert(r.offset%256==0);
+    assert(r.size%256==0 || r.offset+r.size==device_memory.at(r.memory).size());
+    assert(r.offset+r.size<=device_memory.at(r.memory).size());
+    return fail_invalidate?VK_ERROR_MEMORY_MAP_FAILED:VK_SUCCESS;
+}
+static VKAPI_ATTR void VKAPI_CALL Barrier(VkCommandBuffer,const VkDependencyInfo* dep) {
+    ++barriers;assert(dep->memoryBarrierCount==1);
+    const auto& b=dep->pMemoryBarriers[0];
+    assert(b.srcStageMask==VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+    assert(b.srcAccessMask==VK_ACCESS_2_MEMORY_WRITE_BIT);
+    assert(b.dstStageMask==VK_PIPELINE_STAGE_2_HOST_BIT);
+    assert(b.dstAccessMask==VK_ACCESS_2_HOST_READ_BIT);
+}
+namespace Vulkan {
+template<class T>auto Check(T result){assert(result.result==vk::Result::eSuccess);return result.value;}
+struct Instance {
+    vk::Device GetDevice()const{return vk::Device{reinterpret_cast<VkDevice>(1)};}
+    u64 NonCoherentAtomSize()const{return 256;}
+};
+struct Semaphore {
+    u64 completed=5,waited=0;
+    bool IsFree(u64 tick)const{return completed>=tick;}
+    void Wait(u64 tick){assert(tick<=10);waited=tick;completed=std::max(completed,tick);}
+};
+struct Scheduler {
+    Semaphore sem;u64 current=10;unsigned flushes=0;
+    bool host_read_barrier=false;
+    vk::CommandBuffer current_cmdbuf{reinterpret_cast<VkCommandBuffer>(1)};
+    u64 CurrentTick()const{return current;}
+    auto* GetWorkSemaphore(){return &sem;}
+    void Flush(){++flushes;sem.completed=current++;}
+    void FlushHostReadBarrier();
+    void RequireHostReadBarrier(){host_read_barrier=true;}
+};
+struct StagingBufferRef {
+    std::vector<u8>* storage=nullptr;u8* mapped=nullptr;u64 offset=128;void* buffer=nullptr;
+    void Invalidate()const{}
+};
+// PRODUCTION_SCHEDULER
+}
+namespace VideoCore {
+constexpr u64 RESIDENCY_CHUNK_SIZE=256ull<<20;
+enum class MemoryType {Sparse,HostCached};
+struct Buffer {VAddr cpu_addr=0x10000000;u64 size_bytes=0x80000;};
+struct Ranges {
+    std::vector<std::pair<VAddr,VAddr>> intervals;
+    void Normalize(){
+        std::sort(intervals.begin(),intervals.end());
+        std::vector<std::pair<VAddr,VAddr>> merged;
+        for(auto [a,b]:intervals){
+            if(!merged.empty() && merged.back().second>=a)merged.back().second=std::max(merged.back().second,b);
+            else merged.emplace_back(a,b);
+        }
+        intervals=std::move(merged);
+    }
+    void Add(VAddr start,u64 size){intervals.emplace_back(start,start+size);Normalize();}
+    void Subtract(VAddr start,u64 size) {
+        auto old=std::exchange(intervals,{});
+        for(auto [a,b]:old) {
+            if(b<=start || start+size<=a)intervals.emplace_back(a,b);
+            else {if(a<start)intervals.emplace_back(a,start);if(start+size<b)intervals.emplace_back(start+size,b);}
+        }
+        Normalize();
+    }
+    template<class F>void ForEachInRange(VAddr a,u64 size,F&& f)const {
+        for(auto [lo,hi]:intervals)if(lo<a+size && a<hi)f(std::max(a,lo),std::min(a+size,hi));
+    }
+};
+struct Tracker {
+    std::vector<std::pair<VAddr,u64>> ranges;bool gpu=true;unsigned publications=0;
+    template<bool Clear,class F> void ForEachDownloadRange(VAddr query,u64 bytes,F&& f){
+        for(auto [a,n]:ranges){const u64 lo=std::max(a,query),hi=std::min(a+n,query+bytes);if(lo<hi)f(lo,hi-lo);}
+    }
+    template<class P,class W>bool ApplyGpuCopyIf(VAddr a,u64 n,P&& p,W&& w){
+        if(!p())return false;if(gpu){w(a,a+n);++publications;}return true;
+    }
+};
+struct Memory {
+    std::map<VAddr,u8> published;
+    bool TryWriteBacking(void* dest,const void* source,u64 size){
+        auto a=reinterpret_cast<uintptr_t>(dest);const auto* b=static_cast<const u8*>(source);
+        for(u64 i=0;i<size;++i)published[a+i]=b[i];return true;
+    }
+};
+struct Pool {
+    std::vector<u8> data;unsigned allocations=0,freed=0;
+    Vulkan::StagingBufferRef Request(u64 bytes,MemoryType,int,bool){
+        ++allocations;data.resize(bytes+128);std::fill(data.begin(),data.end(),77);
+        return {&data,data.data()+128,128,reinterpret_cast<void*>(1)};
+    }
+    void FreeDeferred(const Vulkan::StagingBufferRef& s){assert(s.buffer);++freed;}
+};
+struct Runtime {
+    unsigned copies=0;
+    template<class Copies>void CopyBuffer(const Buffer*,void*,const Copies&){++copies;}
+};
+struct BufferCache {
+    // PRODUCTION_READBACK_TYPE
+    // PRODUCTION_MAPPING_TYPE
+    // PRODUCTION_BACKING_TYPE
+    // PRODUCTION_ATTEMPT_TYPE
+    Vulkan::Instance instance;Vulkan::Scheduler scheduler;Runtime runtime;Pool staging_pool;
+    Tracker tracker;Tracker* memory_tracker=&tracker;Memory mem;Memory* memory=&mem;
+    Buffer arena;Ranges gpu_modified_ranges;IntervalList<Backing> resident_ranges;
+    WriteTickTracker write_ticks;
+    std::map<vk::DeviceMemory,ResidencyMapping> residency_mappings;
+    bool mapped_readbacks_enabled=true,residency_coherent=true;
+    u32 block_shift=14;
+    u32 arena_memory_type_index=2;
+    vk::DeviceMemory residency_chunk{};u64 residency_chunk_used=0,residency_allocations=0;
+    std::optional<std::pair<vk::DeviceMemory,u64>> AllocateResidency(u64,ResidencyAttempt&);
+    void UndoResidency(const ResidencyAttempt&);
+    std::mutex deferred_mutex,eager_mutex;
+    std::vector<std::shared_ptr<DeferredReadback>> deferred_readbacks;
+    std::atomic<u32> deferred_count{},eager_count{};
+    static bool DeferredReadbackEnabled(){return true;}
+    static bool MappedReadbackPolicy();
+    auto GetReadbackWindow(VAddr,u64){return std::tuple{&arena,arena.cpu_addr,arena.cpu_addr+0x80000};}
+    void ApplyEagerSubtractsLocked(){}
+    void FlushMergedWrites(const Buffer*,VAddr,u64){}
+    void NoteDeviceWrite(VAddr,u64,u64);
+    bool PrepareMappedReadback(DeferredReadback&,u64);
+    bool CaptureMappedReadback(DeferredReadback&);
+    u64 CollectDownloads(const Buffer*,VAddr,u64,boost::container::small_vector<vk::BufferCopy,8>&);
+    std::shared_ptr<DeferredReadback> StartDeferredReadback(VAddr,u64);
+    bool FinishDeferredReadback(DeferredReadback&,bool);
+    void RecoverDeferredReadback(DeferredReadback&);
+    void SettleDeferredReadbacks(VAddr,VAddr);
+    void PruneDeferredReadbacks();
+};
+// PRODUCTION_BUFFER_METHODS
+} // namespace VideoCore
+
+int main(int argc,char** argv) {
+    const std::string mode=argc>1?argv[1]:"coherent";
+    if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
+    if(mode=="dma")EmulatorSettings.dma=true;
+    if(mode=="precise")EmulatorSettings.mode=GpuReadbacksMode::Precise;
+    const bool policy=VideoCore::BufferCache::MappedReadbackPolicy();
+    if(mode=="off" || mode=="dma" || mode=="precise" || mode=="nonbionic"){
+        assert(!policy);return 0;
+    }
+    assert(policy);
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkMapMemory=Map;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkInvalidateMappedMemoryRanges=Invalidate;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier2=Barrier;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkAllocateMemory=Allocate;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkUnmapMemory=Unmap;
+    VULKAN_HPP_DEFAULT_DISPATCHER.vkFreeMemory=Free;
+    VideoCore::BufferCache c;const VAddr base=c.arena.cpu_addr;
+    {
+        VideoCore::BufferCache::ResidencyAttempt attempt{};
+        auto memory=c.AllocateResidency(16384,attempt);assert(memory && memory->second==0);
+        auto& mapping=c.residency_mappings.at(memory->first);
+        assert(mapping.size==(256ull<<20) && !mapping.data && !mapping.failed);
+        mapping.data=reinterpret_cast<const u8*>(1); // cleanup must unmap before free/erase
+        c.UndoResidency(attempt);
+        assert(c.residency_mappings.empty() && c.residency_allocations==0 && !c.residency_chunk);
+        assert((allocation_events==std::vector<std::string>{"allocate","unmap","free"}));
+    }
+    c.scheduler.FlushHostReadBarrier();assert(barriers==0);
+    c.scheduler.RequireHostReadBarrier();c.scheduler.RequireHostReadBarrier();
+    c.scheduler.FlushHostReadBarrier();c.scheduler.FlushHostReadBarrier();assert(barriers==1);
+    const auto m1=reinterpret_cast<VkDeviceMemory>(1),m2=reinterpret_cast<VkDeviceMemory>(2);
+    device_memory[m1].resize(65536);device_memory[m2].resize(65536);
+    for(size_t i=0;i<65536;++i){device_memory[m1][i]=u8(i*3+17);device_memory[m2][i]=u8(i*7+31);}
+    c.residency_mappings[vk::DeviceMemory{m1}]={.size=65536};
+    c.residency_mappings[vk::DeviceMemory{m2}]={.size=65536};
+    const u64 block=base>>14;
+    c.resident_ranges.Add({{block,block+1},vk::DeviceMemory{m1},2});
+    if(mode!="hole")c.resident_ranges.Add({{block+1,block+2},vk::DeviceMemory{m2},1});
+    c.tracker.ranges={{base+0x3ff0,32},{base+0x4100,16}};
+    for(auto [a,n]:c.tracker.ranges){c.gpu_modified_ranges.Add(a,n);c.write_ticks.Write(a,n,7);}
+    if(mode=="outsidecurrent") {
+        c.tracker.ranges.emplace_back(base+0x20000,16);
+        c.gpu_modified_ranges.Add(base+0x20000,16);
+        c.write_ticks.Write(base+0x20000,16,10);
+    }
+    if(mode=="inside64current" || mode=="onepage") {
+        c.tracker.ranges.emplace_back(base+0x9000,16);
+        c.gpu_modified_ranges.Add(base+0x9000,16);
+        c.write_ticks.Write(base+0x9000,16,10);
+    }
+    if(mode=="current")c.write_ticks.Write(base+0x3ff0,32,10);
+    if(mode=="unknown")c.write_ticks=VideoCore::WriteTickTracker{};
+    if(mode=="mapfail")fail_map=true;
+    if(mode=="noncoherent" || mode=="invalidatefail")c.residency_coherent=false;
+    if(mode=="invalidatefail")fail_invalidate=true;
+    const u64 required_size=(mode=="inside64current" || mode=="hole" || mode=="mapfail")?32:4;
+    auto r=c.StartDeferredReadback(base+0x3ff0,required_size);assert(r);
+    const bool mapped=mode!="current" && mode!="unknown" && mode!="hole" && mode!="mapfail";
+    assert(r->mapped==mapped);
+    if(mode=="outsidecurrent") {
+        assert(r->start==base && r->end==base+65536);
+        assert(c.gpu_modified_ranges.intervals.size()==1);
+        assert(c.gpu_modified_ranges.intervals[0].first==base+0x20000);
+    }
+    if(mode=="inside64current") {
+        assert(r->start==base+0x3000 && r->end==base+0x5000);
+        assert(c.gpu_modified_ranges.intervals.size()==1);
+        assert(c.gpu_modified_ranges.intervals[0].first==base+0x9000);
+    }
+    if(mode=="onepage")assert(r->start==base+0x3000 && r->end==base+0x4000);
+    assert(c.runtime.copies==(mapped?0u:1u));
+    assert(c.scheduler.flushes==(mapped?0u:1u));
+    assert(c.staging_pool.allocations==(mapped?0u:1u));
+    auto joined=c.StartDeferredReadback(base+(mode=="onepage"?0x3ff4:0x4100),4);assert(joined==r);
+    if(mapped){assert(r->tick==7);assert(c.mem.published.empty());assert(!c.CaptureMappedReadback(*r));}
+    if(mode=="stale")c.NoteDeviceWrite(base+0x4200,4,10); // same copied 4K page
+    if(mode=="recheck")c.write_ticks.Write(base+0x4100,4,10); // revalidation catches missing stale mark
+    if(mode=="disjoint")c.NoteDeviceWrite(base+0x9000,16,10); // same prefetch window, different page
+    const bool success=c.FinishDeferredReadback(*r,true);
+    if(mode=="stale" || mode=="recheck" || mode=="invalidatefail"){
+        assert(!success && c.mem.published.empty());
+        c.RecoverDeferredReadback(*r);assert(r->recovered && !c.gpu_modified_ranges.intervals.empty());
+    } else {
+        assert(success);
+        for(u64 j=0;j<(mode=="onepage"?16u:32u);++j){
+            const u8 expected=!mapped?77:(j<16?device_memory[m1][32768+0x3ff0+j]:device_memory[m2][16384+j-16]);
+            assert(c.mem.published.at(base+0x3ff0+j)==expected);
+        }
+        if(mode=="onepage") {
+            assert(c.mem.published.size()==16);
+            u64 remaining=0;c.gpu_modified_ranges.ForEachInRange(base,0x80000,
+                [&](VAddr a,VAddr b){remaining+=b-a;});
+            assert(remaining==48); // neighbor page and unrelated new write remain GPU dirty
+        } else {
+            for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x4100+j)==(!mapped?77:device_memory[m2][16384+0x100+j]));
+            assert(c.mem.published.size()==48); // untouched bytes/pages are never published
+        }
+        assert(r->applied);
+    }
+    assert(c.scheduler.sem.waited==(mapped?7u:10u));
+    if(mode=="noncoherent")assert(invalidations==3);
+    if(mapped && c.residency_coherent)assert(invalidations==0);
+    c.PruneDeferredReadbacks();assert(c.deferred_readbacks.empty());
+    assert(c.staging_pool.freed==(mapped?0u:1u));
+}

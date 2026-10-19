@@ -99,6 +99,13 @@ public:
 
     void FlushBarriers();
 
+    // Native mapped readback observes actual recorded arena writes, not just shader
+    // declarations. Copy/upload/clear/image tiling and draw/dispatch all reach AccessBuffer.
+    void SetBufferWriteHook(void (*hook)(void*, VAddr, u64, u64), void* context) {
+        buffer_write_hook = hook;
+        buffer_write_context = context;
+    }
+
     /// tlg: runs before this thread changes image state (layouts, pending image
     /// barriers): the rasterizer joins its texture binding helper there (BindHelper).
     void SetImageAccessHook(void (*hook)(void*), void* context) {
@@ -112,6 +119,8 @@ public:
     }
 
 private:
+    void (*buffer_write_hook)(void*, VAddr, u64, u64) = nullptr;
+    void* buffer_write_context = nullptr;
     void (*image_access_hook)(void*) = nullptr;
     void* image_access_context = nullptr;
     const Instance& instance;
