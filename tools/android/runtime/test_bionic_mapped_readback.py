@@ -110,7 +110,9 @@ int main() {
         code = code.replace("// PRODUCTION_BUFFER_METHODS", "\n".join(method(source, s) for s in signatures))
         modes = ("coherent", "noncoherent", "current", "unknown", "hole", "mapfail",
                  "stale", "recheck", "disjoint", "outsidecurrent", "inside64current", "onepage",
-                 "invalidatefail", "ready", "readyinvalidatefail", "off", "dma", "precise")
+                 "invalidatefail", "ready", "readyinvalidatefail", "off", "dma", "precise",
+                 "currentoff", "currentready", "currentstale", "currentmapfail", "currentnoncoherent",
+                 "replacement", "replacement_stage", "replacement_unrelated")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))

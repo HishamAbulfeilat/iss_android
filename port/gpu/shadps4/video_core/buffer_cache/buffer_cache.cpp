@@ -206,8 +206,10 @@ struct ReadbackStats {
     /// download), guest time from the request to the copy applied, bytes copied.
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
     std::atomic<u64> shared_completions{0};
+    std::atomic<u64> deferred_retries{0}, retry_applied{0};
     std::atomic<u64> mapped_scheduled{0}, mapped_applied{0}, mapped_bytes{0},
-        mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0};
+        mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0},
+        mapped_submitted{0};
     /// Eager copies: pages copied, used by a fault, gone stale unread, skipped for backoff.
     std::atomic<u64> eager_copied{0}, eager_used{0}, eager_stale{0}, eager_skipped{0};
     std::atomic<s64> window_start{0};
@@ -263,6 +265,11 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_stale.exchange(0)));
     std::printf("  mapped ready on owner: %llu published without guest wait/publication round trip\n",
                 static_cast<unsigned long long>(r.mapped_inline.exchange(0)));
+    std::printf("  mapped current submitted: %llu without a staging copy; deferred retries: "
+                "%llu requested, %llu applied\n",
+                static_cast<unsigned long long>(r.mapped_submitted.exchange(0)),
+                static_cast<unsigned long long>(r.deferred_retries.exchange(0)),
+                static_cast<unsigned long long>(r.retry_applied.exchange(0)));
     std::fflush(stdout);
 }
 } // namespace
@@ -312,61 +319,85 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         // A GPU-side thread touched the memory itself: it has to wait for the GPU.
         flush_request();
     } else if (DeferredReadbackEnabled() && !TlgToggle::Disabled(TlgToggle::DeferredReadback)) {
-        // tlg: the GPU command thread only records the copy and goes on with the game's
-        // commands; this thread waits for the copy, as it would for the GPU on a console.
-        std::shared_ptr<DeferredReadback> readback;
-        liverpool->SendCommand<true, true>([&] {
-            readback = StartDeferredReadback(device_addr, size);
-            if (!readback && is_write) {
-                // Nothing to copy back, as when DownloadMemory finds nothing.
-                memory_tracker->MarkRegionAsCpuModified(device_addr, size);
-            }
-        });
-        bool applied = false;
-        if (readback) {
-            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed || readback->mapped) {
-                // One GPU wait and owner publication per shared snapshot, not per fault.
-                // Followers sleep in call_once without holding cache/region locks. The
-                // command processor never enters this flag (inline faults use flush_request).
-                std::call_once(readback->relaxed_completion, [&] {
-                    // StartDeferredReadback may already have published a completed mapped
-                    // submission on the owner. Avoid a second command-queue round trip.
-                    if (readback->applied.load(std::memory_order_acquire)) return;
-                    if (ReadbackStatsEnabled()) {
-                        Readbacks().shared_completions.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    scheduler.GetWorkSemaphore()->Wait(readback->tick);
-                    liverpool->SendCommand<true, true>([&] {
-                        FinishDeferredReadback(*readback, false);
-                    });
-                });
-                applied = readback->applied.load(std::memory_order_acquire);
-                if (applied && is_write) {
-                    // As in Precise, this transition holds the region lock and checks the
-                    // GPU bit again. A newer GPU write keeps the page protected and the
-                    // guest store faults again; it cannot unprotect newer GPU data.
-                    memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
-                }
-            } else {
-                applied = FinishDeferredReadback(*readback, true);
-                if (applied && is_write) {
-                    memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
-                }
-            }
+        // Keep stale Relaxed requests asynchronous for one bounded retry, rather
+        // than immediately blocking the cache owner in DownloadMemory/Finish.
+        unsigned max_attempts = 1;
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        static const bool retry_enabled = [] {
+            const char* env = std::getenv("TLG_READBACK_RETRY");
+            return !(env && *env == '0');
+        }();
+        if (retry_enabled && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+            max_attempts = 2;
         }
-        if (readback && !applied) {
-            // The GPU (or a CPU write without a fault) changed the memory after the copy was
-            // recorded: download it the old way, which first recovers the stale copy's ranges.
-            if (queued_at) {
-                Readbacks().stale.fetch_add(1);
+#endif
+        for (unsigned attempt = 0; attempt < max_attempts; ++attempt) {
+            if (attempt && queued_at) Readbacks().deferred_retries.fetch_add(1);
+            std::shared_ptr<DeferredReadback> readback;
+            liverpool->SendCommand<true, true>([&] {
+                readback = StartDeferredReadback(device_addr, size);
+                if (!readback && is_write) {
+                    // Nothing to copy back, as when DownloadMemory finds nothing.
+                    memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+                }
+            });
+            if (!readback) return;
+            bool applied = false;
+            if (readback) {
+                if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed || readback->mapped) {
+                    // One GPU wait and owner publication per shared snapshot, not per fault.
+                    // Followers sleep in call_once without holding cache/region locks. The
+                    // command processor never enters this flag (inline faults use flush_request).
+                    std::call_once(readback->relaxed_completion, [&] {
+                        // StartDeferredReadback may already have published a completed mapped
+                        // submission on the owner. Avoid a second command-queue round trip.
+                        if (readback->applied.load(std::memory_order_acquire)) return;
+                        if (ReadbackStatsEnabled()) {
+                            Readbacks().shared_completions.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        // A known invalid snapshot cannot help this request. Retry on
+                        // the owner instead of waiting its obsolete tick/publication.
+                        if (readback->stale.load(std::memory_order_acquire) ||
+                            readback->recovered.load(std::memory_order_acquire)) return;
+                        scheduler.GetWorkSemaphore()->Wait(readback->tick);
+                        if (readback->stale.load(std::memory_order_acquire) ||
+                            readback->recovered.load(std::memory_order_acquire)) return;
+                        liverpool->SendCommand<true, true>([&] {
+                            FinishDeferredReadback(*readback, false);
+                        });
+                    });
+                    applied = readback->applied.load(std::memory_order_acquire);
+                    if (applied && is_write) {
+                        // As in Precise, this transition holds the region lock and checks the
+                        // GPU bit again. A newer GPU write keeps the page protected and the
+                        // guest store faults again; it cannot unprotect newer GPU data.
+                        memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                    }
+                } else {
+                    applied = FinishDeferredReadback(*readback, true);
+                    if (applied && is_write) {
+                        memory_tracker->MarkRegionAsCpuModifiedUnlessGpu(device_addr, size);
+                    }
+                }
             }
-            liverpool->SendCommand<true, true>(flush_request);
-        } else if (readback) {
-            if (queued_at) {
-                Readbacks().deferred_ns.fetch_add(NowNs() - queued_at);
-                Readbacks().applied.fetch_add(1);
-                ReportReadbacks();
+            if (readback && !applied) {
+                // Recover/recollect on the owner and share the replacement snapshot.
+                // The newer write may now be submitted and eligible for a mapped read.
+                // Bound retries so a page being rewritten continuously still progresses.
+                if (attempt + 1 < max_attempts) continue;
+                if (queued_at) {
+                    Readbacks().stale.fetch_add(1);
+                }
+                liverpool->SendCommand<true, true>(flush_request);
+            } else if (readback) {
+                if (queued_at) {
+                    Readbacks().deferred_ns.fetch_add(NowNs() - queued_at);
+                    Readbacks().applied.fetch_add(1);
+                    if (attempt) Readbacks().retry_applied.fetch_add(1);
+                    ReportReadbacks();
+                }
             }
+            return;
         }
     } else {
         liverpool->SendCommand<true, true>(flush_request);
@@ -1140,13 +1171,14 @@ void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
     }
 }
 
-bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes) {
+bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current) {
     if (!mapped_readbacks_enabled || EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
         EmulatorSettings.IsDirectMemoryAccessEnabled()) return false;
     u64 tick = 0;
     for (const auto& copy : readback.copies) {
         const u64 written = write_ticks.Latest(readback.arena_base + copy.srcOffset, copy.size);
-        if (!written || written >= scheduler.CurrentTick()) {
+        if (!written || written > scheduler.CurrentTick() ||
+            (!allow_current && written == scheduler.CurrentTick())) {
             if (ReadbackStatsEnabled()) Readbacks().mapped_current.fetch_add(1);
             return false;
         }
@@ -1289,6 +1321,23 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             continue;
         }
         if (!total_size_bytes) return nullptr;
+        // Submitted-only attempts above retain their smaller/older wait target. If
+        // they failed, keep the conventional 512 KiB sharing envelope, but a known
+        // current write needs submission, not an additional GPU-to-staging copy.
+        // Flush records the HOST_READ barrier before signalling this tick. Capture
+        // still waits/revalidates; mapping a pointer never makes it readable yet.
+        static const bool map_current = [] {
+            const char* env = std::getenv("TLG_MAPPED_READBACK_CURRENT");
+            return !(env && *env == '0');
+        }();
+        if (try_mapped && map_current &&
+            PrepareMappedReadback(*readback, total_size_bytes, true)) {
+            if (readback->tick == scheduler.CurrentTick()) {
+                scheduler.Flush();
+                if (ReadbackStatsEnabled()) Readbacks().mapped_submitted.fetch_add(1);
+            }
+            break;
+        }
         // Held until pruned: the guest thread reads it after the GPU is done with it.
         readback->staging =
             staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached, 0, true);

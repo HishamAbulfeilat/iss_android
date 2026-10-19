@@ -37,7 +37,7 @@ struct {GpuReadbacksMode mode=GpuReadbacksMode::Relaxed;
     auto GetReadbacksMode() {return mode;}} EmulatorSettings;
 namespace TlgToggle {enum {DeferredReadback}; bool Disabled(int) {return false;}}
 bool ReadbackStatsEnabled() {return false;} s64 NowNs() {return 0;}
-struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{};};
+struct Counters {std::atomic<u64> count{},queue_ns{},flush_ns{},stale{},deferred_ns{},applied{},shared_completions{},mapped_stale{},mapped_applied{},mapped_bytes{},deferred_retries{},retry_applied{};};
 Counters& Readbacks() {static Counters c;return c;} void ReportReadbacks() {}
 struct Queue {
     std::mutex mutex;std::condition_variable cv;
@@ -69,18 +69,18 @@ struct Queue {
     }
 };
 struct Semaphore {
-    std::mutex mutex;std::condition_variable cv;bool complete=false;unsigned waiters=0;
+    std::mutex mutex;std::condition_variable cv;u64 complete_tick=0;unsigned waiters=0;
     Queue* queue;
     void Wait(u64 tick) {
-        assert(tick==1);assert(std::this_thread::get_id()!=queue->owner);
+        assert(tick==1 || tick==2);assert(std::this_thread::get_id()!=queue->owner);
         std::unique_lock lock(mutex);++waiters;cv.notify_all();
-        assert(cv.wait_for(lock,3s,[&]{return complete;}));
+        assert(cv.wait_for(lock,3s,[&]{return complete_tick>=tick;}));
     }
     void WaitForGuests(unsigned count) {
         std::unique_lock lock(mutex);
         assert(cv.wait_for(lock,2s,[&]{return waiters>=count;}));
     }
-    void Complete() {std::lock_guard lock(mutex);complete=true;cv.notify_all();}
+    void Complete(u64 tick=1) {std::lock_guard lock(mutex);complete_tick=std::max(complete_tick,tick);cv.notify_all();}
 };
 struct Scheduler {Semaphore timeline;auto GetWorkSemaphore() {return &timeline;}};
 struct Tracker {
@@ -121,7 +121,7 @@ struct BufferCache {
     Queue* liverpool;Scheduler scheduler;Tracker* memory_tracker;Memory* memory;
     Buffer arena;std::shared_ptr<DeferredReadback> pending=std::make_shared<DeferredReadback>();
     bool CaptureMappedReadback(DeferredReadback&) {assert(false);return false;}
-    bool empty=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
+    bool empty=false,replace_stale=false,empty_on_retry=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
     std::mutex starts_mutex;std::condition_variable starts_cv;
     BufferCache(Queue* q,Tracker* t,Memory* m):liverpool(q),memory_tracker(t),memory(m) {
         scheduler.timeline.queue=q;
@@ -131,6 +131,14 @@ struct BufferCache {
         liverpool->CheckOwner();++downloads;memory->bytes.fill(9);memory_tracker->gpu=false;
     }
     auto StartDeferredReadback(VAddr,u64) {
+        liverpool->CheckOwner();
+        if(pending->stale && empty_on_retry) {
+            empty=true;memory_tracker->gpu=false;memory->bytes.fill(13);
+        }
+        if(pending->stale && replace_stale) {
+            pending=std::make_shared<DeferredReadback>();pending->tick=2;
+            pending->snapshot.fill(11); // fresh GPU generation, not the old copy's bytes
+        }
         liverpool->CheckOwner();{std::lock_guard lock(starts_mutex);++starts;}starts_cv.notify_all();
         return empty ? std::shared_ptr<DeferredReadback>{} : pending;
     }
@@ -152,10 +160,14 @@ int main(int argc,char** argv) {
     if(scenario=="precise") EmulatorSettings.mode=GpuReadbacksMode::Precise;
     if(scenario=="off") setenv("TLG_DEFERRED_READBACK","0",1);
     if(scenario=="hot") setenv("TLG_HOT_PAGES","1",1);
+    if(scenario=="retry_off")setenv("TLG_READBACK_RETRY","0",1);
     bool expect=EmulatorSettings.mode==GpuReadbacksMode::Precise ||
         (NATIVE_BIONIC && scenario!="disabled" && scenario!="off" && scenario!="hot");
     assert(BufferCache::DeferredReadbackEnabled()==expect);
     Queue queue;Tracker tracker{&queue};Memory memory;BufferCache cache{&queue,&tracker,&memory};
+    const bool retry=scenario=="retry" || scenario=="retry_join";
+    cache.replace_stale=retry;
+    cache.empty_on_retry=scenario=="retry_empty";
     const bool write=scenario!="read";
     if(scenario=="inline") {
         queue.SendCommand<true,true>([&]{cache.ReadMemory(0x1000,8,true,true);});
@@ -168,6 +180,13 @@ int main(int argc,char** argv) {
     if(scenario=="empty") {
         cache.empty=true;cache.ReadMemory(0x1000,8,true,false);
         assert(cache.starts==1 && cache.downloads==0 && tracker.cpu);return 0;
+    }
+    if(scenario=="obsolete" || scenario=="recovered") {
+        if(scenario=="obsolete")cache.pending->stale=true;
+        else cache.pending->recovered=true;
+        cache.ReadMemory(0x1000,8,true,false);
+        assert(cache.scheduler.timeline.waiters==0 && cache.starts==2 && cache.downloads==1);
+        assert(memory.publications==0 && tracker.cpu);return 0;
     }
     if(scenario=="ready" || scenario=="ready_new_write") {
         // Model Start's already published mapped result. A subsequent GPU write
@@ -183,7 +202,7 @@ int main(int argc,char** argv) {
     auto fault=std::async(std::launch::async,[&]{cache.ReadMemory(0x1000,8,write,false);});
     cache.scheduler.timeline.WaitForGuests(1);
     std::vector<std::future<void>> others;
-    const unsigned guests=scenario=="many" ? 16 : scenario=="join" ? 2 : 1;
+    const unsigned guests=scenario=="many" || scenario=="retry_join" ? 16 : scenario=="join" ? 2 : 1;
     for(unsigned i=1;i<guests;++i) {
         others.push_back(std::async(std::launch::async,[&]{cache.ReadMemory(0x1008,8,true,false);}));
     }
@@ -192,7 +211,7 @@ int main(int argc,char** argv) {
     bool progressed=false;
     queue.SendCommand<true,true>([&] {
         progressed=true;
-        if(scenario=="stale") cache.pending->stale.store(true);
+        if(scenario=="stale" || scenario=="retry_off" || scenario=="retry_empty" || retry) cache.pending->stale.store(true);
     });
     assert(progressed && fault.wait_for(0s)!=std::future_status::ready);
     if(scenario=="race") {
@@ -203,18 +222,32 @@ int main(int argc,char** argv) {
             cache.pending->stale.store(true);
         });
     } else cache.scheduler.timeline.Complete();
+    if(retry) {
+        cache.WaitForStarts(2*guests);
+        cache.scheduler.timeline.WaitForGuests(2);
+        // The replacement GPU generation is incomplete, yet the real owner still
+        // processes commands. A synchronous DownloadMemory fallback would block it.
+        queue.SendCommand<true,true>([&]{assert(cache.downloads==0 && tracker.gpu);});
+        assert(fault.wait_for(0s)!=std::future_status::ready);
+        cache.scheduler.timeline.Complete(2);
+    }
     assert(fault.wait_for(3s)==std::future_status::ready);fault.get();
     for(auto& other:others) {assert(other.wait_for(3s)==std::future_status::ready);other.get();}
+    if(scenario=="retry_empty") {
+        assert(cache.starts==2 && cache.downloads==0 && !tracker.gpu && tracker.cpu);
+        assert(memory.publications==0);for(u8 b:memory.bytes)assert(b==13);return 0;
+    }
     if(guests>1) {
         // One start request per guest, a single publication and the progress probe above.
-        assert(cache.scheduler.timeline.waiters==1);
-        assert(queue.submitted==guests+2);
+        assert(cache.scheduler.timeline.waiters==(retry?2u:1u));
+        assert(queue.submitted==(retry?2*guests+3:guests+2));
     }
-    bool stale=scenario=="stale"||scenario=="race";
+    bool stale=scenario=="stale"||scenario=="race"||scenario=="retry_off";
+    if(stale)assert(cache.starts==(NATIVE_BIONIC && scenario!="retry_off"?2u:1u));
     assert(cache.downloads==unsigned(stale));
     assert(memory.publications==unsigned(!stale));
     assert(!tracker.gpu && tracker.cpu==write);
-    for(u8 b:memory.bytes) assert(b==(stale?9:7));
+    for(u8 b:memory.bytes) assert(b==(stale?9:retry?11:7));
 }
 '''
 
@@ -238,7 +271,8 @@ class RelaxedDeferredTests(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             for case in ("success", "read", "join", "many", "stale", "race", "inline", "empty",
-                         "disabled", "off", "hot", "precise", "ready", "ready_new_write"):
+                         "disabled", "off", "hot", "precise", "ready", "ready_new_write",
+                         "retry", "retry_join", "retry_off", "retry_empty", "obsolete", "recovered"):
                 with self.subTest(bionic=bionic, case=case):
                     result = subprocess.run([str(binary), case], capture_output=True,
                                             text=True, timeout=10)

@@ -69,8 +69,9 @@ class WriteTickTracker {
     }
 public:
     // False proves that these pages already have at least this write tick. Such a
-    // repeated write cannot invalidate a newly eligible mapped readback: eligibility
-    // requires the last write tick to be strictly older than the current submission.
+    // repeated write cannot invalidate a new pending mapped readback: its write
+    // tick must already be submitted before it is exposed to guest waiters. The
+    // current-tick path flushes before registering its readback in the pending list.
     bool Write(U64 address, U64 size, U64 tick) {
         if (!size) return false;
         if (!Valid(address, size) || !tick) { invalid = true; return true; }

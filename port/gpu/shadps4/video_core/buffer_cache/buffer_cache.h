@@ -275,7 +275,7 @@ private:
     void SettleDeferredReadbacks(VAddr start, VAddr end);
     /// Recovers stale copies and frees the staging memory of finished ones. GPU-side threads.
     void PruneDeferredReadbacks();
-    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes);
+    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current = false);
     bool CaptureMappedReadback(DeferredReadback& readback);
     static bool MappedReadbackPolicy();
     void NoteDeviceWrite(VAddr address, u64 size, u64 tick);

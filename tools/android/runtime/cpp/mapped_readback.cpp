@@ -30,7 +30,7 @@ struct Settings {
 } EmulatorSettings;
 struct Stats {
     std::atomic<u64> mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
-        mapped_bytes{},mapped_stale{},mapped_inline{},joined{},deferred{},deferred_bytes{};
+        mapped_bytes{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
 Stats& Readbacks(){static Stats s;return s;}
 bool ReadbackStatsEnabled(){return true;}
@@ -84,12 +84,12 @@ struct Semaphore {
 };
 struct Scheduler {
     Semaphore sem;u64 current=10;unsigned flushes=0;
-    bool host_read_barrier=false;
+    bool host_read_barrier=false,complete_on_flush=false;
     vk::CommandBuffer current_cmdbuf{reinterpret_cast<VkCommandBuffer>(1)};
     u64 CurrentTick()const{return current;}
     bool IsFree(u64 tick)const{return sem.IsFree(tick);}
     auto* GetWorkSemaphore(){return &sem;}
-    void Flush(){++flushes;sem.completed=current++;}
+    void Flush(){++flushes;FlushHostReadBarrier();if(complete_on_flush)sem.completed=current; ++current;}
     void FlushHostReadBarrier();
     void RequireHostReadBarrier(){host_read_barrier=true;}
 };
@@ -180,7 +180,7 @@ struct BufferCache {
     void ApplyEagerSubtractsLocked(){}
     void FlushMergedWrites(const Buffer*,VAddr,u64){}
     void NoteDeviceWrite(VAddr,u64,u64);
-    bool PrepareMappedReadback(DeferredReadback&,u64);
+    bool PrepareMappedReadback(DeferredReadback&,u64,bool=false);
     bool CaptureMappedReadback(DeferredReadback&);
     u64 CollectDownloads(const Buffer*,VAddr,u64,boost::container::small_vector<vk::BufferCopy,8>&);
     std::shared_ptr<DeferredReadback> StartDeferredReadback(VAddr,u64);
@@ -195,6 +195,7 @@ struct BufferCache {
 int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
+    if(mode=="currentoff")setenv("TLG_MAPPED_READBACK_CURRENT","0",1);
     if(mode=="dma")EmulatorSettings.dma=true;
     if(mode=="precise")EmulatorSettings.mode=GpuReadbacksMode::Precise;
     const bool policy=VideoCore::BufferCache::MappedReadbackPolicy();
@@ -242,15 +243,19 @@ int main(int argc,char** argv) {
         c.gpu_modified_ranges.Add(base+0x9000,16);
         c.write_ticks.Write(base+0x9000,16,10);
     }
-    if(mode=="current")c.write_ticks.Write(base+0x3ff0,32,10);
+    const bool current=mode=="current" || mode=="currentoff" || mode=="currentready" ||
+        mode=="currentstale" || mode=="currentmapfail" || mode=="currentnoncoherent";
+    if(current)c.write_ticks.Write(base+0x3ff0,32,10);
+    if(current)c.scheduler.RequireHostReadBarrier(); // real recorded writes require visibility
     if(mode=="unknown")c.write_ticks=VideoCore::WriteTickTracker{};
-    if(mode=="mapfail")fail_map=true;
-    if(mode=="noncoherent" || mode=="invalidatefail" || mode=="readyinvalidatefail")c.residency_coherent=false;
+    if(mode=="mapfail" || mode=="currentmapfail")fail_map=true;
+    if(mode=="noncoherent" || mode=="currentnoncoherent" || mode=="invalidatefail" || mode=="readyinvalidatefail")c.residency_coherent=false;
     if(mode=="invalidatefail" || mode=="readyinvalidatefail")fail_invalidate=true;
     if(mode=="ready" || mode=="readyinvalidatefail")c.scheduler.sem.completed=7;
+    if(mode=="currentready")c.scheduler.complete_on_flush=true;
     const u64 required_size=(mode=="inside64current" || mode=="hole" || mode=="mapfail")?32:4;
     auto r=c.StartDeferredReadback(base+0x3ff0,required_size);assert(r);
-    const bool mapped=mode!="current" && mode!="unknown" && mode!="hole" && mode!="mapfail";
+    const bool mapped=mode!="currentoff" && mode!="currentmapfail" && mode!="unknown" && mode!="hole" && mode!="mapfail";
     assert(r->mapped==mapped);
     if(mode=="outsidecurrent") {
         assert(r->start==base && r->end==base+65536);
@@ -264,9 +269,11 @@ int main(int argc,char** argv) {
     }
     if(mode=="onepage")assert(r->start==base+0x3000 && r->end==base+0x4000);
     assert(c.runtime.copies==(mapped?0u:1u));
-    assert(c.scheduler.flushes==(mapped?0u:1u));
+    assert(c.scheduler.flushes==(mapped && !current?0u:1u));
+    if(current && mapped)assert(c.scheduler.CurrentTick()==11 && Readbacks().mapped_submitted==1);
+    if(current)assert(barriers==2 && !c.scheduler.host_read_barrier);
     assert(c.staging_pool.allocations==(mapped?0u:1u));
-    if(mode=="ready") {
+    if(mode=="ready" || mode=="currentready") {
         // Actual Start -> Finish -> Capture publishes both sparse allocations on the
         // first owner request, with neither a wait nor an outstanding deferred object.
         assert(r->applied && c.deferred_readbacks.empty() && c.deferred_count==0);
@@ -275,24 +282,60 @@ int main(int argc,char** argv) {
             (j<16?device_memory[m1][32768+0x3ff0+j]:device_memory[m2][16384+j-16]));
         for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x4100+j)==device_memory[m2][16384+0x100+j]);
         assert(c.mem.published.size()==48);
-        c.NoteDeviceWrite(base+0x4100,16,10);
-        assert(c.write_ticks.Latest(base+0x4100,16)==10 && !r->stale);
+        const u64 next=current?11:10;
+        c.NoteDeviceWrite(base+0x4100,16,next);
+        assert(c.write_ticks.Latest(base+0x4100,16)==next && !r->stale);
         return 0;
     }
     // A failed immediate capture must remain recoverable through the old path.
     if(mode=="readyinvalidatefail")assert(!r->applied && c.deferred_count==1);
     auto joined=c.StartDeferredReadback(base+(mode=="onepage"?0x3ff4:0x4100),4);assert(joined==r);
-    if(mapped){assert(r->tick==7);assert(c.mem.published.empty());assert(!c.CaptureMappedReadback(*r));}
+    if(mapped){assert(r->tick==(current?10u:7u));assert(c.mem.published.empty());assert(!c.CaptureMappedReadback(*r));}
+    if(mode=="replacement" || mode=="replacement_stage" || mode=="replacement_unrelated") {
+        // Exercise the actual prune/recover/recollect path used by ReadMemory's
+        // retry. The old pending copy removed two dirty islands; none may be lost.
+        c.NoteDeviceWrite(base+0x4200,4,10);assert(r->stale);
+        c.tracker.ranges.emplace_back(base+0x4200,4);
+        c.gpu_modified_ranges.Add(base+0x4200,4);
+        if(mode=="replacement_stage")c.write_ticks=VideoCore::WriteTickTracker{};
+        const bool unrelated=mode=="replacement_unrelated";
+        auto fresh=c.StartDeferredReadback(base+(unrelated?0x3ff0:0x4100),4);
+        assert(fresh && fresh!=r && r->recovered && !r->applied);
+        if(unrelated) {
+            // An overwrite on the prefetched neighbor page invalidated the old
+            // envelope, but retrying the requested page still needs only tick 7.
+            assert(fresh->mapped && fresh->tick==7 && c.scheduler.flushes==0);
+            assert(c.FinishDeferredReadback(*fresh,true) && c.mem.published.size()==16);
+            u64 remaining=0;c.gpu_modified_ranges.ForEachInRange(base,0x80000,
+                [&](VAddr a,VAddr b){remaining+=b-a;});
+            assert(remaining==36 && c.runtime.copies==0);
+            return 0;
+        }
+        assert(fresh->mapped==(mode=="replacement") && fresh->tick==10);
+        assert(c.deferred_count==1 && c.scheduler.flushes==1 && c.scheduler.sem.waited==0);
+        assert(c.mem.published.empty());
+        assert(c.FinishDeferredReadback(*fresh,true));
+        assert(c.scheduler.sem.waited==10 && fresh->applied && c.mem.published.size()==52);
+        for(u64 j=0;j<32;++j)assert(c.mem.published.at(base+0x3ff0+j)==
+            (fresh->mapped?(j<16?device_memory[m1][32768+0x3ff0+j]:device_memory[m2][16384+j-16]):77));
+        for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x4100+j)==
+            (fresh->mapped?device_memory[m2][16384+0x100+j]:77));
+        for(u64 j=0;j<4;++j)assert(c.mem.published.at(base+0x4200+j)==
+            (fresh->mapped?device_memory[m2][16384+0x200+j]:77));
+        c.PruneDeferredReadbacks();assert(c.deferred_readbacks.empty());
+        assert(c.runtime.copies==(fresh->mapped?0u:1u));return 0;
+    }
     if(mode=="disjoint") {
         c.NoteDeviceWrite(base+0x9000,16,10);
         c.NoteDeviceWrite(base+0x9001,14,10); // memo hit cannot stale unrelated copied pages
         assert(!r->stale);
     }
     if(mode=="stale")c.NoteDeviceWrite(base+0x4200,4,10); // same copied 4K page
+    if(mode=="currentstale")c.NoteDeviceWrite(base+0x4200,4,11);
     if(mode=="recheck")c.write_ticks.Write(base+0x4100,4,10); // revalidation catches missing stale mark
     if(mode=="disjoint")c.NoteDeviceWrite(base+0x9000,16,10); // same prefetch window, different page
     const bool success=c.FinishDeferredReadback(*r,true);
-    if(mode=="stale" || mode=="recheck" || mode=="invalidatefail" || mode=="readyinvalidatefail"){
+    if(mode=="stale" || mode=="currentstale" || mode=="recheck" || mode=="invalidatefail" || mode=="readyinvalidatefail"){
         assert(!success && c.mem.published.empty());
         c.RecoverDeferredReadback(*r);assert(r->recovered && !c.gpu_modified_ranges.intervals.empty());
     } else {
@@ -312,8 +355,8 @@ int main(int argc,char** argv) {
         }
         assert(r->applied);
     }
-    assert(c.scheduler.sem.waited==(mapped?7u:10u));
-    if(mode=="noncoherent")assert(invalidations==3);
+    assert(c.scheduler.sem.waited==(mapped && !current?7u:10u));
+    if(mode=="noncoherent" || mode=="currentnoncoherent")assert(invalidations==3);
     if(mapped && c.residency_coherent)assert(invalidations==0);
     c.PruneDeferredReadbacks();assert(c.deferred_readbacks.empty());
     assert(c.staging_pool.freed==(mapped?0u:1u));

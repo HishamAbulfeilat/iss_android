@@ -179,3 +179,86 @@ que o recorder progride enquanto o guest espera.
 A revisão não torna elegíveis escritas do tick corrente e não resolve todos
 os descartes. O ganho de FPS adicional exige teste no aparelho; testes host
 não demonstram esse ganho nem ausência de flicker.
+
+## Investigação do log `iss-android.log (1)(1).txt` (`eddd39a`)
+
+O teste confirma 1918 publicações imediatas, mas não ganho adicional de FPS:
+38,84 -> 37,79 nos sete intervalos iniciais de gameplay; excluídas as duas
+primeiras janelas de transição, 40,73 -> 40,53. O recorder caiu de 16,43 a
+15,70 ms/frame no primeiro recorte. O novo log tem 685 ocorrências de fallback
+stale nos relatórios e 2317 **tentativas** current/unknown. As janelas dos
+relatórios de readback não coincidem exatamente com BionicPerf. Não são
+685 snapshots distintos: vários guests podem compartilhar um readback.
+
+### Diferença encontrada no fluxo de invalidação
+
+`ReadMemory` compartilhava o primeiro wait/publicação em `call_once`, mas,
+se o snapshot fosse invalidado, cada guest ia diretamente a `flush_request`.
+Esse callback usa `DownloadMemory`, que grava outra cópia e chama
+`Scheduler::Finish` no owner. Mesmo quando a nova escrita já foi submetida,
+o caminho não voltava a verificar se ela podia ser lida pelo mapeamento.
+
+Agora um pedido Bionic/Relaxed pode fazer **uma única nova tentativa** por
+`StartDeferredReadback`. A entrada passa por `PruneDeferredReadbacks`, que
+recupera os intervalos removidos de snapshots stale antes de recolher os
+bytes novos. Pedidos simultâneos podem compartilhar esse snapshot substituto,
+seja ele mapeado ou staging, e a espera continua no guest. Isso também evita
+esperar um tick antigo já sabidamente inútil: as flags stale/recovered são
+verificadas antes e depois do wait. Após uma segunda invalidação, permanece o
+download síncrono anterior para garantir progresso. Precise e outras
+plataformas continuam com uma tentativa. `TLG_READBACK_RETRY=0` desliga a
+nova tentativa no Bionic.
+
+Essa mudança não reaproveita bytes da cópia invalidada e não declara o
+snapshot antigo aplicado. Cada guest avalia o objeto substituto que recebeu;
+suas páginas só são liberadas pela publicação validada, sob os mesmos locks.
+Um novo write GPU após a publicação continua protegido pela rechecagem de
+`MarkRegionAsCpuModifiedUnlessGpu`.
+
+### Cópia staging desnecessária para escritas do tick corrente
+
+Os dois caminhos mapeados antigos (64 KiB/páginas pedidas) exigem tick
+**anterior** ao corrente. Esse critério continua igual, para que uma leitura
+antiga não precise submeter trabalho atual. O release 025 também tem esse
+critério em `0x11fe49c–0x11fe4a0`; a extensão abaixo é uma otimização nova
+para as arenas sparse, não uma alegação de outro ramo privado encontrado.
+
+Se ambas as tentativas antigas falharem, já existe um conjunto de copies
+coletado para o fallback de 512 KiB. Quando todos os seus intervalos têm
+tick conhecido <= corrente e backing mapeável completo, esse fallback pode
+usar os spans físicos diretamente. Para tick corrente, faz **um Flush** e
+aguarda o tick que ele sinaliza, sem alocar staging nem gravar a cópia GPU.
+Assim mantém a janela de compartilhamento/prefetch do fallback anterior.
+O caso antigo elegível continua sem Flush; não foi trocado por essa via.
+`TLG_MAPPED_READBACK_CURRENT=0` desliga a extensão ao tick corrente.
+
+Submeter é obrigatório: o callback do scheduler resolve os sparse binds;
+`FlushHostReadBarrier` grava `ALL_COMMANDS/MEMORY_WRITE -> HOST/HOST_READ`
+após o fechamento do render pass/recording/host copies e antes de terminar
+o command buffer e sinalizar o semáforo. `CaptureMappedReadback` continua
+exigindo conclusão confirmada e revalidação de ticks. Tick desconhecido,
+falha de mapeamento, DMA on, política desligada ou modo diferente mantêm o
+staging convencional. Novas escritas na mesma página invalidam a leitura,
+inclusive quando o mapeamento foi preparado antes do Flush.
+
+### Validação dos dois fluxos
+
+Os testes dos métodos reais verificam current-tick mapeado com exatamente
+um Flush, zero staging/cópias, barreira host, zero publicação antes da
+conclusão, memória coerente/não coerente, conclusão imediata, escrita no tick
+seguinte e recuperação. O override off e a falha de map mantêm staging.
+
+O teste de fila roda `ReadMemory`/`FinishDeferredReadback` de produção com
+16 guests: após invalidar o primeiro snapshot, todos compartilham uma nova
+geração. O owner processa um comando de prova enquanto o tick substituto
+ainda está incompleto; apenas os bytes novos são publicados, uma única vez.
+São testados também esgotamento do retry, snapshot já stale/recovered sem
+espera obsoleta, retry que não encontra mais bytes dirty, override off e os
+modos/plataformas anteriores.
+
+A linha `mapped current submitted` conta as submissões sem cópia staging.
+`deferred retries` mede pedidos que repetiram e quantos terminaram com um
+snapshot aplicado; `stale (downloaded)` continua contando apenas o fallback
+final síncrono. Esses contadores verificam uso dos caminhos, não ganho de FPS.
+A CPU e a GPU ainda precisam completar as escritas necessárias; a revisão
+retira cópias e bloqueios evitáveis, sem prometer eliminar todas as esperas.
