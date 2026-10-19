@@ -93,9 +93,24 @@ struct StageSpecialization {
 
     StageSpecialization() = default;
     StageSpecialization(const Info& info_, RuntimeInfo runtime_info_, const Profile& profile_,
-                        Backend::Bindings start_)
-        : info{&info_}, runtime_info{runtime_info_}, start{start_} {
-        fetch_shader_data = Gcn::ParseFetchShader(info_);
+                        Backend::Bindings start_) {
+        Refresh(info_, runtime_info_, profile_, start_);
+    }
+
+    // Rebuild every input, retaining only container capacity between lookups.
+    // This does not cache resource values or skip reads from current guest data.
+    void Refresh(const Info& info_, RuntimeInfo runtime_info_, const Profile& profile_,
+                 Backend::Bindings start_) {
+        info = &info_;
+        runtime_info = runtime_info_;
+        start = start_;
+        bitset.reset();
+        vs_attribs.clear();
+        buffers.clear();
+        images.clear();
+        fmasks.clear();
+        samplers.clear();
+        Gcn::ParseFetchShader(info_, fetch_shader_data);
         if (info_.sw_stage == SwStage::Vertex && fetch_shader_data) {
             // Specialize shader on VS input number types to follow spec.
             ForEachSharp(vs_attribs, fetch_shader_data->attributes,

@@ -124,6 +124,10 @@ struct PipelineSelection {
     bool compilation_pending = false;
     bool sync_compile = false; ///< tlg: BP07, shaders and pipeline of this draw compile now
     DrawIndirectParams draw_indirect_params{};
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // Selection-owned scratch, never shared with compiler/recording workers.
+    std::array<Shader::StageSpecialization, Shader::MaxStageTypes> specialization_scratch{};
+#endif
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
 };
 

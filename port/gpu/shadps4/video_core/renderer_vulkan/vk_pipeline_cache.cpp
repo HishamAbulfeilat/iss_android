@@ -1597,7 +1597,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
         if (fetch_shader_) {
-            sel.fetch_shader = fetch_shader_;
+            sel.fetch_shader = std::move(fetch_shader_);
         }
         return true;
     };
@@ -2045,7 +2045,12 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                  reuse_hits.load(), reuse_misses.load(), reuse_mismatches.load());
     }
     const auto start_binding = binding;
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    auto& spec = sel.specialization_scratch[static_cast<u32>(sw_stage)];
+    spec.Refresh(info, runtime_info, profile, binding);
+#else
     auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
+#endif
 
     size_t perm_idx = program->modules.size();
     u64 perm_hash = HashCombine(params.hash, perm_idx);

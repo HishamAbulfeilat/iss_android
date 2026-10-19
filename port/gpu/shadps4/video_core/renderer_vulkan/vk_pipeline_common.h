@@ -119,7 +119,6 @@ protected:
     std::vector<vk::DescriptorSetLayoutBinding> descriptor_bindings;
     vk::UniqueDescriptorUpdateTemplate descriptor_update_template;
     PFN_vkCmdPushDescriptorSetWithTemplateKHR push_descriptor_template{};
-    u64 descriptor_template_key = 0;
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
     bool uses_push_descriptors{};
     bool is_compute;

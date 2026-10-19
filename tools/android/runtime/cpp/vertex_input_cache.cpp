@@ -8,7 +8,6 @@
 #include <string>
 #include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/renderer_vulkan/vertex_input_state.h"
-#include "video_core/renderer_vulkan/graphics_descriptor_state.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 using u32 = uint32_t;
 using u64 = uint64_t;
@@ -53,8 +52,6 @@ struct Instance {
 };
 struct Scheduler {
     VertexInputState vertex_input_state;
-    GraphicsDescriptorState graphics_descriptor_state;
-    bool graphics_descriptor_reuse_allowed=true;
     bool recording_threaded = true, direct_mode = false, switch_direct = false;
     bool owner_invalidates = false;
     unsigned owner_checks = 0;
