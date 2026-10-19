@@ -29,7 +29,13 @@ class MappedReadbackTests(unittest.TestCase):
         header = (GPU / "video_core/renderer_vulkan/vk_runtime.h").read_text()
         scheduler = (GPU / "video_core/renderer_vulkan/vk_scheduler.h").read_text()
         code = (ROOT / "tools/android/runtime/cpp/mapped_write_hook.cpp").read_text()
-        code = code.replace("// PRODUCTION_ACCESS_BUFFER", method(source, "void Runtime::AccessBuffer("))
+        code = code.replace("// PRODUCTION_ACCESS_BUFFER", "\n".join(method(source, signature) for signature in (
+            "void Runtime::AccessBuffer(", "void Runtime::AccessBufferImpl(",
+            "void Runtime::NoteBufferWrite(", "void Runtime::CopyBuffer(")))
+        cache_source = (GPU / "video_core/buffer_cache/buffer_cache.cpp").read_text()
+        cache_header = (GPU / "video_core/buffer_cache/buffer_cache.h").read_text()
+        code = code.replace("// PRODUCTION_READBACK_TYPE", method(cache_header, "struct DeferredReadback {") + ";")
+        code = code.replace("// PRODUCTION_NOTE_WRITE", method(cache_source, "void BufferCache::NoteDeviceWrite("))
         code = code.replace("// PRODUCTION_HOOK_SETTER", method(header, "void SetBufferWriteHook("))
         code = code.replace("// PRODUCTION_REQUIRE_BARRIER", method(scheduler, "void RequireHostReadBarrier()"))
         self.compile_run(code, ("-I", include), ((),))

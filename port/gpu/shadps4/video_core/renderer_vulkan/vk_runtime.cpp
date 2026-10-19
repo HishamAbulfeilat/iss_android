@@ -160,8 +160,29 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
     if (bounded) {
         AccessBuffer(src, src_min, src_max - src_min, vk::PipelineStageFlagBits2::eCopy,
                      vk::AccessFlagBits2::eTransferRead);
-        AccessBuffer(dst, dst_min, dst_max - dst_min, vk::PipelineStageFlagBits2::eCopy,
-                     vk::AccessFlagBits2::eTransferWrite);
+        // Barrier coverage may include holes, but mapped readbacks must observe only
+        // actual writes. Otherwise an upload on either side of an untouched page
+        // invalidates its snapshot and makes the CPU wait for a newer submission.
+        if (buffer_write_hook && dst->mem_type == VideoCore::MemoryType::Sparse) {
+            u64 start = 0, end = 0;
+            for (const auto& copy : copies) {
+                if (!copy.size) continue;
+                const u64 next_end = copy.dstOffset + copy.size;
+                // Combine consecutive touching regions without including a gap or
+                // allocating/sorting a second list for large upload batches.
+                if (start < end && copy.dstOffset <= end && start <= next_end) {
+                    start = std::min<u64>(start, copy.dstOffset);
+                    end = std::max(end, next_end);
+                } else {
+                    if (start < end) NoteBufferWrite(dst, start, end - start);
+                    start = copy.dstOffset;
+                    end = next_end;
+                }
+            }
+            if (start < end) NoteBufferWrite(dst, start, end - start);
+        }
+        AccessBufferImpl(dst, dst_min, dst_max - dst_min, vk::PipelineStageFlagBits2::eCopy,
+                         vk::AccessFlagBits2::eTransferWrite, false);
         return;
     }
     for (const auto& copy : copies) {
@@ -875,6 +896,20 @@ bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 
 
 void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
                            vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
+    AccessBufferImpl(handle, offset, size, src_stage, src_access, true);
+}
+
+void Runtime::NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 size) {
+    if (buffer_write_hook && size && handle->mem_type == VideoCore::MemoryType::Sparse) {
+        buffer_write_hook(buffer_write_context, handle->cpu_addr + offset, size,
+                          scheduler.CurrentTick());
+        scheduler.RequireHostReadBarrier();
+    }
+}
+
+void Runtime::AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 size,
+                               vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                               bool notify_write) {
     AddressRange range = {
         .resource = reinterpret_cast<u64>(handle),
         .range_start = offset,
@@ -919,11 +954,7 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         memo = {range.resource, range.range_start, range.range_end, access_epoch, u32(access)};
     };
     if (src_access & WRITE_MASK) {
-        if (buffer_write_hook && size && handle->mem_type == VideoCore::MemoryType::Sparse) {
-            buffer_write_hook(buffer_write_context, handle->cpu_addr + offset, size,
-                              scheduler.CurrentTick());
-            scheduler.RequireHostReadBarrier();
-        }
+        if (notify_write) NoteBufferWrite(handle, offset, size);
         insert(Access::Write);
     }
     if (src_access & READ_MASK) {

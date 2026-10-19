@@ -119,6 +119,10 @@ public:
     }
 
 private:
+    void NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 size);
+    void AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 size,
+                          vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                          bool notify_write);
     void (*buffer_write_hook)(void*, VAddr, u64, u64) = nullptr;
     void* buffer_write_context = nullptr;
     void (*image_access_hook)(void*) = nullptr;
