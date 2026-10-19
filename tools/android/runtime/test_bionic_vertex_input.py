@@ -58,7 +58,7 @@ class VertexInputTests(unittest.TestCase):
         self.assertIn("auto square_info = pipeline_info", graphics)
         scene = (GPU / "video_core/renderer_vulkan/vk_scene_resolution.cpp").read_text()
         invalidated = scene.index("scheduler.InvalidateVertexInput();")
-        recorded = scene.index("scheduler.Record([=]", invalidated)
+        recorded = scene.index("scheduler.Record([=", invalidated)
         self.assertLess(recorded, scene.index("cmd.bindPipeline", recorded))
 
 

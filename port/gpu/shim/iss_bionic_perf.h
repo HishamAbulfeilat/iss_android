@@ -23,6 +23,8 @@ inline std::array<Counter, static_cast<unsigned>(Stage::Count)> counters{};
 inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
 inline std::atomic<std::uint64_t> descriptor_template_calls{0}, descriptor_template_bytes{0},
     descriptor_legacy_calls{0};
+inline std::atomic<std::uint64_t> descriptor_graphics_reused{0}, descriptor_graphics_missed{0};
+inline std::atomic<std::uint64_t> descriptor_graphics_raw_bypassed{0};
 inline std::atomic<std::uint64_t> vertex_input_issued{0}, vertex_input_skipped{0};
 enum class Thread : unsigned { Command, Draw, Recorder };
 inline std::array<std::atomic<int>, 3> thread_clocks{-1, -1, -1};
@@ -133,10 +135,14 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
         static_cast<unsigned long long>(host_copy_required.exchange(0)),
         static_cast<unsigned long long>(host.calls), host.ns/1e6,
         static_cast<unsigned long long>(recorder.calls), recorder.ns/1e6);
-    std::printf("BionicDescriptors: template_calls=%llu legacy_calls=%llu payload_bytes=%llu\n",
+    std::printf("BionicDescriptors: template_calls=%llu legacy_calls=%llu payload_bytes=%llu "
+                "graphics_reused=%llu graphics_missed=%llu graphics_raw_bypassed=%llu\n",
                 static_cast<unsigned long long>(descriptor_template_calls.exchange(0)),
                 static_cast<unsigned long long>(descriptor_legacy_calls.exchange(0)),
-                static_cast<unsigned long long>(descriptor_template_bytes.exchange(0)));
+                static_cast<unsigned long long>(descriptor_template_bytes.exchange(0)),
+                static_cast<unsigned long long>(descriptor_graphics_reused.exchange(0)),
+                static_cast<unsigned long long>(descriptor_graphics_missed.exchange(0)),
+                static_cast<unsigned long long>(descriptor_graphics_raw_bypassed.exchange(0)));
     std::printf("BionicVertexInput: issued=%llu skipped=%llu\n",
                 static_cast<unsigned long long>(vertex_input_issued.exchange(0)),
                 static_cast<unsigned long long>(vertex_input_skipped.exchange(0)));

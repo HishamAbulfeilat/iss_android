@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/host_copy_sources.h"
 #include "video_core/renderer_vulkan/vertex_input_state.h"
+#include "video_core/renderer_vulkan/graphics_descriptor_state.h"
 
 namespace tracy {
 class VkCtxScope;
@@ -752,6 +753,10 @@ public:
         // Raw callers may bind a graphics pipeline with static vertex input. Even if
         // already in direct mode, do not reuse state across an untracked command stream.
         vertex_input_state.Invalidate();
+        graphics_descriptor_state.Invalidate();
+        // A raw handle may be retained and used again after tracked commands.
+        // Reuse resumes only in a new command buffer, after this stream finishes.
+        graphics_descriptor_reuse_allowed = false;
         return current_cmdbuf;
     }
 
@@ -763,6 +768,14 @@ public:
     void InvalidateVertexInput() {
         CheckOwner(__builtin_return_address(0));
         vertex_input_state.Invalidate();
+    }
+
+    /// Recording context only: call inside Record, alongside the descriptor command.
+    bool ReuseGraphicsDescriptors(u64 key, std::span<const u64> words);
+
+    /// Recording context only; helpers invalidate alongside their Vulkan binding.
+    void InvalidateGraphicsDescriptors() {
+        graphics_descriptor_state.Invalidate();
     }
 
     /// TLG_RECORDER_TRACE=1: prints the most frequent CommandBuffer() callers every 2000 calls.
@@ -961,6 +974,8 @@ private:
     DynamicState dynamic_state;
     bool host_read_barrier = false;
     VertexInputState vertex_input_state;
+    GraphicsDescriptorState graphics_descriptor_state;
+    bool graphics_descriptor_reuse_allowed = true;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
     std::condition_variable_any event_cv;

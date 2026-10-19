@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <atomic>
 #include <cstdlib>
 #include <span>
 #include <thread>
@@ -150,6 +151,8 @@ void Pipeline::BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBi
     descriptor_template_data = std::move(data);
     descriptor_update_template = std::move(update);
     push_descriptor_template = push;
+    static std::atomic<u64> next_key{1};
+    descriptor_template_key = next_key.fetch_add(1, std::memory_order_relaxed);
 }
 
 
@@ -167,15 +170,19 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
             const auto payload = scheduler.RecordData(std::span<const u64>{words.data(), words.size()});
             const VkDescriptorUpdateTemplate update = *descriptor_update_template;
             const auto push = push_descriptor_template;
-            scheduler.Record([layout, stage_flags, push_data, update, push, payload](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([layout, stage_flags, push_data, update, push, payload,
+                              recorder = &scheduler, key = descriptor_template_key,
+                              graphics = !IsCompute(), bytes = descriptor_template_data.bytes](vk::CommandBuffer cmdbuf) {
                 cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
+                // Compare in execution order, after any preceding helper bindings.
+                // Push constants and all resource synchronization remain per draw.
+                if (graphics && recorder->ReuseGraphicsDescriptors(key, payload)) return;
                 push(cmdbuf, update, layout, 0, payload.data());
+                if (IssBionicPerf::Enabled()) {
+                    IssBionicPerf::descriptor_template_calls.fetch_add(1, std::memory_order_relaxed);
+                    IssBionicPerf::descriptor_template_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                }
             });
-            if (IssBionicPerf::Enabled()) {
-                IssBionicPerf::descriptor_template_calls.fetch_add(1, std::memory_order_relaxed);
-                IssBionicPerf::descriptor_template_bytes.fetch_add(descriptor_template_data.bytes,
-                                                                  std::memory_order_relaxed);
-            }
             return;
         }
     }
@@ -193,7 +200,8 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
 
     if (uses_push_descriptors) {
         if (!scheduler.IsRecordingDeferred()) {
-            scheduler.Record([&](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([&, recorder = &scheduler, graphics = !IsCompute()](vk::CommandBuffer cmdbuf) {
+                if (graphics) recorder->InvalidateGraphicsDescriptors();
                 cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, set_writes);
             });
             return;
@@ -223,7 +231,8 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
                     scheduler.RecordData(std::span{write.pTexelBufferView, write.descriptorCount}).data();
             }
         }
-        scheduler.Record([bind_point, layout, writes](vk::CommandBuffer cmdbuf) {
+        scheduler.Record([bind_point, layout, writes, recorder = &scheduler](vk::CommandBuffer cmdbuf) {
+            if (bind_point == vk::PipelineBindPoint::eGraphics) recorder->InvalidateGraphicsDescriptors();
             cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, writes);
         });
         return;
@@ -235,7 +244,8 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
         set_write.dstSet = desc_set;
     }
     instance.GetDevice().updateDescriptorSets(set_writes, {});
-    scheduler.Record([bind_point, layout, desc_set](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([bind_point, layout, desc_set, recorder = &scheduler](vk::CommandBuffer cmdbuf) {
+        if (bind_point == vk::PipelineBindPoint::eGraphics) recorder->InvalidateGraphicsDescriptors();
         cmdbuf.bindDescriptorSets(bind_point, layout, 0, desc_set, {});
     });
 }

@@ -84,6 +84,49 @@ int main() {
 }
 ''', flags=("-fsanitize=undefined", "-fno-sanitize-recover=all"))
 
+    def test_graphics_descriptor_snapshot_and_writer_coverage(self):
+        self.compile_run(r'''
+#include <cassert>
+#include <array>
+#include <vector>
+#include <random>
+#include "video_core/renderer_vulkan/graphics_descriptor_state.h"
+int main() {
+    Vulkan::GraphicsDescriptorState s;
+    std::array<uint64_t,4> a{1,2,3,4};
+    assert(!s.Reuse(1,a));a[0]=99; // the cache owns its previous snapshot
+    assert(!s.Reuse(1,a));assert(s.Reuse(1,a));
+    for(unsigned i=0;i<a.size();++i){++a[i];assert(!s.Reuse(1,a));assert(s.Reuse(1,a));}
+    assert(!s.Reuse(2,a));assert(!s.Reuse(1,a)); // exact template lifetime
+    s.Invalidate();assert(!s.Reuse(1,a));
+    assert(!s.Reuse(1,{}));assert(!s.Reuse(1,a));
+    assert(!s.Reuse(0,a));assert(!s.Reuse(1,a));
+    std::vector<uint64_t> large(257);assert(!s.Reuse(1,large));assert(!s.Reuse(1,large));
+    assert(!s.Reuse(1,a));assert(s.Reuse(1,a));
+    std::mt19937_64 random(41039);
+    std::vector<uint64_t> old;uint64_t old_key=0;
+    for(unsigned i=0;i<10000;++i){
+        auto next=old;uint64_t key=old_key;
+        if(i%3==0){key=1+random()%20;next.resize(1+random()%256);for(auto& v:next)v=random();}
+        else if(i%3==1)next[random()%next.size()]^=1;
+        assert(s.Reuse(key,next)==(key==old_key && next==old));old=next;old_key=key;
+    }
+}
+''', flags=("-fsanitize=undefined", "-fno-sanitize-recover=all"))
+        # Graphics writers outside Pipeline must invalidate state before recording.
+        # Compute binding points are independent; no compute-only helper is modified.
+        scene = (GPU / "video_core/renderer_vulkan/vk_scene_resolution.cpp").read_text()
+        recorded=scene.index("scheduler.Record([=, recorder = &scheduler]")
+        self.assertLess(recorded,scene.index("recorder->InvalidateGraphicsDescriptors();",recorded))
+        self.assertLess(scene.index("recorder->InvalidateGraphicsDescriptors();",recorded),
+                        scene.index("cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics",recorded))
+        blit = (GPU / "video_core/texture_cache/blit_helper.cpp").read_text()
+        for prefix in blit.split("cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics")[:-1]:
+            self.assertIn("scheduler.CommandBuffer()", prefix.rsplit("\nvoid ", 1)[-1])
+        presenter = (GPU / "video_core/renderer_vulkan/vk_presenter.cpp").read_text()
+        self.assertLess(presenter.index("draw_scheduler.CommandBuffer();", presenter.index("Frame* Presenter::PrepareFrame")),
+                        presenter.index("pp_pass.Render("))
+
     def test_vulkan_hpp_production_methods(self):
         include = os.environ.get("VULKAN_HEADERS_INCLUDE")
         if not include:
@@ -97,10 +140,18 @@ int main() {
             "void Pipeline::BuildDescriptorTemplate(", "void Pipeline::BindResources("))
         fixture = (ROOT / "tools/android/runtime/cpp/descriptor_templates.cpp").read_text()
         code = fixture.replace("// PRODUCTION_METHODS", bodies)
-        self.compile_run(code, flags=("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
+        scheduler = (GPU / "video_core/renderer_vulkan/vk_scheduler.cpp").read_text()
+        header = (GPU / "video_core/renderer_vulkan/vk_scheduler.h").read_text()
+        code = code.replace("// PRODUCTION_SCHEDULER", "\n".join(method(scheduler, signature) for signature in (
+            "bool Scheduler::ReuseGraphicsDescriptors(", "void Scheduler::AllocateWorkerCommandBuffers()")))
+        code = code.replace("// PRODUCTION_INLINE_METHODS", "\n".join(method(header, signature) for signature in (
+            "vk::CommandBuffer CommandBuffer()", "void InvalidateVertexInput()", "void InvalidateGraphicsDescriptors()")))
+        self.compile_run(code, flags=("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1",
+                                      "-fsanitize=undefined", "-fno-sanitize-recover=all"),
                          cases=((), ("direct",), ("compute",), ("off",), ("missing",), ("failure",),
                                 ("mismatch",), ("ordinary",), ("unsupported",), ("switchdirect",),
-                                ("offdirect",), ("empty",)))
+                                ("offdirect",), ("empty",), ("reuse",), ("reusedirect",), ("reusecompute",),
+                                ("reuseoff",), ("reusechunk",), ("reuseworker",)))
         self.compile_run(code, flags=("-I", include), cases=(("nonbionic",),))
 
 

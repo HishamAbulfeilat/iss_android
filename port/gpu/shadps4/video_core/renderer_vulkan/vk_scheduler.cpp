@@ -214,6 +214,32 @@ void Scheduler::RecordVertexInput(
     }
 }
 
+bool Scheduler::ReuseGraphicsDescriptors(u64 key, std::span<const u64> words) {
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_DESCRIPTOR_REUSE");
+        const bool on = !(env && *env == '0');
+        std::printf("GPU: identical graphics descriptor reuse: %s\n", on ? "on" : "off");
+        return on;
+#else
+        return false;
+#endif
+    }();
+    if (!enabled) return false;
+    if (!graphics_descriptor_reuse_allowed) {
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::descriptor_graphics_raw_bypassed.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+    const bool reused = graphics_descriptor_state.Reuse(key, words);
+    if (IssBionicPerf::Enabled()) {
+        (reused ? IssBionicPerf::descriptor_graphics_reused :
+                  IssBionicPerf::descriptor_graphics_missed).fetch_add(1, std::memory_order_relaxed);
+    }
+    return reused;
+}
+
 void Scheduler::TraceDirectRecording(void* caller) {
     static const bool enabled = [] {
         const char* env = std::getenv("TLG_RECORDER_TRACE");
@@ -533,6 +559,8 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
     vertex_input_state.Invalidate();
+    graphics_descriptor_state.Invalidate();
+    graphics_descriptor_reuse_allowed = true;
 
 #if TRACY_GPU_ENABLED
     auto* profiler_ctx = instance.GetProfilerContext();
