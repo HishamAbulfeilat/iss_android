@@ -207,7 +207,7 @@ struct ReadbackStats {
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
     std::atomic<u64> shared_completions{0};
     std::atomic<u64> mapped_scheduled{0}, mapped_applied{0}, mapped_bytes{0},
-        mapped_current{0}, mapped_unavailable{0}, mapped_stale{0};
+        mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0};
     /// Eager copies: pages copied, used by a fault, gone stale unread, skipped for backoff.
     std::atomic<u64> eager_copied{0}, eager_used{0}, eager_stale{0}, eager_skipped{0};
     std::atomic<s64> window_start{0};
@@ -261,6 +261,8 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_current.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_unavailable.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_stale.exchange(0)));
+    std::printf("  mapped ready on owner: %llu published without guest wait/publication round trip\n",
+                static_cast<unsigned long long>(r.mapped_inline.exchange(0)));
     std::fflush(stdout);
 }
 } // namespace
@@ -327,6 +329,9 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
                 // Followers sleep in call_once without holding cache/region locks. The
                 // command processor never enters this flag (inline faults use flush_request).
                 std::call_once(readback->relaxed_completion, [&] {
+                    // StartDeferredReadback may already have published a completed mapped
+                    // submission on the owner. Avoid a second command-queue round trip.
+                    if (readback->applied.load(std::memory_order_acquire)) return;
                     if (ReadbackStatsEnabled()) {
                         Readbacks().shared_completions.fetch_add(1, std::memory_order_relaxed);
                     }
@@ -1122,7 +1127,7 @@ bool BufferCache::MappedReadbackPolicy() {
 }
 
 void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
-    write_ticks.Write(address, size, tick);
+    if (!write_ticks.Write(address, size, tick)) return;
     // Unlike a staging copy, a mapped read has not taken its snapshot yet. Uploads
     // and tiling as well as shader writes must invalidate it before device execution.
     if (!deferred_count.load(std::memory_order_acquire)) return;
@@ -1295,7 +1300,13 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         scheduler.Flush();
         break;
     }
-    {
+    // A submitted write may already be complete when the fault first reaches the
+    // owner. Publish now while no newer owner command can invalidate it; never wait
+    // here. Otherwise retain the asynchronous wait and revalidation path below.
+    const bool published_inline = readback->mapped && scheduler.IsFree(readback->tick) &&
+                                  FinishDeferredReadback(*readback, false);
+    if (published_inline && ReadbackStatsEnabled()) Readbacks().mapped_inline.fetch_add(1);
+    if (!published_inline) {
         std::scoped_lock lock{deferred_mutex};
         deferred_readbacks.push_back(readback);
         deferred_count.store(static_cast<u32>(deferred_readbacks.size()),

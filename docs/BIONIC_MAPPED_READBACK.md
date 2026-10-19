@@ -132,3 +132,50 @@ custo. O benefício depende da incidência de intervalos de submissões
 anteriores. Os logs anteriores não medem essa elegibilidade, e testes host
 não executam Turnip nem provam ganho de FPS. A próxima execução precisa
 confirmar publicações mapeadas e comparar FPS/esperas/recorder no mesmo trecho.
+
+
+## Revisão após o primeiro teste mapeado (`f0705a7`)
+
+O log `iss-android.log(2).txt` confirma HOST_VISIBLE/coherent, DMA off e
+2128 publicações mapeadas. Comparando sete janelas de gameplay (~35 s),
+sem as três de boot, o FPS ponderado passou de 37,30 (log 32) a 38,84;
+sem a primeira janela de transição, 37,80 a 40,38. São execuções distintas,
+não uma medição controlada. As chamadas de espera caíram de 92,79/s a
+50,24/s, mas o recorder aumentou de 14,88 a 16,43 ms/frame. Não há perfil
+por função que atribua esse aumento ao rastreador. No final, as publicações
+mapeadas por relatório caíram a 47 e 1. O contador `mapped_stale` só mede
+rejeições na captura, não invalidações detectadas antes dela.
+
+Esta revisão remove dois custos comprovados pelo fluxo do código:
+
+- Um memo fixo de 64 entradas guarda os intervalos de páginas já registrados
+  no mesmo tick. Escritas repetidas nos mesmos bindings evitam percorrer a
+  árvore, adquirir `deferred_mutex` e procurar readbacks sobrepostos novamente.
+  A chave inclui as páginas inicial/final e o tick; colisões apenas refazem o
+  caminho completo. Uma submissão nova atualiza o rastreador novamente. É
+  seguro pular a segunda invalidação porque nenhum readback mapeado pode
+  ser preparado para essas páginas no tick corrente: ele exige tick anterior.
+  Isso depende do contrato já existente de registrar todos os writes no
+  tick corrente do scheduler, antes da submissão. A barreira host continua
+  sendo solicitada mesmo em um memo hit.
+- Depois da preparação mapeada, o owner consulta a conclusão sem bloquear.
+  Se o tick já terminou, captura/revalida/publica imediatamente e devolve um
+  objeto já aplicado, sem inseri-lo na lista de pendentes. O guest evita tanto
+  a espera quanto o segundo pedido de publicação na fila. Isso fecha a janela
+  entre esses dois pedidos na qual um write poderia invalidar uma leitura
+  que já estava pronta. `mapped ready on owner` conta esse caso. Se a GPU
+  ainda não terminou ou a captura falhar, preserva o caminho assíncrono e a
+  recuperação anteriores. Não força Flush nem espera GPU no owner.
+
+Os testes exercitam os métodos de produção com publicação imediata através
+de duas alocações sparse, falha de invalidação após detecção de prontidão,
+deduplicação por páginas com bytes distintos, ticks novos/fora de ordem e
+comparação com a referência de páginas. O teste de fila concorrente verifica
+que o guest de um objeto já aplicado faz somente um pedido ao owner e zero
+esperas; um write GPU posterior mantém seu GPU-bit e não é desprotegido
+pela conclusão antiga. Os casos de GPU incompleta continuam verificando
+que o recorder progride enquanto o guest espera.
+
+A revisão não torna elegíveis escritas do tick corrente e não resolve todos
+os descartes. O ganho de FPS adicional exige teste no aparelho; testes host
+não demonstram esse ganho nem ausência de flicker.

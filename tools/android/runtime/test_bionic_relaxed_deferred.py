@@ -169,6 +169,17 @@ int main(int argc,char** argv) {
         cache.empty=true;cache.ReadMemory(0x1000,8,true,false);
         assert(cache.starts==1 && cache.downloads==0 && tracker.cpu);return 0;
     }
+    if(scenario=="ready" || scenario=="ready_new_write") {
+        // Model Start's already published mapped result. A subsequent GPU write
+        // must keep its GPU bit even though this older request completed inline.
+        cache.pending->mapped=true;cache.pending->applied=true;
+        tracker.gpu=scenario=="ready_new_write";
+        cache.ReadMemory(0x1000,8,true,false);
+        assert(cache.starts==1 && cache.downloads==0 && queue.submitted==1);
+        assert(cache.scheduler.timeline.waiters==0 && memory.publications==0);
+        assert(tracker.cpu==(scenario=="ready"));
+        assert(tracker.gpu==(scenario=="ready_new_write"));return 0;
+    }
     auto fault=std::async(std::launch::async,[&]{cache.ReadMemory(0x1000,8,write,false);});
     cache.scheduler.timeline.WaitForGuests(1);
     std::vector<std::future<void>> others;
@@ -227,7 +238,7 @@ class RelaxedDeferredTests(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             for case in ("success", "read", "join", "many", "stale", "race", "inline", "empty",
-                         "disabled", "off", "hot", "precise"):
+                         "disabled", "off", "hot", "precise", "ready", "ready_new_write"):
                 with self.subTest(bionic=bionic, case=case):
                     result = subprocess.run([str(binary), case], capture_output=True,
                                             text=True, timeout=10)

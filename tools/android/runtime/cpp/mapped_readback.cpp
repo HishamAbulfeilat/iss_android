@@ -30,7 +30,7 @@ struct Settings {
 } EmulatorSettings;
 struct Stats {
     std::atomic<u64> mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
-        mapped_bytes{},mapped_stale{},joined{},deferred{},deferred_bytes{};
+        mapped_bytes{},mapped_stale{},mapped_inline{},joined{},deferred{},deferred_bytes{};
 };
 Stats& Readbacks(){static Stats s;return s;}
 bool ReadbackStatsEnabled(){return true;}
@@ -87,6 +87,7 @@ struct Scheduler {
     bool host_read_barrier=false;
     vk::CommandBuffer current_cmdbuf{reinterpret_cast<VkCommandBuffer>(1)};
     u64 CurrentTick()const{return current;}
+    bool IsFree(u64 tick)const{return sem.IsFree(tick);}
     auto* GetWorkSemaphore(){return &sem;}
     void Flush(){++flushes;sem.completed=current++;}
     void FlushHostReadBarrier();
@@ -244,8 +245,9 @@ int main(int argc,char** argv) {
     if(mode=="current")c.write_ticks.Write(base+0x3ff0,32,10);
     if(mode=="unknown")c.write_ticks=VideoCore::WriteTickTracker{};
     if(mode=="mapfail")fail_map=true;
-    if(mode=="noncoherent" || mode=="invalidatefail")c.residency_coherent=false;
-    if(mode=="invalidatefail")fail_invalidate=true;
+    if(mode=="noncoherent" || mode=="invalidatefail" || mode=="readyinvalidatefail")c.residency_coherent=false;
+    if(mode=="invalidatefail" || mode=="readyinvalidatefail")fail_invalidate=true;
+    if(mode=="ready" || mode=="readyinvalidatefail")c.scheduler.sem.completed=7;
     const u64 required_size=(mode=="inside64current" || mode=="hole" || mode=="mapfail")?32:4;
     auto r=c.StartDeferredReadback(base+0x3ff0,required_size);assert(r);
     const bool mapped=mode!="current" && mode!="unknown" && mode!="hole" && mode!="mapfail";
@@ -264,13 +266,33 @@ int main(int argc,char** argv) {
     assert(c.runtime.copies==(mapped?0u:1u));
     assert(c.scheduler.flushes==(mapped?0u:1u));
     assert(c.staging_pool.allocations==(mapped?0u:1u));
+    if(mode=="ready") {
+        // Actual Start -> Finish -> Capture publishes both sparse allocations on the
+        // first owner request, with neither a wait nor an outstanding deferred object.
+        assert(r->applied && c.deferred_readbacks.empty() && c.deferred_count==0);
+        assert(c.scheduler.sem.waited==0 && Readbacks().mapped_inline==1);
+        for(u64 j=0;j<32;++j)assert(c.mem.published.at(base+0x3ff0+j)==
+            (j<16?device_memory[m1][32768+0x3ff0+j]:device_memory[m2][16384+j-16]));
+        for(u64 j=0;j<16;++j)assert(c.mem.published.at(base+0x4100+j)==device_memory[m2][16384+0x100+j]);
+        assert(c.mem.published.size()==48);
+        c.NoteDeviceWrite(base+0x4100,16,10);
+        assert(c.write_ticks.Latest(base+0x4100,16)==10 && !r->stale);
+        return 0;
+    }
+    // A failed immediate capture must remain recoverable through the old path.
+    if(mode=="readyinvalidatefail")assert(!r->applied && c.deferred_count==1);
     auto joined=c.StartDeferredReadback(base+(mode=="onepage"?0x3ff4:0x4100),4);assert(joined==r);
     if(mapped){assert(r->tick==7);assert(c.mem.published.empty());assert(!c.CaptureMappedReadback(*r));}
+    if(mode=="disjoint") {
+        c.NoteDeviceWrite(base+0x9000,16,10);
+        c.NoteDeviceWrite(base+0x9001,14,10); // memo hit cannot stale unrelated copied pages
+        assert(!r->stale);
+    }
     if(mode=="stale")c.NoteDeviceWrite(base+0x4200,4,10); // same copied 4K page
     if(mode=="recheck")c.write_ticks.Write(base+0x4100,4,10); // revalidation catches missing stale mark
     if(mode=="disjoint")c.NoteDeviceWrite(base+0x9000,16,10); // same prefetch window, different page
     const bool success=c.FinishDeferredReadback(*r,true);
-    if(mode=="stale" || mode=="recheck" || mode=="invalidatefail"){
+    if(mode=="stale" || mode=="recheck" || mode=="invalidatefail" || mode=="readyinvalidatefail"){
         assert(!success && c.mem.published.empty());
         c.RecoverDeferredReadback(*r);assert(r->recovered && !c.gpu_modified_ranges.intervals.empty());
     } else {

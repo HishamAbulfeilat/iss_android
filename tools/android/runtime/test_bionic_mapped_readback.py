@@ -46,10 +46,16 @@ int main() {
     std::mt19937 random(90231);
     constexpr uint64_t base=(1ull<<26)-256*4096;
     assert(t.Latest(base,1)==0);
+    assert(t.Write(base+1,4094,1));
+    assert(!t.Write(base+2,4092,1)); // different bytes, identical covered pages
+    assert(t.Write(base+1,4094,2)); // next submission must be observed again
+    assert(!t.Write(base+1,4094,1)); // an older observation cannot lower the maximum
+    ref[0]=2;
     for(unsigned iteration=0;iteration<20000;++iteration) {
         const unsigned a=random()%512,b=a+1+random()%(512-a);
         const uint64_t tick=1+random()%10000; // nested/out-of-order observations remain conservative
-        t.Write(base+a*4096+1,(b-a)*4096-2,tick);
+        const bool changed=t.Write(base+a*4096+1,(b-a)*4096-2,tick);
+        if(!changed)for(unsigned i=a;i<b;++i)assert(ref[i]>=tick);
         for(unsigned i=a;i<b;++i)ref[i]=std::max(ref[i],tick);
         const unsigned x=random()%512,y=x+1+random()%(512-x);
         uint64_t want=0;for(unsigned i=x;i<y;++i)want=std::max(want,ref[i]);
@@ -104,7 +110,7 @@ int main() {
         code = code.replace("// PRODUCTION_BUFFER_METHODS", "\n".join(method(source, s) for s in signatures))
         modes = ("coherent", "noncoherent", "current", "unknown", "hole", "mapfail",
                  "stale", "recheck", "disjoint", "outsidecurrent", "inside64current", "onepage",
-                 "invalidatefail", "off", "dma", "precise")
+                 "invalidatefail", "ready", "readyinvalidatefail", "off", "dma", "precise")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <unordered_map>
@@ -57,14 +58,27 @@ class WriteTickTracker {
         }
     };
     std::unordered_map<U64, Chunk> chunks;
+    // Writes to the same storage binding repeat across draws in one submission.
+    // Memoize page coverage independently of the Vulkan barrier/access memo: that
+    // memo can survive/reset at different boundaries and does not encode the tick.
+    struct WrittenRange { U64 first = 0, last = 0, tick = 0; };
+    std::array<WrittenRange, 64> written_ranges{};
     bool invalid = false;
     static bool Valid(U64 address, U64 size) {
         return size && address < AddressLimit && size <= AddressLimit - address;
     }
 public:
-    void Write(U64 address, U64 size, U64 tick) {
-        if (!size) return;
-        if (!Valid(address, size) || !tick) { invalid = true; return; }
+    // False proves that these pages already have at least this write tick. Such a
+    // repeated write cannot invalidate a newly eligible mapped readback: eligibility
+    // requires the last write tick to be strictly older than the current submission.
+    bool Write(U64 address, U64 size, U64 tick) {
+        if (!size) return false;
+        if (!Valid(address, size) || !tick) { invalid = true; return true; }
+        const U64 first_page = address >> PageShift;
+        const U64 last_page = (address + size - 1) >> PageShift;
+        const U64 hash = first_page * 0x9E3779B97F4A7C15ull ^ last_page * 0xFF51AFD7ED558CCDull;
+        auto& memo = written_ranges[(hash ^ (hash >> 32)) % written_ranges.size()];
+        if (memo.tick >= tick && memo.first == first_page && memo.last == last_page) return false;
         const U64 last = (address + size - 1) >> ChunkShift;
         for (U64 chunk = address >> ChunkShift; chunk <= last; ++chunk) {
             const U64 base = chunk << ChunkShift;
@@ -72,6 +86,8 @@ public:
             const auto hi = static_cast<unsigned>((std::min(address + size, base + (U64{1} << ChunkShift)) - base + 4095) >> PageShift);
             chunks[chunk].Write(0, 0, Pages, lo, hi, tick);
         }
+        memo = {first_page, last_page, tick};
+        return true;
     }
     U64 Latest(U64 address, U64 size) const {
         if (invalid || !Valid(address, size)) return std::numeric_limits<U64>::max();
