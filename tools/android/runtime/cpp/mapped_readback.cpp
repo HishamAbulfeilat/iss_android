@@ -350,6 +350,21 @@ int main(int argc,char** argv) {
             c.RecoverDeferredReadback(*r);assert(c.mem.published.empty());return 0;}
         assert(!r->stale);
         c.gpu_modified_ranges.Add(base+0x4200,4);c.tracker.ranges.emplace_back(base+0x4200,4);
+        if(mode=="partial_new_request"||mode=="partial_new_request_ready") {
+            c.NoteDeviceWrite(base+0x4200,4,10);
+            const bool ready=mode=="partial_new_request_ready";
+            if(ready)c.scheduler.sem.completed=7;
+            auto fresh=c.StartDeferredReadback(base+0x4100,4);
+            assert(fresh&&fresh!=r&&fresh->tick==10&&c.scheduler.flushes==1);
+            assert(c.scheduler.sem.waited==(ready?7u:0u));
+            assert(r->applied==ready&&r->recovered==!ready);
+            assert(c.mem.published.size()==(ready?16u:0u));
+            if(ready)c.mem.published[base+0x3ff0]=201;
+            assert(c.FinishDeferredReadback(*fresh,true));
+            assert(c.mem.published.size()==52&&c.scheduler.sem.waited==10);
+            if(ready)assert(c.mem.published.at(base+0x3ff0)==201);
+            return 0;
+        }
         if(mode=="partial_inflight") {
             c.SettleDeferredReadbacks(base,base+65536);
             assert(r->recovered&&!r->applied&&c.scheduler.sem.waited==0);

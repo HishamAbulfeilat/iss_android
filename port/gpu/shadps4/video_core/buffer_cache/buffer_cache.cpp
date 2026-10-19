@@ -1357,6 +1357,16 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             const VAddr join_end = readback->mapped ? device_addr + size : window_end;
             if (!readback->Done() && !readback->stale && readback->start <= join_start &&
                 join_end <= readback->end) {
+                if (readback->page_scoped &&
+                    (readback->invalid_pages.Overlaps(device_addr, device_addr + size) ||
+                     write_ticks.Latest(device_addr, size) > readback->tick)) {
+                    // This caller needs newer data. Do not make it wait the old tick
+                    // and then the new one. Settle below salvages an already-ready
+                    // neighbor or recovers without blocking if the old tick is in flight.
+                    readback->invalid_pages.Add({Common::AlignDown(device_addr, u64{4096}),
+                                                 Common::AlignUp(device_addr + size, u64{4096})});
+                    continue;
+                }
                 if (ReadbackStatsEnabled()) {
                     Readbacks().joined.fetch_add(1);
                 }

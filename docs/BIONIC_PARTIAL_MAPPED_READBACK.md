@@ -62,7 +62,12 @@ When another cache operation must settle a partially invalid snapshot whose tick
 is still incomplete, it conservatively recovers it without waiting on the owner.
 This retains the previous no-wait stale recovery instead of introducing a new
 GPU command-thread stall. An all-invalid snapshot is likewise fully recovered.
-Unknown/failed mappings and failed cache invalidations retain the old fallback.
+A new request already known to target an invalid page does not join the obsolete
+snapshot and wait its tick first. The owner immediately selects the fresh request;
+settlement preserves ready neighbors or performs the same no-wait recovery when
+the old tick is incomplete. This avoids adding an old-tick wait followed by the
+new-tick wait for callers whose own data changed. Unknown/failed mappings and
+failed cache invalidations retain the old fallback.
 
 A related abac2ad corner case is corrected too: if a shared completion has already
 cleared the requested native store's GPU bit by the time its owner callback runs,
@@ -81,7 +86,10 @@ publication. Rejected spans have deliberately unreadable pointers in two-page
 cases. A continuous three-page copy with its middle page invalid checks the
 physical non-coherent invalidation ranges, both valid side pages, protection of
 the middle page, exact dirty-byte restoration and preservation of a subsequent
-CPU write while fetching the newer middle page. Newer GPU bytes outside the old
+CPU write while fetching the newer middle page. New-request tests cover an
+invalid page both before and after the old tick completes, checking that only the
+already-ready case publishes old neighbors, and the in-flight case never waits
+on the owner. Newer GPU bytes outside the old
 copy are retained as well. The serialized queue fixture executes production
 ReadMemory for valid and excluded requests after partial completion, including
 asynchronous progress and acquisition of the newer GPU generation.

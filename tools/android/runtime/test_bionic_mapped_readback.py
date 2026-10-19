@@ -115,7 +115,8 @@ int main() {
                  "currentoff", "currentready", "currentstale", "currentmapfail", "currentnoncoherent",
                  "replacement", "replacement_stage", "replacement_unrelated",
                  "partial_neighbor", "partial_note", "partial_recheck", "partial_noncoherent",
-                 "partial_all", "partial_cpu", "partial_inflight", "partial_clean", "partial_disjoint", "partial_gap")
+                 "partial_all", "partial_cpu", "partial_inflight", "partial_clean", "partial_disjoint", "partial_gap",
+                 "partial_new_request", "partial_new_request_ready")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))
