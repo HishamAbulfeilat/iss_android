@@ -207,6 +207,7 @@ struct ReadbackStats {
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
     std::atomic<u64> shared_completions{0};
     std::atomic<u64> deferred_retries{0}, retry_applied{0};
+    std::atomic<u64> cpu_merge_applied{0}, cpu_merge_bytes{0}, cpu_merge_rejected{0};
     std::atomic<u64> mapped_scheduled{0}, mapped_applied{0}, mapped_bytes{0},
         mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0},
         mapped_submitted{0};
@@ -270,6 +271,10 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_submitted.exchange(0)),
                 static_cast<unsigned long long>(r.deferred_retries.exchange(0)),
                 static_cast<unsigned long long>(r.retry_applied.exchange(0)));
+    std::printf("  CPU write merge: %llu applied, %.2f MB, %llu rejected\n",
+                static_cast<unsigned long long>(r.cpu_merge_applied.exchange(0)),
+                r.cpu_merge_bytes.exchange(0) / 1048576.0,
+                static_cast<unsigned long long>(r.cpu_merge_rejected.exchange(0)));
     std::fflush(stdout);
 }
 } // namespace
@@ -1519,14 +1524,70 @@ void BufferCache::MarkDeferredStale(VAddr addr, u64 size, bool cpu) {
     }
 }
 
+bool BufferCache::CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64 size) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* env = std::getenv("TLG_RELAXED_WRITE_MERGE");
+        return !(env && *env == '0');
+    }();
+    // Bound the extra CPU snapshot. Aliases/permissions are checked atomically by
+    // TryCpuWriteBacking; overlapping memcpy must keep the normal libc contract.
+    if (!enabled || EmulatorSettings.IsDirectMemoryAccessEnabled() ||
+        size < 64 || size > (4ULL << 20) || dst + size < dst) return false;
+    const auto source = reinterpret_cast<VAddr>(src);
+    if (src && (source + size < source || (dst < source + size && source < dst + size))) return false;
+    std::vector<u8> payload(size);
+    // Read a protected source on the caller, before entering the owner queue. A
+    // source-image readback may itself fault/wait and cannot run on the cache owner.
+    if (src) std::memcpy(payload.data(), src, size);
+    else std::fill(payload.begin(), payload.end(), static_cast<u8>(fill));
+    bool applied = false;
+    liverpool->SendCommand<true, true>([&] {
+        if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
+            !memory_tracker->IsRegionGpuModified(dst, size)) return;
+        // Earlier CPU-side uploads/signals may still read/write this backing.
+        // Finish overlapping host copies before replacing their source bytes.
+        scheduler.WaitHostCopiesFor(dst, size);
+        scheduler.WaitDeferredSignals();
+        // Images may have a pending publication over the same bytes. Settle it
+        // before overwriting them, as the ordinary CPU-write fault does.
+        texture_cache.ResolveReadbacks(dst, size, true, ReadbackSource::CpuWrite);
+        MarkEagerStale(dst, size);
+        MarkDeferredStale(dst, size, true);
+        if (!memory->TryCpuWriteBacking(reinterpret_cast<void*>(dst), payload.data(), size)) return;
+        // No owner readback/upload can enter between the store and registration.
+        // Do NOT mark the whole page CPU dirty: its untouched GPU bytes must survive.
+        AddMergedWriteRange(dst, size);
+        texture_cache.InvalidateMemory(dst, size);
+        applied = true;
+    });
+    if (ReadbackStatsEnabled()) {
+        if (applied) {
+            Readbacks().cpu_merge_applied.fetch_add(1);
+            Readbacks().cpu_merge_bytes.fetch_add(size);
+            ReportReadbacks();
+        } else Readbacks().cpu_merge_rejected.fetch_add(1);
+    }
+    return applied;
+#else
+    return false;
+#endif
+}
+
 bool BufferCache::CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size) {
     static const bool enabled = [] {
         const char* e = std::getenv("TLG_WRITE_MERGE");
-        return e && *e == '1' && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise;
+        return e && *e == '1';
     }();
     if (!enabled || size < 16 || !memory_tracker->IsRegionGpuModified(dst, size)) {
         return false;
     }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+        return CpuWriteMergeRelaxed(dst, src, fill, size);
+    }
+#endif
+    if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Precise) return false;
     // The copies of these pages made earlier (eager, deferred) lack the bytes about to be
     // written: drop them before the write, waiting for an apply in progress, so none lands
     // over the new bytes (guest thread: only marks them, gpu_modified_ranges belongs to the
@@ -1548,6 +1609,11 @@ bool BufferCache::CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size) 
             done += n;
         }
     }
+    AddMergedWriteRange(dst, size);
+    return true;
+}
+
+void BufferCache::AddMergedWriteRange(VAddr dst, u64 size) {
     std::scoped_lock lock{merge_mutex};
     VAddr start = dst, end = dst + size;
     auto it = merged_writes.upper_bound(start);
@@ -1563,7 +1629,6 @@ bool BufferCache::CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size) 
     }
     merged_writes.emplace(start, end);
     merged_count.store(merged_writes.size(), std::memory_order_release);
-    return true;
 }
 
 void BufferCache::FlushMergedWrites(const Buffer* arena, VAddr device_addr, u64 size) {

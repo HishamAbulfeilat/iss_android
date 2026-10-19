@@ -802,6 +802,41 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     read_unlock();
     return ok;
 }
+/* A queued CPU write must not run while its caller owns the VMA write lock. */
+int runtime_memory_cpu_write_can_queue(void) { return exclusive_depth == 0; }
+
+/* CPU merge bypasses GPU protection, not guest permissions or physical aliases.
+ * Validate the ENTIRE destination before writing, under the same table lock.
+ * A second VA for these physical bytes could have independent GPU/cache state. */
+int runtime_memory_write_backing_cpu(uintptr_t address, const void *data, uint64_t size) {
+    if (!size || address + size < address) return 0;
+    read_lock();
+    int ok = 1;
+    for (uintptr_t at = address, end = address + size; at < end && ok;) {
+        size_t i = vma_index(at);
+        if (i == vma_count || vmas[i].start > at || vmas[i].kind == KIND_RESERVED ||
+            !(host_prot(vmas[i].prot) & PROT_WRITE)) { ok = 0; break; }
+        const uint64_t n = (vmas[i].end < end ? vmas[i].end : end) - at;
+        const uint64_t phys = vmas[i].phys + at - vmas[i].start;
+        for (size_t j = 0; j < vma_count; ++j) {
+            if (j == i || vmas[j].kind == KIND_RESERVED) continue;
+            if (phys < vmas[j].phys + vmas[j].end - vmas[j].start &&
+                vmas[j].phys < phys + n) { ok = 0; break; }
+        }
+        at += n;
+    }
+    if (ok) {
+        for (uintptr_t at = address, end = address + size; at < end;) {
+            const size_t i = vma_index(at);
+            const uint64_t n = (vmas[i].end < end ? vmas[i].end : end) - at;
+            memcpy(backing_base + vmas[i].phys + at - vmas[i].start,
+                   (const unsigned char *)data + at - address, n);
+            at += n;
+        }
+    }
+    read_unlock();
+    return ok;
+}
 /* Reads through the backing view, bypassing GPU page protection; 0 when part of the range has no
  * backing (the caller then reads the guest address directly). GPU-internal threads use it so a
  * read of a page protected for readback (TLG_READBACKS=2) cannot fault into a readback that waits

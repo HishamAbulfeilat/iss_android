@@ -33,6 +33,7 @@
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/libs.h"
 #include "core/memory.h"
+#include "core/emulator_settings.h"
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -41,6 +42,8 @@ extern "C" {
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
+int runtime_memory_write_backing_cpu(uintptr_t address, const void* data, uint64_t size);
+int runtime_memory_cpu_write_can_queue(void);
 int runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
 int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped);
@@ -153,6 +156,9 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
         rasterizer->GetTextureCache().NoteBackingWrite(reinterpret_cast<VAddr>(address), size);
     }
     return written;
+}
+bool MemoryManager::TryCpuWriteBacking(void* address, const void* data, u64 size) {
+    return runtime_memory_write_backing_cpu(reinterpret_cast<uintptr_t>(address), data, size) != 0;
 }
 void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms) {
     TlgStats::Timer timer{TlgStats::t_protect};
@@ -453,6 +459,13 @@ ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 
 extern "C" int tlggpu_cpu_write(void* dst, const void* src, int fill, uint64_t size) {
     auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    if (rasterizer && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+        // Most libc writes are ordinary RAM. Avoid a thread-id syscall for those.
+        if (!rasterizer->GetBufferCache().IsRegionGpuModified(reinterpret_cast<VAddr>(dst), size)) return 0;
+        if (rasterizer->IsGpuSideThread() || !runtime_memory_cpu_write_can_queue()) return 0;
+    }
+#endif
     return rasterizer && rasterizer->GetBufferCache().CpuWriteMerge(
                              reinterpret_cast<VAddr>(dst), src, fill, size)
                ? 1

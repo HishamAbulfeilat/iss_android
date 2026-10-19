@@ -168,10 +168,11 @@ private:
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
 public:
-    /// tlg: TLG_WRITE_MERGE=1 (precise readbacks): a guest memcpy/memset into memory with
-    /// GPU-modified pages writes through the backing view without a fault or a GPU wait, and the
+    /// tlg: TLG_WRITE_MERGE=1 (Precise, or native Bionic Relaxed without DMA): guest memcpy/memset into
+    /// GPU-modified pages writes through the backing view without a buffer readback. The
     /// exact byte range is uploaded before the GPU next uses or downloads it. Bytes the GPU
-    /// wrote elsewhere on those pages stay intact. False: the caller writes normally.
+    /// wrote elsewhere on those pages stay intact. Relaxed serializes the write on the owner,
+    /// settles pending images and excludes physical aliases. False: caller writes normally.
     bool CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size);
 
     /// tlg: TLG_EAGER_READBACK=1 (precise readbacks): pages the guest reads back after GPU
@@ -184,6 +185,8 @@ public:
     void EagerCopyAtFence();
 
 private:
+    bool CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64 size);
+    void AddMergedWriteRange(VAddr dst, u64 size);
     /// Uploads the merged guest writes inside [device_addr, device_addr + size) of `arena`.
     void FlushMergedWrites(const Buffer* arena, VAddr device_addr, u64 size);
     std::mutex merge_mutex;
