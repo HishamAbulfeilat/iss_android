@@ -311,9 +311,21 @@ std::tuple<const Buffer*, VAddr, VAddr> BufferCache::GetReadbackWindow(VAddr dev
     return {arena, window_start, window_end};
 }
 
-void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
+void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks,
+                             const std::function<bool()>& prepare) {
     const s64 queued_at = ReadbackStatsEnabled() ? NowNs() : 0;
-    const auto flush_request = [this, device_addr, size, is_write, queued_at] {
+    // A native store proof and its ordinary readback share the initial owner command.
+    // Never repeat the proof on a stale retry or synchronous fallback.
+    bool prepared = false, handled = false;
+    const auto prepare_once = [&] {
+        if (!prepared) {
+            prepared = true;
+            handled = prepare && prepare();
+        }
+        return handled;
+    };
+    const auto flush_request = [this, device_addr, size, is_write, queued_at, &prepare_once] {
+        if (prepare_once()) return;
         const s64 started_at = queued_at ? NowNs() : 0;
         const auto [arena, window_start, window_end] = GetReadbackWindow(device_addr, size);
         DownloadMemory(arena, window_start, window_end - window_start);
@@ -348,6 +360,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
             if (attempt && queued_at) Readbacks().deferred_retries.fetch_add(1);
             std::shared_ptr<DeferredReadback> readback;
             liverpool->SendCommand<true, true>([&] {
+                if (prepare_once()) return;
                 readback = StartDeferredReadback(device_addr, size);
                 if (!readback && is_write) {
                     // Nothing to copy back, as when DownloadMemory finds nothing.
@@ -1550,9 +1563,12 @@ bool BufferCache::CpuStoreOverwrite(VAddr dst, const void* src, u64 size) {
     std::array<u8, 16> bytes;
     std::memcpy(bytes.data(), src, bytes.size());
     bool applied = false;
-    liverpool->SendCommand<true, true>([&] {
+    // Image publications precede the buffer readback, just as in OnWriteFault.
+    // Resolve on the caller so an image wait does not block the command owner.
+    texture_cache.ResolveReadbacks(dst, size, false, ReadbackSource::CpuWrite);
+    ReadMemory(dst, size, true, false, [&]() -> bool {
         if (!memory_tracker->IsRegionGpuModified(dst, size) ||
-            eager_count.load(std::memory_order_acquire)) return;
+            eager_count.load(std::memory_order_acquire)) return false;
         bool any = false, covered = true;
         const auto check = [&](VAddr begin, VAddr end) {
             const auto a = std::max(begin, page), b = std::min(end, page_end);
@@ -1575,7 +1591,7 @@ bool BufferCache::CpuStoreOverwrite(VAddr dst, const void* src, u64 size) {
         }
         if (!any || !covered) {
             if (ReadbackStatsEnabled()) Readbacks().cpu_store_coverage_rejected.fetch_add(1);
-            return;
+            return false;
         }
         // The entire page will become writable; outstanding host reads anywhere on it must
         // finish before releasing protection, not only host reads of these first 16 bytes.
@@ -1587,13 +1603,14 @@ bool BufferCache::CpuStoreOverwrite(VAddr dst, const void* src, u64 size) {
         SettleDeferredReadbacks(page, page_end); // stale copies recover without a GPU wait
         if (!memory->TryCpuWriteBacking(reinterpret_cast<void*>(dst), bytes.data(), size)) {
             if (ReadbackStatsEnabled()) Readbacks().cpu_store_backing_rejected.fetch_add(1);
-            return;
+            return false;
         }
         gpu_modified_ranges.Subtract(page, 4096);
         memory_tracker->UnmarkRegionAsGpuModified(page, 4096);
         memory_tracker->MarkRegionAsCpuModified(page, 4096);
         texture_cache.InvalidateMemory(dst, size);
         applied = true;
+        return true;
     });
     if (ReadbackStatsEnabled()) {
         (applied ? Readbacks().cpu_store_applied : Readbacks().cpu_store_fallback).fetch_add(1);

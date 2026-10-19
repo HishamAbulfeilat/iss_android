@@ -43,13 +43,16 @@ struct Scheduler {Queue* q;unsigned waits=0,signals=0;
  void WaitHostCopiesFor(u64 a,u64 n){q->CheckOwner();assert(a==0x1000&&n==4096);++waits;}
  void WaitDeferredSignals(){q->CheckOwner();++signals;}};
 struct Texture {Queue* q;unsigned resolves=0,invalidations=0;
- void ResolveReadbacks(u64 a,u64 n,bool owner,ReadbackSource){q->CheckOwner();assert(a==0x1000&&n==4096&&owner);++resolves;}
+ void ResolveReadbacks(u64 a,u64 n,bool owner,ReadbackSource){if(owner)q->CheckOwner();assert((owner&&a==0x1000&&n==4096)||(!owner&&a==0x1040&&n==16));++resolves;}
  void InvalidateMemory(u64 a,u64 n){q->CheckOwner();assert(a==0x1040&&n==16);++invalidations;}};
 struct BufferCache {
  Queue* liverpool;Memory* memory;Tracker tracker;Tracker* memory_tracker=&tracker;
  std::atomic<u64>eager_count{};Ranges gpu_modified_ranges;std::mutex deferred_mutex;
  std::vector<std::shared_ptr<Snapshot>>deferred_readbacks;Scheduler scheduler;Texture texture_cache;
- unsigned stale_marks=0,settled=0;
+ unsigned stale_marks=0,settled=0,readback_fallbacks=0;
+ void ReadMemory(VAddr,u64,bool,bool,const std::function<bool()>& prepare){
+  liverpool->SendCommand<true,true>([&]{if(!prepare())++readback_fallbacks;});
+ }
  BufferCache(Queue* q,Memory* m):liverpool(q),memory(m),tracker{true,false,q},scheduler{q},texture_cache{q}{}
  void MarkEagerStale(u64,u64){liverpool->CheckOwner();}
  void MarkDeferredStale(u64,u64,bool cpu){liverpool->CheckOwner();assert(cpu);++stale_marks;
@@ -82,8 +85,11 @@ int main(int,char** argv){
  const bool expected=mode=="exact"||mode=="inside"||mode=="pending"||mode=="done-pending";
  const bool result=c.CpuStoreOverwrite(mode=="misaligned"?0x1041:0x1040,payload.data(),16);
  assert(result==expected);
+ const bool eligible=mode!="dma"&&mode!="precise"&&mode!="off"&&mode!="globaloff"&&mode!="misaligned"&&mode!="nonbionic";
+ assert(q.submitted==unsigned(eligible));
+ assert(c.readback_fallbacks==unsigned(eligible&&!expected));
  if(expected){assert(!c.tracker.gpu&&c.tracker.cpu&&c.scheduler.waits==1&&c.scheduler.signals==1);
-  assert(c.texture_cache.resolves==1&&c.texture_cache.invalidations==1&&c.stale_marks==1&&c.settled==1);
+  assert(c.texture_cache.resolves==2&&c.texture_cache.invalidations==1&&c.stale_marks==1&&c.settled==1);
   for(unsigned i=0;i<4096;++i)assert(memory.bytes[i]==(i>=64&&i<80?55:7));
   for(auto [a,b]:c.gpu_modified_ranges.data)assert(a>=0x2000||b<=0x1000);
   // A subsequent page upload preserves every neighboring CPU/GPU-coherent byte.

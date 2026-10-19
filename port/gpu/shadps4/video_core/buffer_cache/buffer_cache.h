@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -102,7 +103,10 @@ public:
     void ExtendWriteFault(VAddr device_addr);
 
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
-    void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false);
+    // prepare runs once on the cache owner, before recording a readback. True handles
+    // the request completely; false falls through within the same owner command.
+    void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false,
+                    const std::function<bool()>& prepare = {});
     /// tlg: a CPU read fault on pages with no GPU-modified data: lift the read protection on the
     /// faulting thread instead of a round trip through the GPU command thread.
     void ReleaseReadProtection(VAddr device_addr, u64 size);

@@ -71,3 +71,52 @@ this store, not removal of all synchronization.
 `TLG_NATIVE_STORE_MERGE=0` disables the new path; `TLG_WRITE_MERGE=0` also disables
 it. The original HLE memcpy/memset merge keeps its existing >=64-byte threshold.
 No rendering quality, affinity, DMA or guest floating-point policy is changed.
+
+## Device result and combined fallback (2026-10-19)
+
+Both new logs test d988cb8, 720p Relaxed, DMA off, the same Adreno 830 and
+Turnip driver. The counters do not support a performance win from the overwrite
+proof. Across the complete reports, log (5) applied 55 of 8496 queued candidates
+(0.647%); log (6)(1) applied 76 of 9853 (0.771%). Coverage rejected 7314 and
+8636 respectively; backing validation rejected zero. These denominators include
+loading and different recording durations and must not be used as FPS windows.
+
+Using the same window selection as the earlier e9ba502 comparison:
+
+| Build / session | First 7 gameplay windows (includes loading) | Gameplay windows 3–7 | Recorder ms/frame, windows 3–7 |
+| --- | ---: | ---: | ---: |
+| e9ba502 earlier baseline | 39.122 FPS | 40.927 FPS | 16.330 |
+| d988cb8 log (5) | 39.709 FPS | 41.181 FPS | 16.050 |
+| d988cb8 log (6)(1) | 38.604 FPS | 40.200 FPS | 16.760 |
+
+FPS is sum(frames)/sum(window_s), not an unweighted average of rounded FPS.
+There are three initial non-gameplay windows; gameplay 3–7 therefore selects
+BionicPerf indices 5 through 9 inclusive. The between-session spread crosses
+the older baseline. It does not establish either a gain or a regression.
+The dominant original write site remains 0x5421fb. HLE bulk merge remains unused.
+
+The failed proof nevertheless added a synchronous owner-queue round trip before
+OnWriteFault queued its actual deferred readback: typically about 1000 rejected
+commands every five seconds, each with a wake/wait handshake. This is a concrete
+cost of the previous patch, even when the GPU readback itself cannot be avoided.
+
+ReadMemory now accepts an optional owner preparation callback. CpuStoreOverwrite
+resolves pending images on the caller, then runs its original conservative proof
+inside the initial readback command. On rejection the **same command** records or
+joins the ordinary deferred readback. The guest still waits on the GPU semaphore
+outside the owner and retains the bounded stale retry/publication path. The
+preparation is run only once, including when retries end in synchronous fallback.
+On proof success no readback is recorded and only the existing successful-store
+path advances the suspended ARM PC. On rejection, normal OnWriteFault still runs;
+its locked GPU-bit check normally finds the data already published, or handles a
+newer GPU write through the original path if it raced with completion. Texture
+invalidation and write-fault extension remain in that ordinary path.
+
+The proof, partial-page exclusion, byte values, GPU tick, wait ordering and DMA
+policy are unchanged. This removes the extra queue operation; it does **not**
+remove the waits preserving other GPU bytes in the page. No device FPS gain from
+this correction has been measured yet. Host fixtures check the actual ReadMemory
+method: accepted preparation skips recording, rejected preparation shares one
+initial queue command, the owner progresses while the guest waits, successful
+retry publishes the newer generation, and exhausted retries do not rerun the
+proof. Ordinary read/write, joined-fault and newer-GPU-write race tests still run.

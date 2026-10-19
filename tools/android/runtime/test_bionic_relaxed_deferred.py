@@ -148,7 +148,7 @@ struct BufferCache {
     }
     static bool DeferredReadbackEnabled();
     bool FinishDeferredReadback(DeferredReadback&,bool);
-    void ReadMemory(VAddr,u64,bool,bool);
+    void ReadMemory(VAddr,u64,bool,bool,const std::function<bool()>& = {});
 };
 '''
 
@@ -198,6 +198,39 @@ int main(int argc,char** argv) {
         assert(cache.scheduler.timeline.waiters==0 && memory.publications==0);
         assert(tracker.cpu==(scenario=="ready"));
         assert(tracker.gpu==(scenario=="ready_new_write"));return 0;
+    }
+    if(scenario=="prepare_accept" || scenario=="prepare_reject" || scenario=="prepare_retry" || scenario=="prepare_exhaust") {
+        unsigned proofs=0;
+        const bool accept=scenario=="prepare_accept",retry_prepare=scenario=="prepare_retry",
+                   exhaust=scenario=="prepare_exhaust";
+        if(retry_prepare&&!NATIVE_BIONIC)return 0;
+        cache.replace_stale=retry_prepare;
+        auto fault=std::async(std::launch::async,[&]{
+            cache.ReadMemory(0x1000,8,true,false,[&] {
+                queue.CheckOwner();++proofs;return accept;
+            });
+        });
+        if(accept) {
+            assert(fault.wait_for(3s)==std::future_status::ready);fault.get();
+            assert(proofs==1&&queue.submitted==1&&cache.starts==0&&cache.downloads==0);
+            assert(memory.publications==0&&tracker.gpu&&!tracker.cpu);return 0;
+        }
+        cache.scheduler.timeline.WaitForGuests(1);
+        assert(cache.starts==1&&queue.submitted==1); // proof and recording are ONE command
+        queue.SendCommand<true,true>([&]{
+            assert(cache.downloads==0&&memory.publications==0);
+            if(retry_prepare||exhaust)cache.pending->stale=true;
+        });
+        assert(fault.wait_for(0s)!=std::future_status::ready); // GPU owner remains available
+        cache.scheduler.timeline.Complete();
+        if(retry_prepare){cache.WaitForStarts(2);cache.scheduler.timeline.WaitForGuests(2);
+            cache.scheduler.timeline.Complete(2);}
+        assert(fault.wait_for(3s)==std::future_status::ready);fault.get();
+        assert(proofs==1&&cache.downloads==unsigned(exhaust)&&memory.publications==unsigned(!exhaust));
+        assert(cache.starts==((retry_prepare||(exhaust&&NATIVE_BIONIC))?2u:1u));
+        assert(queue.submitted==((retry_prepare||(exhaust&&NATIVE_BIONIC))?4u:3u));
+        assert(!tracker.gpu&&tracker.cpu);
+        for(u8 b:memory.bytes)assert(b==(exhaust?9:retry_prepare?11:7));return 0;
     }
     auto fault=std::async(std::launch::async,[&]{cache.ReadMemory(0x1000,8,write,false);});
     cache.scheduler.timeline.WaitForGuests(1);
@@ -259,7 +292,7 @@ class RelaxedDeferredTests(unittest.TestCase):
         bodies = "\n".join(method(source, signature) for signature in (
             "bool BufferCache::DeferredReadbackEnabled()",
             "bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait)",
-            "void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks)"))
+            "void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks,"))
         with tempfile.TemporaryDirectory() as directory:
             src = Path(directory) / "readback.cpp"
             binary = Path(directory) / "readback"
@@ -272,7 +305,8 @@ class RelaxedDeferredTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             for case in ("success", "read", "join", "many", "stale", "race", "inline", "empty",
                          "disabled", "off", "hot", "precise", "ready", "ready_new_write",
-                         "retry", "retry_join", "retry_off", "retry_empty", "obsolete", "recovered"):
+                         "retry", "retry_join", "retry_off", "retry_empty", "obsolete", "recovered",
+                         "prepare_accept", "prepare_reject", "prepare_retry", "prepare_exhaust"):
                 with self.subTest(bionic=bionic, case=case):
                     result = subprocess.run([str(binary), case], capture_output=True,
                                             text=True, timeout=10)
