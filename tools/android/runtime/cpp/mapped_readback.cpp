@@ -30,7 +30,8 @@ struct Settings {
     bool IsDirectMemoryAccessEnabled(){return dma;}
 } EmulatorSettings;
 struct Stats {
-    std::atomic<u64> mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
+    std::atomic<u64> mapped_prefetch_narrowed{},mapped_wider_wait_bypassed{},mapped_coherent_skipped{},
+        mapped_current{},mapped_unavailable{},mapped_scheduled{},mapped_applied{},
         mapped_bytes{},mapped_partial{},mapped_partial_kept{},mapped_partial_retry{},mapped_stale{},mapped_inline{},mapped_submitted{},joined{},deferred{},deferred_bytes{};
 };
 Stats& Readbacks(){static Stats s;return s;}
@@ -196,13 +197,13 @@ struct BufferCache {
     void FlushMergedWrites(const Buffer*,VAddr,u64){}
     void NoteDeviceWrite(VAddr,u64,u64);
     void MarkDeferredStale(VAddr,u64,bool);
-    bool PrepareMappedReadback(DeferredReadback&,u64,bool=false);
+    bool PrepareMappedReadback(DeferredReadback&,u64,bool=false,u64=0);
     bool CaptureMappedReadback(DeferredReadback&);
     u64 CollectDownloads(const Buffer*,VAddr,u64,boost::container::small_vector<vk::BufferCopy,8>&);
     std::shared_ptr<DeferredReadback> StartDeferredReadback(VAddr,u64);
     bool FinishDeferredReadback(DeferredReadback&,bool);
     void RecoverDeferredReadback(DeferredReadback&);
-    void SettleDeferredReadbacks(VAddr,VAddr);
+    void SettleDeferredReadbacks(VAddr,VAddr,u64=0);
     void PruneDeferredReadbacks();
 };
 // PRODUCTION_BUFFER_METHODS
@@ -252,6 +253,75 @@ int main(int argc,char** argv) {
     c.tracker.ranges={{base+0x3ff0,32},{base+0x4100,16}};
     if(mode=="partial_gap")c.tracker.ranges={{base+0x3000,3*4096}};
     for(auto [a,n]:c.tracker.ranges){c.gpu_modified_ranges.Add(a,n);c.write_ticks.Write(a,n,7);}
+    if(mode.starts_with("priority_")) {
+        c.resident_ranges.Add({{block+2,block+3},vk::DeviceMemory{m2},2});
+        const u64 neighbor_tick=mode=="priority_same_tick"?7:mode=="priority_current"?10:9;
+        c.tracker.ranges.emplace_back(base+0x9000,16);
+        c.gpu_modified_ranges.Add(base+0x9000,16);c.write_ticks.Write(base+0x9000,16,neighbor_tick);
+        if(mode=="priority_ready")c.scheduler.sem.completed=7;
+        if(mode=="priority_noncoherent") {
+            c.residency_coherent=false;
+            c.residency_mappings[vk::DeviceMemory{m2}].data=reinterpret_cast<const u8*>(1);
+            forbidden_memory=m2;forbidden_start=0;forbidden_end=65536;
+        }
+        if(mode=="priority_neighbor_ready")c.scheduler.sem.completed=9;
+        if(mode=="priority_coherent") {
+            c.tracker.coherent_pages.insert(base+0x3000);
+            assert(!c.StartDeferredReadback(base+0x3ff0,4));
+            assert(Readbacks().mapped_coherent_skipped==1 && c.scheduler.sem.waited==0);
+            assert(c.mem.published.empty() && c.runtime.copies==0 && c.scheduler.flushes==0);
+            assert(c.gpu_modified_ranges.intervals.size()==3);return 0;
+        }
+        std::shared_ptr<VideoCore::BufferCache::DeferredReadback> old;
+        if(mode=="priority_join" || mode=="priority_join_ready") {
+            // Another guest requested the newer neighbor, collecting the whole window.
+            old=c.StartDeferredReadback(base+0x9000,4);
+            assert(old && old->mapped && old->tick==9 && !old->applied);
+            assert(old->start==base && old->end==base+65536);
+            if(mode=="priority_join_ready")c.scheduler.sem.completed=9;
+        }
+        auto r=c.StartDeferredReadback(base+0x3ff0,4);assert(r && r->mapped);
+        const bool wide=mode=="priority_same_tick" || mode=="priority_neighbor_ready" || mode=="priority_join_ready";
+        assert(r->start==base+(wide?0:0x3000) && r->end==base+(wide?65536:0x4000));
+        assert(r->tick==(mode=="priority_neighbor_ready" || mode=="priority_join_ready"?9:7));
+        assert(c.scheduler.sem.waited==0); // creation must never wait on the cache owner
+        if(old) {
+            if(mode=="priority_join") {
+                assert(old->recovered && !old->applied && r!=old);
+                assert(Readbacks().mapped_wider_wait_bypassed==1);
+                assert(!c.FinishDeferredReadback(*old,false));
+            }else assert(r==old && !old->recovered);
+        }
+        if(mode=="priority_ready" || mode=="priority_neighbor_ready")assert(r->applied);
+        assert(c.FinishDeferredReadback(*r,!r->applied));
+        assert(c.mem.published.size()==(wide?64:16));
+        assert(!c.tracker.IsRegionGpuModified(base+0x3ff0,4));
+        if(!wide) {
+            assert(c.tracker.IsRegionGpuModified(base+0x4100,16));
+            assert(c.tracker.IsRegionGpuModified(base+0x9000,16));
+            assert(!c.mem.published.contains(base+0x4100));
+            assert(!c.mem.published.contains(base+0x9000));
+            assert((c.gpu_modified_ranges.intervals==std::vector<std::pair<VAddr,VAddr>>{
+                {base+0x4000,base+0x4010},{base+0x4100,base+0x4110},{base+0x9000,base+0x9010}}));
+        }
+        for(u64 i=0;i<16;++i)assert(c.mem.published.at(base+0x3ff0+i)==device_memory[m1][32768+0x3ff0+i]);
+        assert(c.runtime.copies==0 && c.scheduler.flushes==0);
+        assert(Readbacks().mapped_prefetch_narrowed==(!wide && neighbor_tick==9?1u:0u));
+        assert(c.scheduler.sem.waited==(mode=="priority_ready" || mode=="priority_neighbor_ready" || mode=="priority_join_ready"?0u:7u));
+        if(mode=="priority_noncoherent")assert(invalidations==1);
+        if(mode=="priority_join") {
+            // The original guest still needs tick 9. Its replacement must publish
+            // that neighbor after completion without replaying the CPU's new byte.
+            c.mem.published[base+0x3ff0]=201;c.scheduler.sem.completed=9;
+            auto neighbor=c.StartDeferredReadback(base+0x9000,4);
+            assert(neighbor && neighbor->applied && neighbor->tick==9 && neighbor!=old);
+            assert(c.mem.published.at(base+0x3ff0)==201);
+            for(u64 i=0;i<16;++i)assert(c.mem.published.at(base+0x9000+i)==device_memory[m2][36864+i]);
+            assert(!c.tracker.IsRegionGpuModified(base+0x9000,4));
+            assert(c.gpu_modified_ranges.intervals.empty() && c.scheduler.sem.waited==7);
+        }
+        return 0;
+    }
     if(mode=="outsidecurrent") {
         c.tracker.ranges.emplace_back(base+0x20000,16);
         c.gpu_modified_ranges.Add(base+0x20000,16);

@@ -214,6 +214,8 @@ struct ReadbackStats {
         mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0},
         mapped_submitted{0};
     std::atomic<u64> mapped_partial{0}, mapped_partial_kept{0}, mapped_partial_retry{0};
+    std::atomic<u64> mapped_prefetch_narrowed{0}, mapped_wider_wait_bypassed{0},
+        mapped_coherent_skipped{0};
     /// Eager copies: pages copied, used by a fault, gone stale unread, skipped for backoff.
     std::atomic<u64> eager_copied{0}, eager_used{0}, eager_stale{0}, eager_skipped{0};
     std::atomic<s64> window_start{0};
@@ -278,6 +280,11 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.mapped_partial.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_partial_kept.exchange(0)),
                 static_cast<unsigned long long>(r.mapped_partial_retry.exchange(0)));
+    std::printf("  mapped wait scope: %llu prefetches narrowed, %llu wider pending waits bypassed, "
+                "%llu coherent requests skipped\n",
+                static_cast<unsigned long long>(r.mapped_prefetch_narrowed.exchange(0)),
+                static_cast<unsigned long long>(r.mapped_wider_wait_bypassed.exchange(0)),
+                static_cast<unsigned long long>(r.mapped_coherent_skipped.exchange(0)));
     std::printf("  CPU write merge: %llu applied, %.2f MB, %llu rejected\n",
                 static_cast<unsigned long long>(r.cpu_merge_applied.exchange(0)),
                 r.cpu_merge_bytes.exchange(0) / 1048576.0,
@@ -1215,7 +1222,8 @@ void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
     }
 }
 
-bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current) {
+bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current,
+                                       u64 wait_tick_limit) {
     if (!mapped_readbacks_enabled || EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
         EmulatorSettings.IsDirectMemoryAccessEnabled()) return false;
     u64 tick = 0;
@@ -1227,6 +1235,14 @@ bool BufferCache::PrepareMappedReadback(DeferredReadback& readback, u64 bytes, b
             return false;
         }
         tick = std::max(tick, written);
+    }
+    // Prefetch is optional: a newer, unfinished neighbor must not delay the page
+    // the guest actually requested. StartDeferredReadback retries just that page.
+    // Completed neighbors still participate, preserving normal ready batching.
+    if (wait_tick_limit && tick > wait_tick_limit &&
+        !scheduler.GetWorkSemaphore()->IsFree(tick)) {
+        if (ReadbackStatsEnabled()) Readbacks().mapped_prefetch_narrowed.fetch_add(1);
+        return false;
     }
     std::vector<DeferredReadback::MappedSpan> spans;
     bool available = true;
@@ -1348,7 +1364,18 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
 std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadback(VAddr device_addr,
                                                                                   u64 size) {
     PruneDeferredReadbacks();
+    const bool prioritize_request = mapped_readbacks_enabled &&
+        EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
+        !EmulatorSettings.IsDirectMemoryAccessEnabled();
+    if (prioritize_request && !memory_tracker->IsRegionGpuModified(device_addr, size)) {
+        // Another completion cleared this request while it was queued. Starting a
+        // neighbor's prefetch here can introduce an entirely unrelated GPU wait.
+        if (ReadbackStatsEnabled()) Readbacks().mapped_coherent_skipped.fetch_add(1);
+        return nullptr;
+    }
+    const u64 wait_tick_limit = prioritize_request ? write_ticks.Latest(device_addr, size) : 0;
     const auto [arena, window_start, window_end] = GetReadbackWindow(device_addr, size);
+    std::shared_ptr<DeferredReadback> joined;
     {
         // Another guest thread is already waiting for this memory: wait for the same copy.
         std::scoped_lock lock{deferred_mutex};
@@ -1357,6 +1384,12 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             const VAddr join_end = readback->mapped ? device_addr + size : window_end;
             if (!readback->Done() && !readback->stale && readback->start <= join_start &&
                 join_end <= readback->end) {
+                if (readback->mapped && wait_tick_limit && readback->tick > wait_tick_limit &&
+                    !scheduler.GetWorkSemaphore()->IsFree(readback->tick)) {
+                    // Its wider prefetch waits longer than our own data needs.
+                    // Settlement below recovers it without waiting on the owner.
+                    continue;
+                }
                 if (readback->page_scoped &&
                     (readback->invalid_pages.Overlaps(device_addr, device_addr + size) ||
                      write_ticks.Latest(device_addr, size) > readback->tick)) {
@@ -1370,9 +1403,19 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
                 if (ReadbackStatsEnabled()) {
                     Readbacks().joined.fetch_add(1);
                 }
-                return readback;
+                joined = readback;
+                break;
             }
         }
+    }
+    if (joined) {
+        // A shared mapped read can become ready between guest requests. Publish
+        // outside deferred_mutex, avoiding another guest wait/owner round trip.
+        if (joined->mapped && scheduler.IsFree(joined->tick) &&
+            FinishDeferredReadback(*joined, false) && ReadbackStatsEnabled()) {
+            Readbacks().mapped_inline.fetch_add(1);
+        }
+        return joined;
     }
     std::shared_ptr<DeferredReadback> readback;
     u64 total_size_bytes = 0;
@@ -1395,7 +1438,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         const VAddr end = !mapped_attempt ? window_end : attempt ? required_end : prefetch_end;
         // Overlapping copies are settled first, so their dirty ranges are available
         // and one readback cannot unmark memory another has not published yet.
-        SettleDeferredReadbacks(start, end);
+        SettleDeferredReadbacks(start, end, mapped_attempt ? wait_tick_limit : 0);
         if (eager_count.load(std::memory_order_acquire)) {
             std::scoped_lock lock{eager_mutex};
             ApplyEagerSubtractsLocked();
@@ -1407,7 +1450,8 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         readback->end = end;
         total_size_bytes = CollectDownloads(arena, start, end - start, readback->copies);
         if (mapped_attempt) {
-            if (total_size_bytes && PrepareMappedReadback(*readback, total_size_bytes)) break;
+            if (total_size_bytes && PrepareMappedReadback(*readback, total_size_bytes, false,
+                                                          attempt == 0 ? wait_tick_limit : 0)) break;
             // CollectDownloads removed these ranges. Restore them before the next
             // attempt or the conventional, unchanged 512 KiB staging fallback.
             for (const auto& copy : readback->copies) {
@@ -1556,7 +1600,7 @@ void BufferCache::RecoverDeferredReadback(DeferredReadback& readback) {
     readback.recovered.store(true, std::memory_order_release);
 }
 
-void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end) {
+void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_limit) {
     if (!deferred_count.load(std::memory_order_acquire)) {
         return;
     }
@@ -1570,13 +1614,17 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end) {
         }
     }
     for (const auto& readback : overlapping) {
+        const bool wider_wait = readback->mapped && wait_tick_limit &&
+            readback->tick > wait_tick_limit &&
+            !scheduler.GetWorkSemaphore()->IsFree(readback->tick);
+        if (wider_wait && ReadbackStatsEnabled()) Readbacks().mapped_wider_wait_bypassed.fetch_add(1);
         // A stale copy won't be applied: no need to wait for it (2d2511fe).
         const bool changed_in_flight = readback->page_scoped &&
             !readback->invalid_pages.Empty() &&
             !scheduler.GetWorkSemaphore()->IsFree(readback->tick);
         // Do not turn the old no-wait stale recovery into a GPU-owner stall.
         // Salvage partial snapshots only when ready; otherwise recollect conservatively.
-        if (readback->stale.load() || changed_in_flight ||
+        if (wider_wait || readback->stale.load() || changed_in_flight ||
             !FinishDeferredReadback(*readback, true)) {
             RecoverDeferredReadback(*readback);
         }

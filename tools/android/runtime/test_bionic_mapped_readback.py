@@ -122,7 +122,9 @@ int main() {
                  "replacement", "replacement_stage", "replacement_unrelated",
                  "partial_neighbor", "partial_note", "partial_recheck", "partial_noncoherent",
                  "partial_all", "partial_cpu", "partial_inflight", "partial_clean", "partial_disjoint", "partial_gap",
-                 "partial_new_request", "partial_new_request_ready")
+                 "partial_new_request", "partial_new_request_ready",
+                 "priority_inflight", "priority_ready", "priority_neighbor_ready", "priority_same_tick",
+                 "priority_current", "priority_join", "priority_join_ready", "priority_coherent", "priority_noncoherent")
         self.compile_run(code, ("-I", include, "-D__ANDROID__=1", "-DISS_ANDROID_BIONIC=1"),
                          tuple((mode,) for mode in modes))
         self.compile_run(code, ("-I", include), (("nonbionic",),))

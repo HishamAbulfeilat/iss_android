@@ -285,10 +285,12 @@ private:
     /// GPU-side threads.
     void RecoverDeferredReadback(DeferredReadback& readback);
     /// Applies or recovers the copies in flight overlapping [start, end). GPU-side threads.
-    void SettleDeferredReadbacks(VAddr start, VAddr end);
+    /// A nonzero limit recovers mapped prefetches that would extend the requested GPU wait.
+    void SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_limit = 0);
     /// Recovers stale copies and frees the staging memory of finished ones. GPU-side threads.
     void PruneDeferredReadbacks();
-    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current = false);
+    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current = false,
+                               u64 wait_tick_limit = 0);
     bool CaptureMappedReadback(DeferredReadback& readback);
     static bool MappedReadbackPolicy();
     void NoteDeviceWrite(VAddr address, u64 size, u64 tick);
