@@ -174,6 +174,7 @@ public:
     /// wrote elsewhere on those pages stay intact. Relaxed serializes the write on the owner,
     /// settles pending images and excludes physical aliases. False: caller writes normally.
     bool CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size);
+    bool CpuStoreOverwrite(VAddr dst, const void* src, u64 size);
 
     /// tlg: TLG_EAGER_READBACK=1 (precise readbacks): pages the guest reads back after GPU
     /// writes are learnt (NoteReadback). At every fence they are copied to host memory if the

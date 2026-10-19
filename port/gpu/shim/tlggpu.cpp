@@ -457,6 +457,21 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+extern "C" int tlggpu_cpu_store(void* dst, const void* bytes, uint64_t size) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r || size != 16 || (reinterpret_cast<VAddr>(dst) & 15) ||
+        reinterpret_cast<VAddr>(dst) >= (1ULL << 40) ||
+        EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
+        EmulatorSettings.IsDirectMemoryAccessEnabled()) return 0;
+    if (!r->GetBufferCache().IsRegionGpuModified(reinterpret_cast<VAddr>(dst), size) ||
+        r->IsGpuSideThread() || !runtime_memory_cpu_write_can_queue()) return 0;
+    return r->GetBufferCache().CpuStoreOverwrite(reinterpret_cast<VAddr>(dst), bytes, size);
+#else
+    return 0;
+#endif
+}
+
 extern "C" int tlggpu_cpu_write(void* dst, const void* src, int fill, uint64_t size) {
     auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)

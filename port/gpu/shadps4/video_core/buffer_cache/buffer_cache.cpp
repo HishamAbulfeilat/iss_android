@@ -207,6 +207,8 @@ struct ReadbackStats {
     std::atomic<u64> deferred{0}, joined{0}, applied{0}, stale{0}, deferred_ns{0}, deferred_bytes{0};
     std::atomic<u64> shared_completions{0};
     std::atomic<u64> deferred_retries{0}, retry_applied{0};
+    std::atomic<u64> cpu_store_applied{0}, cpu_store_fallback{0},
+        cpu_store_coverage_rejected{0}, cpu_store_backing_rejected{0};
     std::atomic<u64> cpu_merge_applied{0}, cpu_merge_bytes{0}, cpu_merge_rejected{0};
     std::atomic<u64> mapped_scheduled{0}, mapped_applied{0}, mapped_bytes{0},
         mapped_current{0}, mapped_unavailable{0}, mapped_stale{0}, mapped_inline{0},
@@ -275,6 +277,12 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.cpu_merge_applied.exchange(0)),
                 r.cpu_merge_bytes.exchange(0) / 1048576.0,
                 static_cast<unsigned long long>(r.cpu_merge_rejected.exchange(0)));
+    std::printf("  native store overwrite: %llu applied, %llu normal-readback fallbacks "
+                "(coverage %llu, backing %llu)\n",
+                static_cast<unsigned long long>(r.cpu_store_applied.exchange(0)),
+                static_cast<unsigned long long>(r.cpu_store_fallback.exchange(0)),
+                static_cast<unsigned long long>(r.cpu_store_coverage_rejected.exchange(0)),
+                static_cast<unsigned long long>(r.cpu_store_backing_rejected.exchange(0)));
     std::fflush(stdout);
 }
 } // namespace
@@ -1522,6 +1530,79 @@ void BufferCache::MarkDeferredStale(VAddr addr, u64 size, bool cpu) {
     for (const auto& readback : marked) {
         std::scoped_lock lock{readback->mutex};
     }
+}
+
+// A store fault may release its whole page only when ALL GPU-dirty bytes on that page
+// are replaced. Otherwise keep the normal readback: trapping every following 16-byte store
+// would turn one page fault into hundreds of owner commands.
+bool BufferCache::CpuStoreOverwrite(VAddr dst, const void* src, u64 size) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    static const bool enabled = [] {
+        const char* global = std::getenv("TLG_WRITE_MERGE");
+        const char* native = std::getenv("TLG_NATIVE_STORE_MERGE");
+        return global && *global == '1' && !(native && *native == '0');
+    }();
+    if (!enabled || !src || size != 16 || (dst & 15) || dst >= (1ULL << 40) ||
+        EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
+        EmulatorSettings.IsDirectMemoryAccessEnabled()) return false;
+    const VAddr page = Common::AlignDown(dst, u64{4096});
+    const VAddr page_end = page + 4096;
+    std::array<u8, 16> bytes;
+    std::memcpy(bytes.data(), src, bytes.size());
+    bool applied = false;
+    liverpool->SendCommand<true, true>([&] {
+        if (!memory_tracker->IsRegionGpuModified(dst, size) ||
+            eager_count.load(std::memory_order_acquire)) return;
+        bool any = false, covered = true;
+        const auto check = [&](VAddr begin, VAddr end) {
+            const auto a = std::max(begin, page), b = std::min(end, page_end);
+            if (a >= b) return;
+            any = true;
+            if (a < dst || b > dst + size) covered = false;
+        };
+        gpu_modified_ranges.ForEachInRange(page, 4096, check);
+        // Pending snapshots have removed their ranges from gpu_modified_ranges. Include them
+        // in the proof, even when stale, or an unfinished publication could hide GPU bytes.
+        {
+            std::scoped_lock lock{deferred_mutex};
+            for (const auto& readback : deferred_readbacks) {
+                if (readback->Done()) continue;
+                for (const auto& copy : readback->copies) {
+                    const VAddr at = readback->arena_base + copy.srcOffset;
+                    check(at, at + copy.size);
+                }
+            }
+        }
+        if (!any || !covered) {
+            if (ReadbackStatsEnabled()) Readbacks().cpu_store_coverage_rejected.fetch_add(1);
+            return;
+        }
+        // The entire page will become writable; outstanding host reads anywhere on it must
+        // finish before releasing protection, not only host reads of these first 16 bytes.
+        scheduler.WaitHostCopiesFor(page, 4096);
+        scheduler.WaitDeferredSignals();
+        texture_cache.ResolveReadbacks(page, 4096, true, ReadbackSource::CpuWrite);
+        MarkEagerStale(page, 4096);
+        MarkDeferredStale(page, 4096, true);
+        SettleDeferredReadbacks(page, page_end); // stale copies recover without a GPU wait
+        if (!memory->TryCpuWriteBacking(reinterpret_cast<void*>(dst), bytes.data(), size)) {
+            if (ReadbackStatsEnabled()) Readbacks().cpu_store_backing_rejected.fetch_add(1);
+            return;
+        }
+        gpu_modified_ranges.Subtract(page, 4096);
+        memory_tracker->UnmarkRegionAsGpuModified(page, 4096);
+        memory_tracker->MarkRegionAsCpuModified(page, 4096);
+        texture_cache.InvalidateMemory(dst, size);
+        applied = true;
+    });
+    if (ReadbackStatsEnabled()) {
+        (applied ? Readbacks().cpu_store_applied : Readbacks().cpu_store_fallback).fetch_add(1);
+        ReportReadbacks();
+    }
+    return applied;
+#else
+    return false;
+#endif
 }
 
 bool BufferCache::CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64 size) {

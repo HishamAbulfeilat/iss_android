@@ -50,6 +50,9 @@ int guest_cpu_signal_regs(const void *ucontext, GuestRegs *regs) {
     return GUEST_CPU_IN_GUEST;
 }
 uintptr_t guest_cpu_host_pc(const void *ucontext) { return (uintptr_t)((const ucontext_t *)ucontext)->uc_mcontext.gregs[REG_RIP]; }
+int guest_cpu_try_store_fault(void *context, uintptr_t fault, GuestStoreWriter writer, void *opaque) {
+    (void)context; (void)fault; (void)writer; (void)opaque; return 0;
+}
 int guest_cpu_handle_fault(int sig, siginfo_t *info, void *ucontext) { (void)sig; (void)info; (void)ucontext; return 0; }
 uint64_t guest_cpu_tsc_frequency(void) {
     static uint64_t hz;

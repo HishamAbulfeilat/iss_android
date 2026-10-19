@@ -3,6 +3,7 @@
 // guest CPU state. Host functions are reached from the guest through stubs that end in `syscall`
 // (dispatched by HandleSyscall below); guest functions are called with Context::HandleCallback.
 #include "guest_cpu.h"
+#include "aarch64_store.h"
 
 #include <Common/Config.h>
 #include <Common/HostFeatures.h>
@@ -277,11 +278,9 @@ FpsimdRecord* Fpsimd(ucontext_t* uc) {
         uint32_t magic, size;
         std::memcpy(&magic, at, 4);
         std::memcpy(&size, at + 4, 4);
+        if (!magic || size < 8 || size > static_cast<size_t>(end - at) || (size & 15)) break;
         if (magic == FpsimdMagic) {
-            return reinterpret_cast<FpsimdRecord*>(at);
-        }
-        if (!magic || size < 8) {
-            break;
+            return size >= sizeof(FpsimdRecord) ? reinterpret_cast<FpsimdRecord*>(at) : nullptr;
         }
         at += size;
     }
@@ -526,6 +525,26 @@ int guest_cpu_signal_regs(const void* ucontext, GuestRegs* regs) {
 
 uintptr_t guest_cpu_host_pc(const void* ucontext) {
     return static_cast<const ucontext_t*>(ucontext)->uc_mcontext.pc;
+}
+
+int guest_cpu_try_store_fault(void* ucontext, uintptr_t fault, GuestStoreWriter writer, void* opaque) {
+    if (!self || !writer) return 0;
+    auto* uc = static_cast<ucontext_t*>(ucontext);
+    auto& m = uc->uc_mcontext;
+    if (!ctx->IsAddressInCodeBuffer(self->thread, m.pc)) return 0;
+    uint32_t instruction;
+    std::memcpy(&instruction, reinterpret_cast<const void*>(m.pc), sizeof(instruction));
+    const auto store = IssCpu::DecodeVectorStore(instruction,
+                            reinterpret_cast<const uint64_t*>(m.regs), m.sp, fault);
+    if (!store) return 0;
+    const auto* fp = Fpsimd(uc);
+    if (!fp) return 0;
+    std::array<unsigned char, 16> bytes;
+    std::memcpy(bytes.data(), &fp->v[store->vector], bytes.size());
+    if (!writer(store->address, bytes.data(), bytes.size(), opaque)) return 0;
+    // STR Q has no flags, GPR or base writeback. Resume after it; retain following TSO barriers.
+    m.pc += 4;
+    return 1;
 }
 
 int guest_cpu_handle_fault(int sig, siginfo_t* info, void* ucontext) {

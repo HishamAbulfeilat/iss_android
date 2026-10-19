@@ -4,6 +4,7 @@
 #ifdef __linux__
 #include <ucontext.h>
 #include "../../../../src/guest_cpu.h"
+#include "../../tlggpu.h"
 #endif
 #include <vector>
 #include <array>
@@ -161,8 +162,9 @@ struct PageManager::Impl {
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
         const auto start = std::chrono::steady_clock::now();
         const auto addr = reinterpret_cast<VAddr>(fault_address);
+        const auto original_pc = Common::GetRip(context);
         const bool handled = HandleGuestFault(context, addr);
-        if (handled) {
+        if (handled && Common::GetRip(context) == original_pc) {
             ProfileFault(context, addr, Common::IsWriteError(context),
                          static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                              std::chrono::steady_clock::now() - start).count()));
@@ -178,6 +180,20 @@ struct PageManager::Impl {
         }
         if (Common::IsWriteError(context)) {
             TlgStats::Timer timer{TlgStats::t_write_faults};
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC) && defined(ARCH_ARM64)
+            static const bool stores = [] {
+                const char* e = std::getenv("TLG_NATIVE_STORE_MERGE");
+                return !(e && *e == '0');
+            }();
+            if (stores && !is_gpu_thread &&
+                EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
+                !EmulatorSettings.IsDirectMemoryAccessEnabled() && addr < (1ULL << 40) &&
+                rasterizer->GetBufferCache().IsRegionGpuModified(addr, 1) &&
+                guest_cpu_try_store_fault(context, addr,
+                    [](uintptr_t at, const void* bytes, size_t size, void*) {
+                        return tlggpu_cpu_store(reinterpret_cast<void*>(at), bytes, size);
+                    }, nullptr)) return true;
+#endif
             return rasterizer->OnWriteFault(addr, is_gpu_thread);
         } else {
             TlgStats::read_faults.fetch_add(1, std::memory_order_relaxed);

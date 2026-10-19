@@ -65,6 +65,10 @@ enum { GUEST_CPU_IN_GUEST=1, GUEST_CPU_IN_HOST_CALL=2 };
 int guest_cpu_signal_regs(const void *ucontext, GuestRegs *regs);
 /* The host program counter at a signal. */
 uintptr_t guest_cpu_host_pc(const void *ucontext);
+/* Complete a supported native store from a suspended FEX context only if writer accepts it.
+ * Failure leaves the signal context unchanged; success advances exactly one ARM instruction. */
+typedef int (*GuestStoreWriter)(uintptr_t address, const void *bytes, size_t size, void *opaque);
+int guest_cpu_try_store_fault(void *ucontext, uintptr_t fault, GuestStoreWriter writer, void *opaque);
 /* Faults raised by the guest CPU itself (JIT bookkeeping): handled and to be resumed when 1. */
 int guest_cpu_handle_fault(int sig, siginfo_t *info, void *ucontext);
 /* Replaces the guest instruction at `address` (at least `size` >= 2 bytes) with a call of

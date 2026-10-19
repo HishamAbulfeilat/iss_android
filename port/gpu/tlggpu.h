@@ -24,6 +24,8 @@ void tlggpu_init_headless(const TlgGpuConfig *config);
 uintptr_t tlggpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */
 int tlggpu_handle_fault(void *ucontext, void *address);
+/* Native store overwrite: accepts only pages whose GPU-dirty bytes are entirely replaced. */
+int tlggpu_cpu_store(void *destination, const void *bytes, uint64_t size);
 /* TLG_WRITE_LOG=1: prints the logged GPU-side writes to guest memory near the fault. */
 void tlggpu_dump_guest_writes(void *ucontext);
 /* Keyboard text entry through the game window (IME dialog). begin returns 0 when
