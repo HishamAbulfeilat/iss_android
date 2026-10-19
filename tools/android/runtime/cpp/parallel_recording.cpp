@@ -20,7 +20,7 @@ namespace IssBionicPerf {
 enum class Stage {HostCopies,RecorderSync};
 struct Scope {Scope(Stage){}};
 bool Enabled(){return true;}
-std::atomic<u64> parallel_splits{},parallel_batches{};
+std::atomic<u64> parallel_splits{},parallel_batches{},parallel_deferred_host{};
 }
 namespace TlgStats {
 u64 host_copies_wait_ns{},copy_threads_wait_ns{},sync_recording_ns{};
@@ -91,7 +91,6 @@ struct Scheduler {
     void CheckOwner(void*){if(owner_splits){owner_splits=false;SplitRecording();}}
     static void TraceDirectRecording(void*){}
     static bool HostCopyRangesEnabled(){return true;}
-    void WaitRecordingPrefix(unsigned lane){if(parallel_recording)parallel_recording->WaitPrefix(lane);}
     void EndRendering(){if(is_rendering){is_rendering=false;Record([](vk::CommandBuffer){});}}
     std::unique_ptr<RecordChunk> AcquireChunk();
     void HandOverParallel();void SplitRecording();void BeginParallelBatch();
@@ -109,10 +108,11 @@ int main() {
     VULKAN_HPP_DEFAULT_DISPATCHER.vkEndCommandBuffer=End;
     VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier2=HostBarrier;
     Vulkan::Scheduler s;
-    std::promise<void> first_started,release_first,second_started;
+    std::promise<void> first_started,release_first,second_started,after_copy_started;
     auto first=first_started.get_future();
     auto release=release_first.get_future().share();
     auto second=second_started.get_future();
+    auto after_copy=after_copy_started.get_future();
     std::array<std::vector<unsigned>,2> recorded;
     s.Record([&](vk::CommandBuffer b){
         assert(VkCommandBuffer(b)==reinterpret_cast<VkCommandBuffer>(1));
@@ -135,10 +135,16 @@ int main() {
     int source=7,snapshot=0;std::atomic<unsigned> phase{};
     s.RecordHostCopy([&]{assert(recorded[0].size()==151);snapshot=source;phase=1;});
     s.SignalAfterHostCopies([&]{assert(snapshot==7 && phase==1);phase=2;});
+    s.Record([&](vk::CommandBuffer){after_copy_started.set_value();});
+    s.KickRecording(true);
     assert(first.wait_for(2s)==std::future_status::ready);
     assert(second.wait_for(2s)==std::future_status::ready); // actual overlap, lane 0 still blocked
+    // A pending copy AND signal must not block later Vulkan commands. The old
+    // WaitPrefix implementation stalls here until the first lane is released.
+    assert(after_copy.wait_for(2s)==std::future_status::ready);
     assert(phase==0 && s.host_copies_done==0 && s.deferred_signals_done->load()==0);
     release_first.set_value();s.WaitHostCopies();source=9;s.WaitDeferredSignals();s.SyncRecording();
+    assert(s.parallel_recording->DeferredHost()==2);
     assert(snapshot==7 && phase==2 && recorded[0].size()==151 && recorded[1].size()==1);
     auto raw=s.CommandBuffer();assert(raw==s.current_cmdbuf && VkCommandBuffer(raw)==reinterpret_cast<VkCommandBuffer>(2));
     s.RequireHostReadBarrier(vk::PipelineStageFlagBits2::eComputeShader,vk::AccessFlagBits2::eShaderWrite);
@@ -147,6 +153,32 @@ int main() {
     assert(VkCommandBuffer(buffers[0])==reinterpret_cast<VkCommandBuffer>(1));
     assert(VkCommandBuffer(buffers[1])==reinterpret_cast<VkCommandBuffer>(2));
     assert((ended==std::vector<unsigned>{1,2}) && s.begun[1]==1);
+
+    // Lane 0 drains a deferred host copy while lane 1 keeps recording. Copies
+    // arriving during that drain must queue behind it, not execute concurrently;
+    // Sync must also include the ordered tasks after both Vulkan queues empty.
+    closed={};s.current_cmdbuf=vk::CommandBuffer{reinterpret_cast<VkCommandBuffer>(1)};
+    s.BeginParallelBatch();s.direct_mode=false;
+    std::promise<void> prefix_entered,release_prefix,copy_entered,release_copy,vulkan_after;
+    auto prefix_in=prefix_entered.get_future();auto prefix_out=release_prefix.get_future().share();
+    auto copy_in=copy_entered.get_future();auto copy_out=release_copy.get_future().share();
+    auto advanced=vulkan_after.get_future();std::atomic<unsigned> ordered_phase{};
+    s.Record([&](vk::CommandBuffer){prefix_entered.set_value();prefix_out.wait();});
+    s.parallel_target=1;s.SplitRecordingAtBoundary({2});
+    s.RecordHostCopy([&]{copy_entered.set_value();copy_out.wait();ordered_phase=1;});
+    s.Record([&](vk::CommandBuffer){vulkan_after.set_value();});s.KickRecording(true);
+    assert(prefix_in.wait_for(2s)==std::future_status::ready);
+    assert(advanced.wait_for(2s)==std::future_status::ready && ordered_phase==0);
+    release_prefix.set_value();assert(copy_in.wait_for(2s)==std::future_status::ready);
+    s.RecordHostCopy([&]{assert(ordered_phase==1);ordered_phase=2;});
+    s.SignalAfterHostCopies([&]{assert(ordered_phase==2);ordered_phase=3;});
+    std::promise<void> tail_entered;auto tail=tail_entered.get_future();
+    s.Record([&](vk::CommandBuffer){tail_entered.set_value();});s.KickRecording(true);
+    assert(tail.wait_for(2s)==std::future_status::ready && ordered_phase==0);
+    auto syncing=std::async(std::launch::async,[&]{s.SyncRecording();});
+    assert(syncing.wait_for(20ms)==std::future_status::timeout);
+    release_copy.set_value();assert(syncing.wait_for(2s)==std::future_status::ready);syncing.get();
+    s.WaitDeferredSignals();assert(ordered_phase==3);s.EndRecordingBuffers();
 
     // Recycle the SAME handles: no completion, buffer state or lane can leak from a prior batch.
     for(unsigned iteration=0;iteration<100;++iteration) {
@@ -162,13 +194,13 @@ int main() {
         for(unsigned i=0;i<20;++i)assert(host_order[i]==i);
         assert(s.EndRecordingBuffers().size()==2);
     }
-    assert(s.begun[1]==101);
+    assert(s.begun[1]==102);
     // A cut whose second half first becomes raw must begin exactly once on the producer.
     closed={};s.current_cmdbuf=vk::CommandBuffer{reinterpret_cast<VkCommandBuffer>(1)};
     s.BeginParallelBatch();s.direct_mode=false;
     s.Record([](vk::CommandBuffer){});s.parallel_target=1;s.SplitRecordingAtBoundary({2});
-    (void)s.CommandBuffer();assert(s.begun[1]==102);
-    s.Record([](vk::CommandBuffer){});s.SyncRecording();assert(s.begun[1]==102);
+    (void)s.CommandBuffer();assert(s.begun[1]==103);
+    s.Record([](vk::CommandBuffer){});s.SyncRecording();assert(s.begun[1]==103);
     s.EndRecordingBuffers();
     // A short batch keeps the original single-command-buffer submission.
     closed={};s.current_cmdbuf=vk::CommandBuffer{reinterpret_cast<VkCommandBuffer>(1)};

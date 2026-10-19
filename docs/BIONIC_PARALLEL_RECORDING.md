@@ -53,11 +53,23 @@ anterior. `TLG_PARALLEL_RECORDING=0` desativa a adaptação para diagnóstico.
 ## Ordem, cópias e readback
 
 As closures Vulkan dos dois buffers podem ser executadas simultaneamente,
-pois não compartilham estado de command buffer ou command pool. Antes de
-uma cópia host ou publicação de sinal do segmento 1, é necessário aguardar
-o marcador final do segmento 0. Dessa forma, esses efeitos host mantêm a
-ordem anterior, incluindo a sequência de conclusão usada por WaitHostCopies.
-Não se libera um sinal apenas porque o gravador posterior terminou primeiro.
+pois não compartilham estado de command buffer ou command pool. Uma cópia
+host ou publicação de sinal do segmento 1 só pode executar depois do
+marcador final do segmento 0. Esses efeitos mantêm a ordem anterior, incluindo
+a sequência de conclusão usada por WaitHostCopies. Não se libera um sinal
+apenas porque o gravador posterior terminou primeiro.
+
+Na implementação inicial, WaitPrefix bloqueava o gravador 1 ao encontrar
+essa cópia/sinal. Agora AfterPrefix enfileira o efeito pendente e permite
+continuar gravando os comandos Vulkan seguintes. O marcador do segmento 0
+drena os efeitos pendentes em ordem; se o gravador 1 encontra novos efeitos
+durante essa drenagem, acrescenta-os à mesma fila. Um único executor possui
+a fila ordenada, mesmo depois de o prefixo terminar. Sync aguarda também a
+fila e seu executor, além dos dois gravadores. Não acrescenta threads nem
+submissões. O único produtor de efeitos dessa fila é o gravador 1; os efeitos
+do gravador 0 continuam inline, antes de seu marcador. As cópias capturam
+Item por valor e os sinais capturam EOP por valor, sem depender de dados de
+um RecordChunk que possa ser reciclado durante a execução adiada.
 
 O hook de propriedade é executado antes de capturar o segmento de uma cópia
 ou sinal: ele pode drenar draws e mudar o segmento. Capturar o número antigo
@@ -80,8 +92,11 @@ sobrescrita nativa permanecem ativos.
 O fixture compila os métodos reais Record/RecordData, transferência de chunks,
 corte, sincronização, cópias, sinais, acesso raw, barreira host e fechamento
 dos buffers. Usa duas threads reais: bloqueia o primeiro gravador e exige que
-o segundo avance; exige também que cópias e sinais posteriores continuem
-bloqueados até a conclusão do prefixo. Confere snapshots de dados mutados
+o segundo avance inclusive DEPOIS de encontrar cópias e sinais cujo prefixo
+está bloqueado; esses efeitos permanecem pendentes até sua conclusão.
+Outro cenário bloqueia a própria cópia enquanto o primeiro gravador drena
+a fila: novos efeitos permanecem ordenados, comandos Vulkan avançam e Sync
+não retorna antes de a cópia terminar. Confere snapshots de dados mutados
 após gravar, 100 reciclagens dos mesmos handles, ordem das cópias, mudança
 de dono, cache de estado, batch curto e início raw do segundo segmento.
 O teste de submissão exercita um/dois command buffers e mantém a janela
@@ -93,6 +108,38 @@ em execução local com ThreadSanitizer.
 quantos batches realmente usaram dois buffers. `recorder_cpu_ms` passa a somar
 os relógios de CPU dos dois gravadores; não deve ser interpretado como duração
 serial nem como tempo GPU. Os counters não demonstram ganho de FPS.
+`deferred_host` conta cópias/sinais desviados para a fila, agregado somente
+depois de Sync, sem acrescentar um atomic de estatística por cópia.
+
+## Logs 15/16: sem ganho demonstrado, bloqueio reproduzido
+
+Ambos confirmam bd5b101, Relaxed, 720p e dois gravadores ativos. No mesmo
+recorte BionicPerf 5–9 (índices a partir de zero):
+
+| Medida | Log 14 | Log 15 | Log 16 |
+| --- | ---: | ---: | ---: |
+| Frames / segundos | 1079 / 25,04 | 1088 / 25,04 | 1060 / 25,08 |
+| FPS | 43,0911 | 43,4505 | 42,2648 |
+| Espera host em SyncRecording, ms/frame | 2,3793 | 3,4323 | 3,6176 |
+| CPU do comando, ms/frame | 18,8274 | 18,2040 | 19,0020 |
+| CPU gravadores somada, ms/frame | 17,0171 | 15,6379 | 16,5136 |
+| vkQueueSubmit host, ms/frame | 0,1476 | 0,1718 | 0,1731 |
+
+Nos logs 15/16, 2343 de 5348 / 2271 de 5253 batches se dividiram: 43,81% /
+43,23%, acrescentando aproximadamente 2,15 / 2,14 command buffers por frame.
+Não é uma falha de ativação do segundo gravador. A duração de Sync aumentou,
+mas os logs não medem isoladamente quanto desse aumento vem de WaitPrefix,
+do desequilíbrio entre segmentos, da execução do driver ou do escalonamento.
+As durações host podem se sobrepor e não são parcelas aditivas de tempo GPU.
+As sessões não são replays controlados: não se atribui causalidade à pequena
+variação de FPS nem se considera o paralelismo inicial um ganho validado.
+
+No fixture concorrente, a fila antiga de bd5b101, com um adaptador que chama
+WaitPrefix, falha na exigência de avançar o comando DEPOIS da cópia pendente;
+a fila corrigida passa, mantendo cópias e sinais bloqueados. Isso comprova
+a remoção desse bloqueio concreto, e não ganho de FPS no aparelho. A fila
+ordenada do Bloodborne permite esse avanço; esta adaptação limitada preserva
+o marcador conservador do prefixo e não importa seu submit assíncrono.
 
 Esta é uma alteração estrutural de gravação, com validação de concorrência
 e ordem. O tamanho do ganho e o custo dos command buffers adicionais ainda

@@ -15,8 +15,9 @@
 namespace Vulkan {
 
 // Two independent recording lanes, one command pool per lane. Only the producer
-// starts/reuses batches, after Sync. Host side effects in lane 1 must WaitPrefix:
-// recording Vulkan commands may run ahead, publishing guest data may not.
+// starts/reuses batches, after Sync. Host side effects in lane 1 use AfterPrefix:
+// recording Vulkan commands may run ahead, publishing guest data may not. A
+// deferred host task never stalls the rest of lane 1's Vulkan recording.
 template <class Chunk, class Buffer>
 class ParallelRecordQueue {
 public:
@@ -44,6 +45,7 @@ public:
         assert(Idle());
         buffers = {first, Buffer{}};
         prefix_complete = false;
+        deferred_host = 0;
     }
     std::unique_ptr<Chunk> Acquire() {
         std::scoped_lock lock{mutex};
@@ -62,16 +64,35 @@ public:
         if (wake) work_cv[lane].notify_one();
     }
     void CompletePrefix() {
+        bool drain;
         {
             std::scoped_lock lock{mutex};
             prefix_complete = true;
+            drain = !ordered_running && !ordered.empty();
+            if (drain) ordered_running = true;
         }
-        cv.notify_all();
+        if (drain) DrainOrdered();
     }
-    void WaitPrefix(unsigned lane) {
-        if (!lane) return;
-        std::unique_lock lock{mutex};
-        cv.wait(lock, [this] { return prefix_complete; });
+    template <class Func>
+    void AfterPrefix(unsigned lane, Func&& task) {
+        // Lane 0 already executes these effects in the original command order.
+        if (!lane) {
+            task();
+            return;
+        }
+        {
+            std::scoped_lock lock{mutex};
+            if (!prefix_complete || ordered_running) {
+                ordered.emplace_back(std::forward<Func>(task));
+                ++deferred_host;
+                return;
+            }
+            // Reserve the ordered stream before dropping the lock. Lane 0 may
+            // still be draining older tasks even after prefix_complete is true.
+            ordered_running = true;
+        }
+        task();
+        DrainOrdered();
     }
     void Sync() {
         std::unique_lock lock{mutex};
@@ -85,10 +106,31 @@ public:
         return buffers[lane];
     }
     Buffer First() const { return buffers[0]; } // producer only, after Sync
+    size_t DeferredHost() const { return deferred_host; } // producer only, after Sync
 
 private:
     bool Idle() const {
-        return queues[0].empty() && queues[1].empty() && !busy[0] && !busy[1];
+        return queues[0].empty() && queues[1].empty() && !busy[0] && !busy[1] &&
+               ordered.empty() && !ordered_running;
+    }
+    // Called by exactly one recording worker, with ordered_running reserved.
+    // Tasks are enqueued by lane 1 in stream order, after the Vulkan commands
+    // preceding each task have been recorded. Lane 0's marker releases them
+    // only after all preceding segment-0 commands and host effects are done.
+    void DrainOrdered() {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::scoped_lock lock{mutex};
+                if (ordered.empty()) {
+                    ordered_running = false;
+                    return;
+                }
+                task = std::move(ordered.front());
+                ordered.pop_front();
+            }
+            task();
+        }
     }
     void Run(unsigned lane, std::stop_token stop) {
         while (true) {
@@ -125,6 +167,9 @@ private:
     std::array<bool, 2> busy{}, sleeping{};
     std::array<Buffer, 2> buffers{};
     bool prefix_complete = false;
+    bool ordered_running = false;
+    size_t deferred_host = 0;
+    std::deque<std::function<void()>> ordered;
     std::vector<std::unique_ptr<Chunk>> free;
     std::array<std::jthread, 2> threads;
 };

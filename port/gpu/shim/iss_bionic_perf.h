@@ -24,7 +24,7 @@ inline std::atomic<std::uint64_t> host_copy_skipped{0}, host_copy_required{0};
 inline std::atomic<std::uint64_t> descriptor_template_calls{0}, descriptor_template_bytes{0},
     descriptor_legacy_calls{0};
 inline std::atomic<std::uint64_t> vertex_input_issued{0}, vertex_input_skipped{0};
-inline std::atomic<std::uint64_t> parallel_batches{0}, parallel_splits{0};
+inline std::atomic<std::uint64_t> parallel_batches{0}, parallel_splits{0}, parallel_deferred_host{0};
 enum class Thread : unsigned { Command, Draw, Recorder, Recorder2 };
 inline std::array<std::atomic<int>, 4> thread_clocks{-1, -1, -1, -1};
 
@@ -151,10 +151,11 @@ inline bool OnPresent(std::uint32_t compiles, std::uint64_t compile_ns) {
     const auto batches = parallel_batches.exchange(0);
     const auto splits = parallel_splits.exchange(0);
     if (batches) {
-        std::printf("BionicParallelRecording: batches=%llu split=%llu command_buffers=%llu\n",
+        std::printf("BionicParallelRecording: batches=%llu split=%llu command_buffers=%llu deferred_host=%llu\n",
                     static_cast<unsigned long long>(batches),
                     static_cast<unsigned long long>(splits),
-                    static_cast<unsigned long long>(batches + splits));
+                    static_cast<unsigned long long>(batches + splits),
+                    static_cast<unsigned long long>(parallel_deferred_host.exchange(0)));
     }
     std::fflush(stdout);
     start=now;frames=0;previous_compiles=compiles;previous_compile_ns=compile_ns;

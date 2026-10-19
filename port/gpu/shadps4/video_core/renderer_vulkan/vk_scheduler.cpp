@@ -297,10 +297,11 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
     Record([signal = std::move(signal), done = deferred_signals_done,
             this, lane = parallel_lane](vk::CommandBuffer) mutable {
-        WaitRecordingPrefix(lane);
-        TlgCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
-            signal();
-            done->fetch_add(1, std::memory_order_release);
+        AfterRecordingPrefix(lane, [signal = std::move(signal), done = std::move(done)]() mutable {
+            TlgCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
+                signal();
+                done->fetch_add(1, std::memory_order_release);
+            });
         });
     });
     KickRecording(true);
@@ -485,6 +486,8 @@ std::span<const vk::CommandBuffer> Scheduler::EndRecordingBuffers() {
     submission_buffers[count++] = current_cmdbuf;
     if (parallel_recording && IssBionicPerf::Enabled()) {
         IssBionicPerf::parallel_batches.fetch_add(1, std::memory_order_relaxed);
+        IssBionicPerf::parallel_deferred_host.fetch_add(
+            parallel_recording->DeferredHost(), std::memory_order_relaxed);
     }
     return {submission_buffers.data(), count};
 }

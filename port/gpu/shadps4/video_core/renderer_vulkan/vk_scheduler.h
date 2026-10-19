@@ -875,10 +875,11 @@ public:
     void RecordHostCopy(Func&& copy) {
         CheckOwner(__builtin_return_address(0));
         Record([copy = std::forward<Func>(copy), this, lane = parallel_lane,
-                seq = ++host_copies_issued](vk::CommandBuffer) {
-            WaitRecordingPrefix(lane);
-            copy();
-            host_copies_done.store(seq, std::memory_order_release);
+                seq = ++host_copies_issued](vk::CommandBuffer) mutable {
+            AfterRecordingPrefix(lane, [copy = std::move(copy), this, seq] {
+                copy();
+                host_copies_done.store(seq, std::memory_order_release);
+            });
         });
     }
 
@@ -963,8 +964,13 @@ private:
     void RecorderThread(std::stop_token stoken);
     void HandOverParallel();
     void SplitRecording();
-    void WaitRecordingPrefix(unsigned lane) {
-        if (parallel_recording) parallel_recording->WaitPrefix(lane);
+    template <typename Func>
+    void AfterRecordingPrefix(unsigned lane, Func&& task) {
+        if (parallel_recording) {
+            parallel_recording->AfterPrefix(lane, std::forward<Func>(task));
+        } else {
+            task();
+        }
     }
     void BeginParallelBatch();
     std::span<const vk::CommandBuffer> EndRecordingBuffers();
