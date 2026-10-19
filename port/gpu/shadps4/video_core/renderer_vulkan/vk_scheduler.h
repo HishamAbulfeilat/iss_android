@@ -684,7 +684,13 @@ public:
     void Flush();
 
     /// An arena write needs device-to-host visibility at this submission's completion.
-    void RequireHostReadBarrier() { host_read_barrier = true; }
+    void RequireHostReadBarrier(
+        vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands,
+        vk::AccessFlags2 access = vk::AccessFlagBits2::eMemoryWrite) {
+        host_read_barrier = true;
+        host_read_src_stages |= stage;
+        host_read_src_access |= access;
+    }
     void FlushHostReadBarrier();
 
     /// Sends the current execution context to the GPU and waits for it to complete.
@@ -960,6 +966,8 @@ private:
     CommandPool command_pool;
     DynamicState dynamic_state;
     bool host_read_barrier = false;
+    vk::PipelineStageFlags2 host_read_src_stages{};
+    vk::AccessFlags2 host_read_src_access{};
     VertexInputState vertex_input_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;

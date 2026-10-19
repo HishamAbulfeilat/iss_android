@@ -46,6 +46,7 @@ struct BarrierTracker {
 struct StagingBufferRef {};
 struct Scheduler {
     u64 tick=7;bool host_read_barrier=false;
+    vk::PipelineStageFlags2 host_read_src_stages{};vk::AccessFlags2 host_read_src_access{};
     u64 CurrentTick()const{return tick;}
     unsigned ended=0;void EndRendering(){++ended;}
     template<class T>auto RecordData(std::span<const T> values){return std::vector<T>(values.begin(),values.end());}
@@ -67,7 +68,7 @@ struct Runtime {
     }
     void FlushBarriers(){++flushes;}
     void CopyBuffer(const VideoCore::Buffer*,const VideoCore::Buffer*,std::span<const vk::BufferCopy>);
-    void NoteBufferWrite(const VideoCore::Buffer*,u64,u64);
+    void NoteBufferWrite(const VideoCore::Buffer*,u64,u64,vk::PipelineStageFlags2,vk::AccessFlags2);
     void AccessBufferImpl(const VideoCore::Buffer*,u64,u64,vk::PipelineStageFlags2,vk::AccessFlags2,bool);
     // PRODUCTION_HOOK_SETTER
     void AccessBuffer(const VideoCore::Buffer*,u64,u64,vk::PipelineStageFlags2,vk::AccessFlags2);
@@ -103,8 +104,11 @@ int main() {
     for(auto access:{vk::AccessFlagBits2::eShaderWrite,vk::AccessFlagBits2::eTransferWrite,
                      vk::AccessFlagBits2::eMemoryWrite,vk::AccessFlagBits2::eTransformFeedbackWriteEXT}) {
         runtime.scheduler.host_read_barrier=false;
+        runtime.scheduler.host_read_src_stages={};runtime.scheduler.host_read_src_access={};
         runtime.AccessBuffer(&arena,64,128,vk::PipelineStageFlagBits2::eAllCommands,access);
         assert(runtime.scheduler.host_read_barrier);
+        assert(runtime.scheduler.host_read_src_stages==vk::PipelineStageFlagBits2::eAllCommands);
+        assert(runtime.scheduler.host_read_src_access==access);
         assert(observed.address==arena.cpu_addr+64 && observed.size==128);
         assert(observed.tick==runtime.scheduler.tick);
         ++runtime.scheduler.tick; // same memoized barrier range must still get a new write tick
@@ -113,6 +117,12 @@ int main() {
     assert(observed.writes.Latest(arena.cpu_addr,4096)==10);
     runtime.scheduler.host_read_barrier=false;
     runtime.AccessBuffer(&arena,64,128,vk::PipelineStageFlagBits2::eAllGraphics,vk::AccessFlagBits2::eShaderRead);
+    assert(!runtime.scheduler.host_read_barrier && observed.calls==4);
+    const auto previous_inserts=runtime.barrier_tracker.inserts;
+    runtime.AccessBuffer(&arena,8192,16,vk::PipelineStageFlagBits2::eDrawIndirect,
+                         vk::AccessFlagBits2::eIndirectCommandRead);
+    assert(runtime.barrier_tracker.inserts==previous_inserts+1);
+    assert(runtime.barrier_tracker.ranges.back().second==Vulkan::Access::Read);
     assert(!runtime.scheduler.host_read_barrier && observed.calls==4);
     VideoCore::Buffer staging{VideoCore::MemoryType::DeviceLocal,0};
     runtime.AccessBuffer(&staging,64,128,vk::PipelineStageFlagBits2::eCopy,vk::AccessFlagBits2::eTransferWrite);
@@ -132,6 +142,8 @@ int main() {
         for(unsigned i=0;i<6;++i)copies.emplace_back(i*4096,i*4096,4096);
         if(reverse)std::reverse(copies.begin(),copies.end());
         r.CopyBuffer(&staging,&arena,copies);assert(calls==1);
+        assert(r.scheduler.host_read_src_stages==vk::PipelineStageFlagBits2::eCopy);
+        assert(r.scheduler.host_read_src_access==vk::AccessFlagBits2::eTransferWrite);
     }
     // Exercise the actual recorded CopyBuffer, AccessBuffer and cache notification.
     for(unsigned count:{1u,4u,5u,9u})for(bool precise:{false,true}) {

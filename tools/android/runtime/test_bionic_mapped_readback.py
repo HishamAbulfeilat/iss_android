@@ -37,7 +37,7 @@ class MappedReadbackTests(unittest.TestCase):
         code = code.replace("// PRODUCTION_READBACK_TYPE", method(cache_header, "struct DeferredReadback {") + ";")
         code = code.replace("// PRODUCTION_NOTE_WRITE", method(cache_source, "void BufferCache::NoteDeviceWrite("))
         code = code.replace("// PRODUCTION_HOOK_SETTER", method(header, "void SetBufferWriteHook("))
-        code = code.replace("// PRODUCTION_REQUIRE_BARRIER", method(scheduler, "void RequireHostReadBarrier()"))
+        code = code.replace("// PRODUCTION_REQUIRE_BARRIER", method(scheduler, "void RequireHostReadBarrier("))
         self.compile_run(code, ("-I", include), ((),))
 
     def test_write_ticks_against_page_reference(self):
@@ -101,6 +101,9 @@ int main() {
             ("// PRODUCTION_ATTEMPT_TYPE", "struct ResidencyAttempt {"),
         ):
             code = code.replace(marker, method(header, signature) + ";")
+        code = code.replace("// PRODUCTION_REQUIRE_BARRIER", method(
+            (GPU / "video_core/renderer_vulkan/vk_scheduler.h").read_text(),
+            "void RequireHostReadBarrier("))
         code = code.replace("// PRODUCTION_SCHEDULER",
                             method(scheduler, "void Scheduler::FlushHostReadBarrier()"))
         signatures = (

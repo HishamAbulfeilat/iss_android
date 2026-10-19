@@ -628,8 +628,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 void Scheduler::FlushHostReadBarrier() {
     if (!std::exchange(host_read_barrier, false)) return;
     const vk::MemoryBarrier2 barrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .srcStageMask = std::exchange(host_read_src_stages, {}),
+        .srcAccessMask = std::exchange(host_read_src_access, {}),
         .dstStageMask = vk::PipelineStageFlagBits2::eHost,
         .dstAccessMask = vk::AccessFlagBits2::eHostRead,
     };

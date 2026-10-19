@@ -89,13 +89,14 @@ struct Semaphore {
 struct Scheduler {
     Semaphore sem;u64 current=10;unsigned flushes=0;
     bool host_read_barrier=false,complete_on_flush=false;
+    vk::PipelineStageFlags2 host_read_src_stages{};vk::AccessFlags2 host_read_src_access{};
     vk::CommandBuffer current_cmdbuf{reinterpret_cast<VkCommandBuffer>(1)};
     u64 CurrentTick()const{return current;}
     bool IsFree(u64 tick)const{return sem.IsFree(tick);}
     auto* GetWorkSemaphore(){return &sem;}
     void Flush(){++flushes;FlushHostReadBarrier();if(complete_on_flush)sem.completed=current; ++current;}
     void FlushHostReadBarrier();
-    void RequireHostReadBarrier(){host_read_barrier=true;}
+    // PRODUCTION_REQUIRE_BARRIER
 };
 struct StagingBufferRef {
     std::vector<u8>* storage=nullptr;u8* mapped=nullptr;u64 offset=128;void* buffer=nullptr;

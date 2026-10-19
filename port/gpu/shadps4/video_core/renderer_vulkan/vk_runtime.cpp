@@ -5,6 +5,7 @@
 #include <boost/container/small_vector.hpp>
 #include "tlg_toggles.h"
 #include "video_core/buffer_cache/buffer.h"
+#include "video_core/renderer_vulkan/buffer_barrier_scope.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -174,12 +175,18 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
                     start = std::min<u64>(start, copy.dstOffset);
                     end = std::max(end, next_end);
                 } else {
-                    if (start < end) NoteBufferWrite(dst, start, end - start);
+                    if (start < end) {
+                        NoteBufferWrite(dst, start, end - start, vk::PipelineStageFlagBits2::eCopy,
+                                        vk::AccessFlagBits2::eTransferWrite);
+                    }
                     start = copy.dstOffset;
                     end = next_end;
                 }
             }
-            if (start < end) NoteBufferWrite(dst, start, end - start);
+            if (start < end) {
+                NoteBufferWrite(dst, start, end - start, vk::PipelineStageFlagBits2::eCopy,
+                                vk::AccessFlagBits2::eTransferWrite);
+            }
         }
         AccessBufferImpl(dst, dst_min, dst_max - dst_min, vk::PipelineStageFlagBits2::eCopy,
                          vk::AccessFlagBits2::eTransferWrite, false);
@@ -899,11 +906,12 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
     AccessBufferImpl(handle, offset, size, src_stage, src_access, true);
 }
 
-void Runtime::NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 size) {
+void Runtime::NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 size,
+                             vk::PipelineStageFlags2 stage, vk::AccessFlags2 access) {
     if (buffer_write_hook && size && handle->mem_type == VideoCore::MemoryType::Sparse) {
         buffer_write_hook(buffer_write_context, handle->cpu_addr + offset, size,
                           scheduler.CurrentTick());
-        scheduler.RequireHostReadBarrier();
+        scheduler.RequireHostReadBarrier(stage, access);
     }
 }
 
@@ -917,9 +925,9 @@ void Runtime::AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 
     };
 
     constexpr static vk::AccessFlags2 READ_MASK =
-        vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
-        vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
-        vk::AccessFlagBits2::eColorAttachmentRead |
+        vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eIndexRead |
+        vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eUniformRead |
+        vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eColorAttachmentRead |
         vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eTransferRead |
         vk::AccessFlagBits2::eMemoryRead;
 
@@ -954,7 +962,7 @@ void Runtime::AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 
         memo = {range.resource, range.range_start, range.range_end, access_epoch, u32(access)};
     };
     if (src_access & WRITE_MASK) {
-        if (notify_write) NoteBufferWrite(handle, offset, size);
+        if (notify_write) NoteBufferWrite(handle, offset, size, src_stage, src_access & WRITE_MASK);
         insert(Access::Write);
     }
     if (src_access & READ_MASK) {
@@ -968,9 +976,10 @@ void Runtime::AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 
 void Runtime::FlushBarriers() {
     BeforeImageAccess();
     vk::DependencyInfo dep_info{};
+    const auto buffer_barrier = ScopeBufferBarrier(memory_barrier);
 
     if (memory_barrier.srcStageMask) {
-        dep_info.pMemoryBarriers = &memory_barrier;
+        dep_info.pMemoryBarriers = &buffer_barrier;
         dep_info.memoryBarrierCount = 1U;
     }
     if (!image_barriers.empty()) {
@@ -983,7 +992,7 @@ void Runtime::FlushBarriers() {
     }
 
     scheduler.EndRendering();
-    scheduler.Record([memory = memory_barrier, has_memory = dep_info.memoryBarrierCount != 0,
+    scheduler.Record([memory = buffer_barrier, has_memory = dep_info.memoryBarrierCount != 0,
                       images = scheduler.RecordData(std::span<const vk::ImageMemoryBarrier2>(
                           image_barriers.data(), image_barriers.size()))](vk::CommandBuffer cmdbuf) {
         const vk::DependencyInfo info = {
