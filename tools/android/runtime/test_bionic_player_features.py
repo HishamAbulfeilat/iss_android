@@ -18,22 +18,72 @@ int main(void){
  assert(!iss_dpad_swipe_step(&a,0,100));
  assert(iss_dpad_swipe_step(&a,8,100)); unsigned id=a.id;
  assert(a.x==959.5f && a.y==471.f);
- iss_dpad_swipe_step(&a,8,10100); assert(fabsf(a.x-983.5f)<.01f && a.id==id);
- iss_dpad_swipe_step(&a,1,20100); assert(fabsf(a.y-459.f)<.01f);
+ iss_dpad_swipe_step(&a,8,10100); assert(fabsf(a.x-965.5f)<.01f && a.id==id);
+ iss_dpad_swipe_step(&a,1,20100); assert(fabsf(a.y-468.f)<.01f);
  assert(!iss_dpad_swipe_step(&a,0,30100) && !a.active);
- iss_dpad_swipe_step(&a,4,40100); assert(a.id!=id && a.x==959.5f);
- iss_dpad_swipe_step(&a,4,50100); assert(a.x<959.5f);
+ iss_dpad_swipe_step(&a,4,40100); assert(a.id!=id && a.x==965.5f);
+ iss_dpad_swipe_step(&a,4,50100); assert(a.x<965.5f);
  assert(!iss_dpad_swipe_step(&a,15,60100));
  a=(IssDpadSwipe){0}; iss_dpad_swipe_step(&a,10,1000); iss_dpad_swipe_step(&b,10,1000);
  for(unsigned t=11000;t<=101000;t+=10000)iss_dpad_swipe_step(&a,10,t);
  for(unsigned t=21000;t<=101000;t+=20000)iss_dpad_swipe_step(&b,10,t);
  assert(fabsf(a.x-b.x)<.01f && fabsf(a.y-b.y)<.01f);
  iss_dpad_swipe_step(&a,10,1); assert(a.x==b.x); // backward clock, no teleport
- for(unsigned t=201000;t<3000000;t+=50000)iss_dpad_swipe_step(&a,10,t);
- assert(a.x==1919.f && a.y==942.f);
+ int releases=0;unsigned previous=a.id;
+ for(unsigned t=201000;t<8000000;t+=10000){
+  int down=iss_dpad_swipe_step(&a,8,t);if(!down)++releases;
+ }
+ assert(releases>0 && a.id!=previous); // held directions start new strokes at the edge
+ assert(a.x>=0 && a.x<=1919 && a.y>=0 && a.y<=942);
  return 0;
 }'''
         self.compile_run(source, ['cc','-std=c11','-I'+str(ROOT/'port/src')])
+    def test_two_finger_quick_tap_has_a_click_and_held_fingers(self):
+        runtime=(ROOT/'port/src/runtime_pad.c').read_text()
+        start=runtime.index('static struct { int active; uint64_t pressed, released; } two=')
+        end=runtime.index('/* Opens the first gamepad',start)
+        actual=runtime[start:end]
+        source=r'''#include <stdint.h>
+#include <assert.h>
+enum {CLICK_LEFT=1u<<28,CLICK_RIGHT=1u<<29,BTN_R1=2,BTN_TOUCHPAD=4};
+enum {CLICK_LEAD_US=50000,CLICK_HOLD_US=50000,CLICK_TAIL_US=100000};
+typedef struct {uint16_t x,y;uint8_t id;} PadTouch;
+typedef struct {uint64_t timestamp;uint32_t buttons;unsigned touch_count;PadTouch touches[2];} PadData;
+static struct {int side;} click;
+''' + actual + r'''
+int main(){
+ PadData d={.timestamp=1000,.buttons=CLICK_LEFT|CLICK_RIGHT};
+ assert(play_two_finger(&d)&&d.touch_count==2&&!(d.buttons&BTN_TOUCHPAD));
+ d=(PadData){.timestamp=21000};assert(play_two_finger(&d)&&d.touch_count==2);
+ d=(PadData){.timestamp=51000};assert(play_two_finger(&d)&&(d.buttons&BTN_TOUCHPAD));
+ d=(PadData){.timestamp=100999};assert(play_two_finger(&d)&&(d.buttons&BTN_TOUCHPAD));
+ d=(PadData){.timestamp=101000};assert(play_two_finger(&d)&&!(d.buttons&BTN_TOUCHPAD));
+ d=(PadData){.timestamp=201000};assert(!play_two_finger(&d));
+ two.active=0;
+ d=(PadData){.timestamp=300000,.buttons=CLICK_LEFT|CLICK_RIGHT};assert(play_two_finger(&d));
+ d=(PadData){.timestamp=3300000,.buttons=CLICK_LEFT|CLICK_RIGHT};
+ assert(play_two_finger(&d)&&(d.buttons&BTN_TOUCHPAD)&&d.touch_count==2);
+}
+'''
+        self.compile_run(source,['cc','-std=c11'])
+    def test_live_performance_state_rejects_partial_and_invalid_values(self):
+        source=r'''
+#include "iss_performance_state.h"
+#include <cassert>
+#include <fstream>
+int main(){
+ IssPerformance::State s;
+ for(int fps: {30,60,120,240})for(int sync: {0,1}){
+  std::ofstream("state")<<"fps_limit="<<fps<<"\nvsync="<<sync<<"\ncomplete=1\n";
+  assert(IssPerformance::Read("state",s)&&s.fps==fps&&s.vsync==bool(sync));
+ }
+ std::ofstream("state")<<"fps_limit=120\nvsync=0\n";
+ assert(!IssPerformance::Read("state",s)&&s.fps==240&&s.vsync);
+ std::ofstream("state")<<"fps_limit=999\nvsync=0\ncomplete=1\n";
+ assert(!IssPerformance::Read("state",s)&&s.fps==240);
+}
+'''
+        self.compile_run(source,['c++','-std=c++17','-I'+str(ROOT/'port/gpu/shim')])
     @unittest.skipUnless(shutil.which('c++'), 'C++ compiler unavailable')
     def test_framegen_bounds_atomic_replacement_and_dll_discovery(self):
         source=r'''

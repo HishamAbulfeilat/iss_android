@@ -1,9 +1,10 @@
 package ro.cobrabm.fexdroid;
 import android.app.*;import android.widget.*;
 final class BionicVideoSettings {
- static void show(Activity activity){
+ static LinearLayout content(Activity activity,int page){
   LinearLayout l=new LinearLayout(activity);l.setOrientation(1);l.setPadding(28,20,28,20);
   android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
+  if(page!=2){
   TextView driverLabel=new TextView(activity);driverLabel.setText("Driver Vulkan:");l.addView(driverLabel);
   Spinner driver=new Spinner(activity);
   String[] drivers={"Turnip Gen8 V37 Patched (padrão)", "Driver Vulkan do sistema", "Automático (detectar KGSL)"};
@@ -38,6 +39,8 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(output);
+  }
+  if(page!=1){
   TextView patchLabel=new TextView(activity);patchLabel.setText("Patches internos — CUSA00004 01.00");patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
   Spinner resolutionPatch=new Spinner(activity);
   String[] modes={"Original (sem patch)","1280 × 720 interno (720p)","1600 × 900 interno (900p)"};
@@ -60,7 +63,9 @@ final class BionicVideoSettings {
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
 
-  ScrollView scroll=new ScrollView(activity);scroll.addView(l);
-  new AlertDialog.Builder(activity).setTitle("Vídeo e patches — próximo início").setView(scroll).setPositiveButton("Concluir",null).show();
+  }return l;
  }
+ static void show(Activity a){showPage(a,0);}
+ static void showVideo(Activity a){showPage(a,1);}
+ private static void showPage(Activity a,int page){ScrollView scroll=new ScrollView(a);scroll.addView(content(a,page));new AlertDialog.Builder(a).setTitle("Vídeo — próximo início").setView(scroll).setPositiveButton("Concluir",null).show();}
 }

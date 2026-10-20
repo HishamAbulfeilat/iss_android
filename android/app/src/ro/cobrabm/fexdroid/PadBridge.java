@@ -37,7 +37,7 @@ final class PadBridge {
             case 308: return swapFaceButtons ? "square" : "triangle";
             case 310: return "l1"; case 311: return "r1";
             case 312: return "l2"; case 313: return "r2";
-            case 314: return "touchpad"; case 315: return "options";
+            case 314: return "touchpad_both"; case 315: return "options";
             case 317: return "l3"; case 318: return "r3";
         }
         switch (e.getKeyCode()) {
@@ -52,7 +52,7 @@ final class PadBridge {
             case KeyEvent.KEYCODE_BUTTON_THUMBL: return "l3";
             case KeyEvent.KEYCODE_BUTTON_THUMBR: return "r3";
             case KeyEvent.KEYCODE_BUTTON_START: return "options";
-            case KeyEvent.KEYCODE_BUTTON_SELECT: return "touchpad";
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return "touchpad_both";
             case KeyEvent.KEYCODE_DPAD_UP: return "up";
             case KeyEvent.KEYCODE_DPAD_DOWN: return "down";
             case KeyEvent.KEYCODE_DPAD_LEFT: return "left";

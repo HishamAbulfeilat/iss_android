@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <cctype>
+#include <chrono>
+#include "iss_performance_state.h"
 #include "tlg_settings.h"
 #include "tlg_orbs.h"
 #include "tlg_graphics.h"
@@ -211,6 +213,24 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 Values& Get() {
     static Values values;
     return values;
+}
+
+void PollAndroidPerformance() {
+#ifdef ISS_ANDROID_BIONIC
+    static const char* path=std::getenv("ISS_PERFORMANCE_STATE_FILE");
+    if(!path || !*path)return;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(now-last<std::chrono::milliseconds(250))return;
+    last=now;
+    IssPerformance::State state;
+    if(IssPerformance::Read(path,state)) {
+        auto& v=Get();
+        if(v.fps_limit!=state.fps || v.vsync!=state.vsync)
+            std::printf("Android performance: limit=%d FPS, vsync=%d\n",state.fps,int(state.vsync));
+        v.fps_limit=state.fps;v.vsync=state.vsync;
+    }
+#endif
 }
 
 void Load() {

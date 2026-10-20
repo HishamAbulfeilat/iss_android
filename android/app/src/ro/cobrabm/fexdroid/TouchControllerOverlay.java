@@ -116,7 +116,7 @@ final class TouchControllerOverlay extends View {
                 ry=axis(Math.max(-1f,Math.min(1f,(p.y-c.y)/(56f*size(control)))));
             } else if (control.equals("l2")) { l2=255; pressed.add(control); }
             else if (control.equals("r2")) { r2=255; pressed.add(control); }
-            else if (control.equals("touchpad")) pressed.add("touchpad_right"); /* 右侧点击:打开游戏暂停菜单,进而可进存档列表 */
+            else if (control.equals("touchpad")) { pressed.add("touchpad_left"); pressed.add("touchpad_right"); } /* Both ends: lift Reggie's car. */
             else if (control.equals("mouse")) {
                 if (!mouse) XInput.moveTo(Math.max(0,Math.min(1279,Math.round(p.x))),
                                           Math.max(0,Math.min(719,Math.round(p.y))));

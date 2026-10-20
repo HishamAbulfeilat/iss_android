@@ -45,7 +45,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   files=getFilesDir().getPath();base=files+"/issport";
   screenMode=getSharedPreferences("iss",0).getString("display_mode","stretch");
   if("fill".equals(screenMode))screenMode="stretch";
-  try{FramegenSettings.write(this);}catch(IOException e){record(e.toString());}
+  try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
    out.write("ISS Android Bionic experimental — no glibc or Xvfb\n".getBytes(StandardCharsets.UTF_8));
@@ -93,6 +93,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   e.put("TLG_ANDROID_FPS_ONLY","1");
   java.util.ArrayList<String> patches=new java.util.ArrayList<>();
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
+  e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
   String resolution=prefs.getString("internal_res","native");
   if("720p".equals(resolution))patches.add("Render resolution 1280x720");
   else if("900p".equals(resolution))patches.add("Render resolution 1600x900");

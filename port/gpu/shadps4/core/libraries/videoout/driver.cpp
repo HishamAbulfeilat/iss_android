@@ -672,7 +672,12 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // and the uncapped presets keep their fixed limit.
     const bool fixed_limit = std::getenv("TLG_FPS_LIMIT") || EmulatorSettings.GetVblankFrequency() == 480;
     const auto current_limit = [&] {
+        TlgSettings::PollAndroidPerformance();
         const auto& s = TlgSettings::Get();
+#ifdef ISS_ANDROID_BIONIC
+        // Android controls the presentation ceiling live, independently of desktop GoW3 patches.
+        if (std::getenv("ISS_PERFORMANCE_STATE_FILE")) return u32(s.fps_limit.load());
+#endif
         return fixed_limit ? EmulatorSettings.GetFrameLimit()
                            : u32(TlgGraphics::PresentLimit(s.fps_limit, s.applied_engine_fps));
     };

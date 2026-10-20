@@ -13,6 +13,8 @@
 #include <cstdint>
 
 namespace TlgSettings {
+// Called on the VideoOut thread only; publishes validated Android FPS/VSync atomics.
+void PollAndroidPerformance();
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
                       UpscalerTaa = 4, UpscalerDlss = 5, UpscalerCount };

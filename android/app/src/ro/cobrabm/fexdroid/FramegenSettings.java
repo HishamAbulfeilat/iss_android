@@ -46,7 +46,7 @@ final class FramegenSettings {
   LinearLayout l=new LinearLayout(a);l.setOrientation(1);l.setPadding(28,16,28,12);
   TextView info=new TextView(a);info.setText("BloodFrame · Lossless Scaling\nImporte a Lossless.dll da sua instalação do Lossless Scaling. Os shaders não acompanham o aplicativo.");l.addView(info);
   Button dll=new Button(a);dll.setText(new File(base(a),"Lossless.dll").isFile()?"Substituir Lossless.dll":"Importar Lossless.dll");dll.setOnClickListener(v->chooseDll(a));l.addView(dll);
-  Spinner multiplier=new Spinner(a);multiplier.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"Desligado","2×","3×","4×"}));int m=p.getInt("fg_multiplier",0);multiplier.setSelection(m>=2&&m<=4?m-1:0);l.addView(multiplier);
+  RadioGroup multiplier=new RadioGroup(a);int m=p.getInt("fg_multiplier",0);for(int n:new int[]{0,2,3,4}){RadioButton b=new RadioButton(a);b.setId(android.view.View.generateViewId());b.setTag(n);b.setText(n==0?"Desligado":n+"× quadros");b.setTextSize(18);multiplier.addView(b);if(n==m || (n==0&&(m<2||m>4)))multiplier.check(b.getId());}l.addView(multiplier);
   TextView flowLabel=new TextView(a);flowLabel.setText("Escala do fluxo óptico");l.addView(flowLabel);
   Spinner flow=new Spinner(a);flow.setAdapter(new ArrayAdapter<String>(a,android.R.layout.simple_spinner_dropdown_item,new String[]{"25%","50%","75%","100%"}));flow.setSelection(Math.max(0,Math.min(3,Math.round(p.getFloat("fg_flow",0.75f)*4)-1)));l.addView(flow);
   CheckBox performance=new CheckBox(a);performance.setText("Modo desempenho");performance.setChecked(p.getBoolean("fg_performance",true));l.addView(performance);
@@ -54,7 +54,7 @@ final class FramegenSettings {
   ScrollView scroll=new ScrollView(a);scroll.addView(l);
   AlertDialog dialog=new AlertDialog.Builder(a).setTitle("Geração de quadros (BloodFrame)").setView(scroll).setNegativeButton("Cancelar",null).setPositiveButton("Aplicar",null).create();
   dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button->{
-   int pos=multiplier.getSelectedItemPosition(),value=pos==0?0:pos+1;
+   int value=(Integer)multiplier.findViewById(multiplier.getCheckedRadioButtonId()).getTag();
    if(value>0&&!new File(base(a),"Lossless.dll").isFile()){info.setText("Importe a Lossless.dll antes de ativar a geração de quadros.");return;}
    p.edit().putInt("fg_multiplier",value).putFloat("fg_flow",(flow.getSelectedItemPosition()+1)/4f).putBoolean("fg_performance",performance.isChecked()).putBoolean("fg_fp16",fp16.isChecked()).commit();
    try{write(a);if(updated!=null)updated.run();dialog.dismiss();}catch(IOException e){info.setText(e.getMessage());}

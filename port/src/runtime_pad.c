@@ -144,12 +144,14 @@ static int play_two_finger(PadData *d) {
     if (held && (!two.active || two.released)) { two.active=1; two.pressed=now; two.released=0; click.side=-1; }
     else if (!held && two.active && !two.released) two.released=now;
     if (!two.active) return 0;
-    if (two.released && now-two.released>=CLICK_TAIL_US) { two.active=0; return 0; }
+    const uint64_t down=two.pressed+CLICK_LEAD_US;
+    const uint64_t up=!two.released ? UINT64_MAX : (two.released>down+CLICK_HOLD_US ? two.released : down+CLICK_HOLD_US);
+    if (now>=up && now-up>=CLICK_TAIL_US) { two.active=0; return 0; }
     d->buttons&=~(uint32_t)(CLICK_LEFT|CLICK_RIGHT|BTN_R1);
     d->touch_count=0;
     d->touches[d->touch_count]=(PadTouch){.x=120,.y=471,.id=20}; ++d->touch_count;
     d->touches[d->touch_count]=(PadTouch){.x=1800,.y=471,.id=21}; ++d->touch_count;
-    if (!two.released && now>=two.pressed+CLICK_LEAD_US) d->buttons|=BTN_TOUCHPAD;
+    if (now>=down && now<up) d->buttons|=BTN_TOUCHPAD;
     return 1;
 }
 
@@ -825,6 +827,7 @@ static void read_inject(void) {
     while (fscanf(f,"%63s",token)==1) {
         if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* TLG_PAD_REPLAY */
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
+        if (!strcmp(token,"touchpad_both")) injected.buttons|=CLICK_LEFT|CLICK_RIGHT;
         if (!strcmp(token,"dpad_swipe=1")) android_dpad_swipe=1;
         if (!strcmp(token,"tilt_right")) injected_motion|=1;
         if (!strcmp(token,"tilt_left")) injected_motion|=2;
@@ -935,12 +938,14 @@ static void sample(PadData *d) {
         const unsigned directions=android_dpad_swipe ?
             ((d->buttons&BTN_UP)?1:0)|((d->buttons&BTN_DOWN)?2:0)|
             ((d->buttons&BTN_LEFT)?4:0)|((d->buttons&BTN_RIGHT)?8:0) : 0;
-        if(iss_dpad_swipe_step(&android_swipe,directions,now_us())) {
+        const int contact=iss_dpad_swipe_step(&android_swipe,directions,now_us());
+        if(directions) {
+            // The lift between repeated strokes must not leak ordinary D-pad buttons.
             dpad_touch_active=1;
-            click.side=-1;
+            click.side=-1;two.active=0;
             d->buttons &= ~(uint32_t)(BTN_UP|BTN_DOWN|BTN_LEFT|BTN_RIGHT|CLICK_LEFT|CLICK_RIGHT|BTN_TOUCHPAD);
-            d->touch_count=1;
-            d->touches[0]=(PadTouch){.x=(uint16_t)android_swipe.x,.y=(uint16_t)android_swipe.y,.id=android_swipe.id};
+            d->touch_count=contact?1:0;
+            if(contact)d->touches[0]=(PadTouch){.x=(uint16_t)android_swipe.x,.y=(uint16_t)android_swipe.y,.id=android_swipe.id};
         }
     }
     if (!dpad_touch_active && !play_two_finger(d)) play_click(d);
