@@ -6,7 +6,9 @@ Fork and Android adaptations: **erickmendes22 / [Daedalus Emulator](https://www.
 
 ## Download and requirements
 
-Download `inFAMOUS-Second-Son-Daedalus-v0.1.apk` from this repository's [Releases](https://github.com/erickmendes22/iss_android/releases). Version **0.1**, Android version code **8**, package `com.daedalus.iss.bionic`.
+Current validated package: **Build 71**, version **0.1**, Android version code **11**, package `com.daedalus.iss.bionic`.
+
+Download the APK artifact from [Build 71 on GitHub Actions](https://github.com/erickmendes22/iss_android/actions/runs/39456999142). Extract the artifact ZIP and install `inFAMOUS-Second-Son-Daedalus-v0.1.apk`. Published release packages will be available under [Releases](https://github.com/erickmendes22/iss_android/releases).
 
 - Android 11 or newer, ARM64 and a compatible Vulkan GPU/driver.
 - Snapdragon/Adreno is the primary target; other GPU families have not been validated.
@@ -19,9 +21,20 @@ The Bionic APK updates the previous Bionic builds using the same package and sig
 1. Install the APK and grant the requested file access.
 2. Select the extracted game folder, or install a local game PKG directly into an empty folder. A prepared game folder contains `eboot.bin`, `art/` and `sce_sys/param.sfo`.
 3. If needed, install the matching update PKG into the selected game folder.
-4. Choose video, FPS and control settings, then tap **PLAY**.
+4. Choose the settings below, then tap **PLAY**. Driver and resolution changes apply on the next game start.
 
 English is the default language. Select Portuguese in **Settings → Language**.
+
+## Settings layout
+
+| Location | Options |
+| --- | --- |
+| Home → Video | The only Fullscreen switch; disabled by default. Off uses automatic 16:9 and disables mode selection. On enables stretch or proportional filling with cropped edges. Android system bars remain hidden during gameplay in both cases. |
+| Home → FPS and VSync | 30 / 60 / 120 / 240 FPS targets and VSync. |
+| Home → Bloodframe | Frame-generation settings. |
+| Patches | Original 1080p, 720p or 900p resolution; motion blur, depth of field and depth blur patches for CUSA00004 01.00. Output resolution follows the selected resolution patch; there is no separate output-resolution selector. |
+| Settings → Vulkan driver | Automatic GPU detection, bundled or system drivers, and driver ZIP import. |
+| Settings | Language, HUD, controls, save import/export, log export and Lossless.dll import. |
 
 ## Features
 
@@ -35,14 +48,20 @@ English is the default language. Select Portuguese in **Settings → Language**.
 - Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
 - Direct PKG installation, save import/export and log export.
 
-FPS selections are targets; achieved performance depends on the scene and device. After a reported lighting regression, this build restores the GPU paths before the recent PC performance and subgroup/ballot ports, while retaining the safe cache-saver startup order. Device confirmation is pending. Shader caches refresh automatically after the update.
+FPS selections are targets; achieved performance depends on the scene and device. Shader caches refresh automatically when the shader source key changes, so the first run after an update may compile shaders again.
+
+## Build 71 rendering status
+
+The recent eight PC performance ports and subgroup/ballot changes were reverted after a report of flickering lighting. Build 71 restores the earlier GPU baseline (`0f9a9a4`), retaining safe cache-saver startup ordering and shader-cache invalidation. The individual cause has not been isolated, and the visual result still needs confirmation on the device.
+
+Java/native compilation, the runtime test suite, ARM64/Bionic checks, the APK signature and package hashes passed. These checks do not establish in-game visual correctness or a performance gain.
 
 ## Documentation and source
 
 - [Release 0.1 notes](docs/RELEASE_NOTES_v0.1.md)
 - [Controls, PKG installation, saves and Bloodframe](docs/ANDROID_BIONIC_PLAYER.md)
 - [Release build and publication](docs/RELEASE_BUILD.md)
-- [PC performance ports](docs/BIONIC_PC_PERFORMANCE_PORT.md)
+- [PC performance-port analysis and rollback status](docs/BIONIC_PC_PERFORMANCE_PORT.md)
 - [Original PC documentation](README.upstream.md)
 
 The release source is on `experimental-bionic`; the name is retained for branch continuity. The historical Linux/glibc integration remains separate. Native builds use `.github/workflows/bionic-experimental.yml` and `tools/android/bionic/`; the workflow prepares signed assets without publishing a release automatically.
