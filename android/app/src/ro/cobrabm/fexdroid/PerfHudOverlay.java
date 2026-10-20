@@ -182,20 +182,16 @@ final class PerfHudOverlay extends View {
      *  （framegen.stats：源/上屏双帧率 + LSFG 倍率，presenter 每秒原子写，
      *  change add-native-frame-generation）。文件缺失/未生效时回退直通语义。 */
     private void sampleFps() {
-        float[] fg = readFramegenStats(new File(context.getFilesDir(), "issport/framegen.stats"));
-        if (fg != null && System.currentTimeMillis()-new File(context.getFilesDir(), "issport/framegen.stats").lastModified()<3000) {
-            int src = Math.round(fg[0]), pres = Math.round(fg[1]);
-            snapFps = pres;
-            snapFpsSegment = PerfHudMetrics.fpsSegment(src, pres, (int)fg[2]);
-            lastFrameNs = System.nanoTime();
-            lastFrames = IssPresent.framesIfLoaded(); // 保持直通计数器基准新鲜
-            return;
-        }
         long now = IssPresent.framesIfLoaded();
         long time = System.nanoTime();
+        // Count frames actually shown by Android, including generated frames.
+        // Engine production can exceed presentation if a buffer is skipped.
         snapFps = lastFrameNs > 0 && time > lastFrameNs ? (int)Math.round(PerfHudMetrics.diffFrames(lastFrames, now)*1e9/(time-lastFrameNs)) : 0;
+        File statsFile = new File(context.getFilesDir(), "issport/framegen.stats");
+        float[] fg = readFramegenStats(statsFile);
+        snapFpsSegment = fg != null && System.currentTimeMillis()-statsFile.lastModified()<3000 && lastFrameNs>0
+                ? PerfHudMetrics.fpsSegment(Math.round(fg[0]), snapFps, (int)fg[2]) : null;
         lastFrameNs = time;
-        snapFpsSegment = null;
         lastFrames = now;
     }
 
