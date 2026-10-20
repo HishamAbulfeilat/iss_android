@@ -406,11 +406,7 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                 ir.IAdd(ir.Imm32(scratch_base), ir.ShiftLeftLogical(subgroup_id, ir.Imm32(2u)));
             ir.WriteShared(32, mask_low, offset);
             ir.Barrier();
-            // Keep the 64-bit shared load explicitly aligned to this wave's two 32-bit
-            // ballot slots. The SPIR-V backend already indexes U64 loads by offset >> 3;
-            // this preserves that pairing in the IR as well.
-            const IR::U64 mask =
-                IR::U64{ir.LoadShared(64, false, ir.BitwiseAnd(offset, ir.Imm32(~7u)))};
+            const IR::U64 mask = IR::U64{ir.LoadShared(64, false, offset)};
             ir.Barrier();
             inst->ReplaceUsesWithAndRemove(mask);
         } else if (inst->GetOpcode() == IR::Opcode::ReadLane) {

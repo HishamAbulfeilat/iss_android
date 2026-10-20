@@ -1,3 +1,5 @@
+> Current build: the ports below are reverted following a device lighting regression. This document preserves the prior analysis; it does not describe enabled optimizations in the rollback build. The earlier GPU baseline is 0f9a9a4.
+
 # PC performance ports, items 1–8 (Build 65)
 
 Base: Bionic `0f9a9a4`; source: HayatoG/iss_pc, inspected through `fb7e452`.

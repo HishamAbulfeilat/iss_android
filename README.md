@@ -25,7 +25,7 @@ English is the default language. Select Portuguese in **Settings → Language**.
 
 ## Features
 
-- Optional Fullscreen toggle only in Home → Video (off by default) and Android game classification.
+- Optional image filling only in Home → Video (off by default); 16:9 uses an immersive display, and Android game classification is enabled.
 - Native PCM audio mixer feeding Android AudioTrack at fixed s16 stereo / 48 kHz.
 - inFAMOUS-themed launcher and in-game menu, opened from the left edge or Back/Guide.
 - 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
@@ -34,10 +34,8 @@ English is the default language. Select Portuguese in **Settings → Language**.
 - Configurable HUD, touch controls and physical controllers; incremental D-pad swipes with held-direction continuation and a two-finger TOUCH action.
 - Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
 - Direct PKG installation, save import/export and log export.
-- Sampler/descriptor reuse, lighter readback/page tracking, shader-cache reuse and lower presentation overhead.
-- Subgroup-size consistency fixes and explicitly aligned wave64 ballot loads from the PC port.
 
-FPS selections are targets; achieved performance depends on the scene and device. The upstream particle/fog/water/fire change is included, but a visual improvement has not yet been confirmed on the device. Updated shader code automatically uses a new cache; the first run may compile shaders again.
+FPS selections are targets; achieved performance depends on the scene and device. After a reported lighting regression, this build restores the GPU paths before the recent PC performance and subgroup/ballot ports, while retaining the safe cache-saver startup order. Device confirmation is pending. Shader caches refresh automatically after the update.
 
 ## Documentation and source
 

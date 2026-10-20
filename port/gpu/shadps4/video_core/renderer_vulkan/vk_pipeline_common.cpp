@@ -153,18 +153,17 @@ void Pipeline::BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBi
 }
 
 
-void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
+void Pipeline::BindResources(DescriptorWrites& set_writes,
                              const Shader::PushData& push_data) const {
     const auto bind_point =
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;
     const vk::PipelineLayout layout = *pipeline_layout;
-    const std::span<const vk::WriteDescriptorSet> active_writes{set_writes.data(), count};
-    if (descriptor_update_template && count != 0) {
+    if (descriptor_update_template && !set_writes.empty()) {
         // A compact, aligned snapshot replaces WriteDescriptorSet copies and pointer patching.
         boost::container::small_vector<u64, 256> words;
         words.resize((descriptor_template_data.bytes + sizeof(u64) - 1) / sizeof(u64));
-        if (descriptor_template_data.Pack(active_writes, std::span<u64>{words.data(), words.size()})) {
+        if (descriptor_template_data.Pack(set_writes, std::span<u64>{words.data(), words.size()})) {
             const auto payload = scheduler.RecordData(std::span<const u64>{words.data(), words.size()});
             const VkDescriptorUpdateTemplate update = *descriptor_update_template;
             const auto push = push_descriptor_template;
@@ -180,7 +179,7 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
             return;
         }
     }
-    if (IssBionicPerf::Enabled() && count != 0) {
+    if (IssBionicPerf::Enabled() && !set_writes.empty()) {
         IssBionicPerf::descriptor_legacy_calls.fetch_add(1, std::memory_order_relaxed);
     }
     scheduler.Record([layout, stage_flags, push_data](vk::CommandBuffer cmdbuf) {
@@ -188,28 +187,28 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
     });
 
     // Bind descriptor set.
-    if (count == 0) {
+    if (set_writes.empty()) {
         return;
     }
 
     if (uses_push_descriptors) {
         if (!scheduler.IsRecordingDeferred()) {
-            scheduler.Record([bind_point, layout, active_writes](vk::CommandBuffer cmdbuf) {
-                cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, active_writes);
+            scheduler.Record([&](vk::CommandBuffer cmdbuf) {
+                cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, set_writes);
             });
             return;
         }
         // Writes and the infos they point to are laid out in the recording chunk, with the
         // pointers already aimed at those copies: the command only carries a span.
-        size_t bytes = count * sizeof(vk::WriteDescriptorSet) + 64;
-        for (const auto& write : active_writes) {
+        size_t bytes = set_writes.size() * sizeof(vk::WriteDescriptorSet) + 64;
+        for (const auto& write : set_writes) {
             bytes += write.descriptorCount *
                          (sizeof(vk::DescriptorBufferInfo) + sizeof(vk::DescriptorImageInfo) +
                           sizeof(vk::BufferView)) +
                      32;
         }
         scheduler.ReserveRecordData(bytes);
-        const auto writes = scheduler.RecordData(active_writes);
+        const auto writes = scheduler.RecordData(std::span<const vk::WriteDescriptorSet>{set_writes});
         auto* patched = const_cast<vk::WriteDescriptorSet*>(writes.data());
         for (size_t i = 0; i < writes.size(); ++i) {
             auto& write = patched[i];
@@ -232,10 +231,10 @@ void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
 
     // Descriptor set updates are device calls: they stay on this thread.
     const auto desc_set = desc_heap.Commit(*desc_layout);
-    for (auto& set_write : std::span{set_writes.data(), count}) {
+    for (auto& set_write : set_writes) {
         set_write.dstSet = desc_set;
     }
-    instance.GetDevice().updateDescriptorSets(active_writes, {});
+    instance.GetDevice().updateDescriptorSets(set_writes, {});
     scheduler.Record([bind_point, layout, desc_set](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindDescriptorSets(bind_point, layout, 0, desc_set, {});
     });

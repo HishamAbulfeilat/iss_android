@@ -427,18 +427,12 @@ std::vector<u8> LoadDriverCacheBlob(const Instance& instance) {
 }
 } // namespace
 
-std::atomic<u64> g_tlg_driver_pipelines_created{0};
-
 struct PipelineCache::DriverCacheSaver {
     std::thread thread;
     std::mutex mutex;
     std::condition_variable cv;
     bool stop = false;
     u64 saved_hash = 0; ///< XXH3 of the last blob written (or loaded): unchanged data is not rewritten
-    /// g_tlg_driver_pipelines_created at the last save: nothing new means nothing to merge, copy
-    /// or hash (a whole-game blob is ~300 MB, and the save ran every minute regardless).
-    u64 saved_created = ~0ull;
-    bool over_limit_logged = false;
 };
 
 bool PipelineCache::SaveDriverCache() {
@@ -455,10 +449,6 @@ bool PipelineCache::SaveDriverCache() {
 bool PipelineCache::SaveDriverCacheUnchecked() {
     // Pipelines the compiler workers built are only merged into pipeline_cache when they finish
     // (FinishCompilations): merge copies of all of them into a scratch cache for the blob.
-    const u64 created = g_tlg_driver_pipelines_created.load(std::memory_order_relaxed);
-    if (driver_saver && created == driver_saver->saved_created) {
-        return true;
-    }
     const auto device = instance.GetDevice();
     auto [scratch_result, scratch] = device.createPipelineCacheUnique({});
     if (scratch_result != vk::Result::eSuccess) {
@@ -475,28 +465,8 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
     if (result != vk::Result::eSuccess || blob.size() < sizeof(VkPipelineCacheHeaderVersionOne)) {
         return false;
     }
-    // tlg: TLG_DRIVER_CACHE_MAX_MB (default 1024, 0 = no limit): a bigger blob is not written,
-    // so the file never grows past it (the saved one keeps loading). Vulkan has no way to evict
-    // entries from a pipeline cache; deleting the file starts it again.
-    static const u64 max_bytes = [] {
-        const char* v = std::getenv("TLG_DRIVER_CACHE_MAX_MB");
-        return u64(v && *v ? std::max(0, std::atoi(v)) : 1024) << 20;
-    }();
-    if (max_bytes && blob.size() > max_bytes) {
-        if (driver_saver && !driver_saver->over_limit_logged) {
-            driver_saver->over_limit_logged = true;
-            std::printf("GPU: driver pipeline cache not saved: %zu MB is over the %llu MB limit "
-                        "(TLG_DRIVER_CACHE_MAX_MB)\n",
-                        blob.size() >> 20, static_cast<unsigned long long>(max_bytes >> 20));
-        }
-        if (driver_saver) {
-            driver_saver->saved_created = created;
-        }
-        return false;
-    }
     const u64 hash = XXH3_64bits(blob.data(), blob.size());
     if (driver_saver && hash == driver_saver->saved_hash) {
-        driver_saver->saved_created = created;
         return true;
     }
     const auto path = DriverCacheFile(instance);
@@ -521,7 +491,6 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
     }
     if (driver_saver) {
         driver_saver->saved_hash = hash;
-        driver_saver->saved_created = created;
     }
     LOG_INFO(Render_Vulkan, "tlg: driver pipeline cache saved ({} bytes)", blob.size());
     return true;
@@ -576,8 +545,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),
         .supported_spirv = SpirvVersion1_6,
-        // Match compute pipeline creation, including drivers whose default is 32 lanes.
-        .subgroup_size = instance.ComputeSubgroupSize(),
+        .subgroup_size = instance.SubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
         .support_int8 = instance.IsShaderInt8Supported(),
         .support_int16 = instance.IsShaderInt16Supported(),
@@ -645,10 +613,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         std::printf("GPU: shader switch %s=%d (%s)\n", name, on ? 1 : 0, what);
     });
     Common::Backports::LogStates();
-    std::printf("GPU: host subgroup size %u (device default %u, min %u, max %u, required-size stages "
-                "0x%x), LDS barriers %s\n",
-                profile.subgroup_size, instance.SubgroupSize(), instance.MinSubgroupSize(),
-                instance.MaxSubgroupSize(), static_cast<u32>(instance.RequiredSubgroupSizeStages()),
+    std::printf("GPU: host subgroup size %u, LDS barriers %s\n", profile.subgroup_size,
                 profile.needs_lds_barriers ? "on" : "off");
     std::printf("GPU: fragment contraction %s (no depth export, at most one color target)\n",
                 profile.fragment_contraction_policy ? "on" : "off");
@@ -711,7 +676,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         LOG_INFO(Render_Vulkan, "tlg: async graphics compilation ready ({} capture, {} compile workers)",
                  capture_count, count);
     }
-    // Publish the worker-cache list before the saver thread can inspect it.
+    // Publish worker caches before the independent saver thread can inspect them.
     if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
         StartDriverCacheSaver();
         if (!driver_blob.empty()) {
@@ -1924,7 +1889,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     };
 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
-    if (it_pgm == program_cache.end() && LoadProgramFromCache(params.hash)) {
+    if (it_pgm == program_cache.end() && lazy_programs && LoadProgramFromCache(params.hash)) {
         it_pgm = program_cache.find(params.hash);
     }
     const bool compile_async = AsyncCompilation() && hw_stage != HwStage::Compute &&

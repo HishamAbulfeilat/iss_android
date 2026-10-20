@@ -286,12 +286,7 @@ GraphicsPipeline::GraphicsPipeline(
         .requiredSubgroupSize = 64,
     };
     for (auto& stage : shader_stages) {
-        // tlg: a required subgroup size is only valid on the stages the driver lists in
-        // requiredSubgroupSizeStages; attaching it elsewhere is a spec violation (the driver may
-        // reject the pipeline or clamp the size, either way the shader runs at a size the wave64
-        // lowering did not assume).
-        stage.pNext = instance.IsRequiredSubgroupSize64ValidFor(stage.stage) ? &subgroup_size_ci
-                                                                            : nullptr;
+        stage.pNext = instance.IsSubgroupSize64Supported() ? &subgroup_size_ci : nullptr;
     }
 
     const auto depth_format =

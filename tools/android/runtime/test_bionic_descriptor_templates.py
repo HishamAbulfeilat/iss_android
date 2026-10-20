@@ -103,23 +103,6 @@ int main() {
                                 ("offdirect",), ("empty",)))
         self.compile_run(code, flags=("-I", include), cases=(("nonbionic",),))
 
-    def test_present_clear_and_filter_across_aspects_and_fallback(self):
-        include = os.environ.get("VULKAN_HEADERS_INCLUDE")
-        if not include:
-            candidate = ROOT.parent / "vulkan_headers_check/include"
-            if (candidate / "vulkan/vulkan.hpp").exists():
-                include = str(candidate)
-        if not include:
-            self.skipTest("optional Vulkan-Headers checkout unavailable")
-        source = (GPU / "video_core/renderer_vulkan/vk_presenter.cpp").read_text()
-        bodies = "\n".join(method(source, signature) for signature in (
-            "[[nodiscard]] vk::ImageSubresourceLayers MakeImageSubresourceLayers()",
-            "[[nodiscard]] vk::ImageBlit MakeImageBlit(", "static vk::Rect2D FitImage(",
-            "static bool SkipPresentClear()", "static void BlitPresentedFrame("))
-        fixture = (ROOT / "tools/android/runtime/cpp/present_fast_path.cpp").read_text()
-        self.compile_run(fixture.replace("// PRODUCTION_METHODS", bodies),
-                         flags=("-I", include), cases=((), ("fallback",)))
-
 
 if __name__ == "__main__":
     unittest.main()

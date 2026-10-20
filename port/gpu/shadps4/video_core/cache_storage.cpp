@@ -220,8 +220,8 @@ void DataBase::Close() {
 template <typename T>
 bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector<T>&& v) {
     {
-        auto request = std::packaged_task<void()>{[type, v = std::move(v), path_ = std::move(path_)]() mutable {
-            auto path{std::move(path_)};
+        auto request = std::packaged_task<void()>{[=]() {
+            auto path{path_};
             path.replace_extension(GetBlobFileExtension(type));
             if (EmulatorSettings.IsPipelineCacheArchived()) {
                 ASSERT_MSG(!ar_is_read_only,

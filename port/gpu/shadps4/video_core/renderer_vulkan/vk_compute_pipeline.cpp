@@ -111,12 +111,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         const vk::ComputePipelineCreateInfo compute_pipeline_ci = {
             .flags = flags,
             .stage{
-                // tlg: the stage must be in requiredSubgroupSizeStages for this to be valid; the
-                // profile's subgroup size (vk_pipeline_cache.cpp) is picked to match.
-                .pNext = instance.IsRequiredSubgroupSize64ValidFor(
-                             vk::ShaderStageFlagBits::eCompute)
-                             ? &subgroup_size_ci
-                             : nullptr,
+                .pNext = instance.IsSubgroupSize64Supported() ? &subgroup_size_ci : nullptr,
                 .stage = vk::ShaderStageFlagBits::eCompute,
                 .module = module,
                 .pName = "main",
@@ -132,9 +127,6 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         if (created.result == vk::Result::ePipelineCompileRequired &&
             (flags & vk::PipelineCreateFlagBits::eFailOnPipelineCompileRequired)) {
             return {};
-        }
-        if (created.result == vk::Result::eSuccess) {
-            g_tlg_driver_pipelines_created.fetch_add(1, std::memory_order_relaxed);
         }
         ASSERT_MSG(created.result == vk::Result::eSuccess, "Failed to create compute pipeline: {}",
                    vk::to_string(created.result));

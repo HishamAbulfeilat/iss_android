@@ -133,42 +133,6 @@ static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_widt
                          dst_rect.offset.x, dst_rect.offset.y);
 }
 
-static bool SkipPresentClear() {
-    static const bool skip = [] {
-        const char* env = std::getenv("TLG_PRESENT_SKIP_CLEAR");
-        return !(env && env[0] == '0');
-    }();
-    return skip;
-}
-
-// Clear letterbox bars on every acquired image, including recycled AHB images.
-static void BlitPresentedFrame(vk::CommandBuffer cmdbuf, vk::Image source, vk::Image destination,
-                               s32 width, s32 height, vk::Extent2D extent,
-                               const vk::ImageSubresourceRange& color_range) {
-    const auto fit = FitImage(width, height, extent.width, extent.height);
-    const bool full = fit.offset.x == 0 && fit.offset.y == 0 &&
-        fit.extent.width == extent.width && fit.extent.height == extent.height;
-    const bool one_to_one = fit.extent.width == u32(width) && fit.extent.height == u32(height);
-    const bool optimize = SkipPresentClear();
-    if (!(full && optimize)) {
-        const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
-        cmdbuf.clearColorImage(destination, vk::ImageLayout::eTransferDstOptimal, black, color_range);
-        const vk::MemoryBarrier clear_done{
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-        };
-        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                               vk::PipelineStageFlagBits::eTransfer,
-                               vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
-    }
-    cmdbuf.blitImage(source, vk::ImageLayout::eTransferSrcOptimal, destination,
-                     vk::ImageLayout::eTransferDstOptimal,
-                     MakeImageBlit(width, height, fit.extent.width, fit.extent.height,
-                                   fit.offset.x, fit.offset.y),
-                     optimize && one_to_one ? vk::Filter::eNearest : vk::Filter::eLinear);
-}
-
-
 // tlg: screenshot capture and ImGui overlays removed; the port presents directly.
 
 Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_)
@@ -874,8 +838,18 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
                                vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
                                {}, {}, pre_barriers);
-        BlitPresentedFrame(cmdbuf, frame->image, swapchain_image, frame->width, frame->height,
-                           extent, color_range);
+        const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+        cmdbuf.clearColorImage(swapchain_image, vk::ImageLayout::eTransferDstOptimal, black, color_range);
+        const vk::MemoryBarrier clear_done{
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer,
+                               vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
+        cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, swapchain_image,
+                         vk::ImageLayout::eTransferDstOptimal,
+                         MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
+                         vk::Filter::eLinear);
         // tlg: the settings menu / FPS counter over the frame, at display resolution.
         const bool overlay = TlgOverlay::Visible();
         const std::array post_barriers{
@@ -1209,8 +1183,19 @@ bool Presenter::PresentWithLsfg(Frame* frame) {
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
                                vk::PipelineStageFlagBits::eTransfer,
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
-        BlitPresentedFrame(cmdbuf, frame->image, dst, frame->width, frame->height,
-                           extent, color_range);
+        const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+        cmdbuf.clearColorImage(dst, vk::ImageLayout::eTransferDstOptimal, black, color_range);
+        const vk::MemoryBarrier clear_done{
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                               vk::PipelineStageFlagBits::eTransfer,
+                               vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
+        cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, dst,
+                         vk::ImageLayout::eTransferDstOptimal,
+                         MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
+                         vk::Filter::eLinear);
         // 游戏内设置菜单叠加层与直通路径一致（显示分辨率）。
         const bool overlay = TlgOverlay::Visible();
         const std::array post_barriers{
