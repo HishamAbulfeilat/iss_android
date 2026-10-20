@@ -1,4 +1,4 @@
-# Interface Android Bionic — inFAMOUS Second Son
+# Interface Android Bionic — inFAMOUS Second Son 0.1
 
 A tela inicial reúne seleção de pasta, instalação de jogo/atualização por PKG,
 vídeo e patches, BloodFrame, HUD, controles e transferência de saves.
@@ -41,3 +41,19 @@ O D-pad físico e virtual desliza o touchpad progressivamente enquanto pressiona
 soltar levanta o dedo. A opção pode ser desligada para voltar a enviar direções
 normais. O botão TOUCH continua sendo o clique do touchpad. O editor permite
 arrastar cada controle e usar dois dedos para mudar seu tamanho; tudo persiste.
+
+## Idioma, FPS e drivers
+
+Inglês é o padrão; português pode ser selecionado em Configurações → Idioma.
+As opções de vídeo oferecem metas de 30/60/120/240 FPS e VSync. Metas acima de 60
+precisam de tela/driver compatíveis e desempenho suficiente para a cena.
+
+Seleção automática: Turnip Gen8 V38 Patched em Adreno 8xx e Turnip v27.0.0-R1
+em Adreno 6xx/7xx. É possível importar um driver ZIP nas opções de vídeo.
+
+## Atualização para 0.1
+
+O APK usa código interno 7 e mantém pacote/certificado das builds Bionic anteriores.
+Atualize sem limpar os dados para manter saves, drivers importados e configurações.
+A versão glibc permanece separada. O cache de shaders muda automaticamente quando
+necessário; a primeira execução pode recompilar shaders.

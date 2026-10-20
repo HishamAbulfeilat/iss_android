@@ -1,42 +1,54 @@
-# inFAMOUS Second Son — Daedalus Android Fork
+# inFAMOUS Second Son — Daedalus Fork 0.1
 
-Projeto **iss_android**, mantido por [erickmendes22 — Daedalus Emulator](https://www.youtube.com/@daedalusemulator), baseado em [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc).
+Android ARM64 port of **inFAMOUS Second Son**, based on [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), with an Android **Bionic** runtime, FEX CPU translation and native Vulkan presentation through AHardwareBuffer.
 
-## Estado atual (17/10/2026)
+Fork and Android adaptations: **erickmendes22 / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
 
-**APK experimental Android ARM64 gerado por CI, usando Linux/glibc + FEXCore. O jogo ainda não foi validado em um dispositivo Android.**
+## Download and requirements
 
-A branch [`android-glibc`](https://github.com/erickmendes22/iss_android/tree/android-glibc) contém a primeira integração de runtime, tradução x86-64 → ARM64, renderizador Vulkan, launcher Android, controles, áudio e empacotamento. A branch `main` permanece separada.
+Download `inFAMOUS-Second-Son-Daedalus-v0.1.apk` from this repository's [Releases](https://github.com/erickmendes22/iss_android/releases). Version **0.1**, Android version code **7**, package `com.daedalus.iss.bionic`.
 
-O [GitHub Actions Android glibc](https://github.com/erickmendes22/iss_android/actions/workflows/android-glibc.yml) compilou os binários nativos, gerou o APK, assinou-o com uma chave local de desenvolvimento e verificou o pacote em 17/10/2026 ([execução aprovada](https://github.com/erickmendes22/iss_android/actions/runs/39031239053)). O APK está dentro do artefato `iss-android-glibc-apk-...` dessa execução, junto do checksum.
+- Android 11 or newer, ARM64 and a compatible Vulkan GPU/driver.
+- Snapdragon/Adreno is the primary target; other GPU families have not been validated.
+- Supply your own compatible inFAMOUS Second Son game files. No game, firmware, keys or Lossless.dll are included.
 
-**Não há confirmação de boot, menu, saves, renderização ou gameplay no Redmagic/Android.** A aprovação do CI comprova somente compilação e empacotamento; a etapa posterior é testar com uma cópia própria e compatível do jogo. O APK usa assinatura local experimental, que pode mudar entre builds e exigir desinstalar a versão anterior para instalar outra.
+The Bionic APK updates the previous Bionic builds using the same package and signing certificate. Keep app data to retain settings and saves. The older glibc APK is a separate application.
 
-## Arquitetura da etapa glibc
+## Getting started
 
-- **CPU:** código x86-64 do jogo traduzido por FEXCore; ponte `guest_cpu` adaptada para threads, TLS, exceções, callbacks e fibras ARM64.
-- **GPU:** biblioteca Vulkan `libtlggpu.so` preservando correções e serviços do `iss_pc`; erros de compilação ARM64 foram resolvidos sem importar patches específicos de outros jogos.
-- **Android:** launcher Java, apresentação via bridge fexdroid/Xvfb, controles físicos e virtuais, modo sensor para grafite, áudio e exportação de logs.
-- **Empacotamento:** rootfs glibc e scripts de preparação do `iss_pc` incluídos; `eboot.bin`, arquivos de jogo, saves de terceiros e firmware não são distribuídos.
-- **Primeiro teste:** exige arquivos extraídos do inFAMOUS Second Son, com atualização 1.07 integrada na mesma pasta (referência upstream `CUSA00223`). A compatibilidade em Android permanece não confirmada.
+1. Install the APK and grant the requested file access.
+2. Select the extracted game folder, or install a local game PKG directly into an empty folder. A prepared game folder contains `eboot.bin`, `art/` and `sce_sys/param.sfo`.
+3. If needed, install the matching update PKG into the selected game folder.
+4. Choose video, FPS and control settings, then tap **PLAY**.
 
-O build experimental contém a implementação **glibc**, e **não** um runtime Bionic. A migração para Android/Bionic é uma etapa separada, posterior à validação da inicialização e do jogo na base glibc.
+English is the default language. Select Portuguese in **Settings → Language**.
 
-## Base preservada
+## Features
 
-- Código, submódulos, serviços e correções específicas do inFAMOUS provenientes de `HayatoG/iss_pc`.
-- Base inicial: `1898d449a7edf506d12ef63445f8fc5432e60105`.
-- Documentação original de PC preservada em [README.upstream.md](README.upstream.md).
-- Build de PC preservado; o workflow Android experimental é separado.
+- inFAMOUS-themed launcher and in-game menu, opened from the left edge or Back/Guide.
+- 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
+- Bundled Turnip Gen8 V38 Patched for Adreno 8xx and Turnip v27.0.0-R1 for Adreno 6xx/7xx; custom driver ZIP import.
+- Bloodframe frame generation, configured separately from the game's source FPS. Import your own `Lossless.dll` to use it.
+- Configurable HUD, touch controls and physical controllers; incremental D-pad swipes with held-direction continuation and a two-finger TOUCH action.
+- Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
+- Direct PKG installation, save import/export and log export.
+- Sampler/descriptor reuse, lighter readback/page tracking, shader-cache reuse and lower presentation overhead.
+- Subgroup-size consistency fixes and explicitly aligned wave64 ballot loads from the PC port.
 
-Consulte [docs/ANDROID_PORT.md](docs/ANDROID_PORT.md) para o estado de cada etapa.
+FPS selections are targets; achieved performance depends on the scene and device. The upstream particle/fog/water/fire change is included, but a visual improvement has not yet been confirmed on the device. Updated shader code automatically uses a new cache; the first run may compile shaders again.
 
-## Créditos
+## Documentation and source
 
-- [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc) — projeto de origem e adaptações do inFAMOUS.
-- [God of War III — Daedalus Fork](https://github.com/erickmendes22/gow3_android_daedalus_fork) — referência da infraestrutura Linux/glibc Android e FEX, sem reaproveitar patches de jogo.
-- [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android) — referência de integração Android e futura etapa Bionic.
-- [FEX-Emu](https://github.com/FEX-Emu/FEX) — tradução dinâmica de x86-64 para ARM64.
-- [shadPS4](https://github.com/shadps4-emu/shadPS4), [fexdroid](https://github.com/cobrabm12/fexdroid) e demais autores e colaboradores creditados na documentação e fontes.
+- [Release 0.1 notes](docs/RELEASE_NOTES_v0.1.md)
+- [Controls, PKG installation, saves and Bloodframe](docs/ANDROID_BIONIC_PLAYER.md)
+- [Release build and publication](docs/RELEASE_BUILD.md)
+- [PC performance ports](docs/BIONIC_PC_PERFORMANCE_PORT.md)
+- [Original PC documentation](README.upstream.md)
 
-Atribuições e licenças existentes devem ser preservadas. Nenhum arquivo de jogo ou firmware é distribuído. Projeto sem afiliação com Sony Interactive Entertainment ou Sucker Punch Productions.
+The release source is on `experimental-bionic`; the name is retained for branch continuity. The historical Linux/glibc integration remains separate. Native builds use `.github/workflows/bionic-experimental.yml` and `tools/android/bionic/`; the workflow prepares signed assets without publishing a release automatically.
+
+## Credits and licenses
+
+[HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), [shadPS4](https://github.com/shadps4-emu/shadPS4), [FEX-Emu](https://github.com/FEX-Emu/FEX), [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android), [Daedalus GoW3](https://github.com/erickmendes22/gow3_android_daedalus_fork), [fexdroid](https://github.com/cobrabm12/fexdroid), Bloodframe, Mesa/Turnip, StevenMXZ and all upstream contributors.
+
+Source licenses and notices are preserved in the repository and packaged runtime. See [port/LICENSE](port/LICENSE) and [runtime notices](tools/android/bionic/NOTICE.txt). No affiliation with Sony Interactive Entertainment or Sucker Punch Productions.

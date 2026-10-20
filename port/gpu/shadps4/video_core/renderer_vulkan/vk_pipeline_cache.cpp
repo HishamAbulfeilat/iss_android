@@ -576,7 +576,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),
         .supported_spirv = SpirvVersion1_6,
-        .subgroup_size = instance.SubgroupSize(),
+        // Match compute pipeline creation, including drivers whose default is 32 lanes.
+        .subgroup_size = instance.ComputeSubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
         .support_int8 = instance.IsShaderInt8Supported(),
         .support_int16 = instance.IsShaderInt16Supported(),
@@ -644,7 +645,10 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         std::printf("GPU: shader switch %s=%d (%s)\n", name, on ? 1 : 0, what);
     });
     Common::Backports::LogStates();
-    std::printf("GPU: host subgroup size %u, LDS barriers %s\n", profile.subgroup_size,
+    std::printf("GPU: host subgroup size %u (device default %u, min %u, max %u, required-size stages "
+                "0x%x), LDS barriers %s\n",
+                profile.subgroup_size, instance.SubgroupSize(), instance.MinSubgroupSize(),
+                instance.MaxSubgroupSize(), static_cast<u32>(instance.RequiredSubgroupSizeStages()),
                 profile.needs_lds_barriers ? "on" : "off");
     std::printf("GPU: fragment contraction %s (no depth export, at most one color target)\n",
                 profile.fragment_contraction_policy ? "on" : "off");
@@ -668,13 +672,6 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
-    if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
-        StartDriverCacheSaver();
-        if (!driver_blob.empty()) {
-            driver_saver->saved_hash = XXH3_64bits(driver_blob.data(), driver_blob.size());
-            Common::Backports::Hit(Common::Backports::Id::PipelineCacheBlob);
-        }
-    }
     // tlg: the compiler threads always exist; the in-game menu switches async compilation live
     // (TlgSettings::async_shaders, TLG_ASYNC_SHADERS at start).
     {
@@ -713,6 +710,14 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         });
         LOG_INFO(Render_Vulkan, "tlg: async graphics compilation ready ({} capture, {} compile workers)",
                  capture_count, count);
+    }
+    // Publish the worker-cache list before the saver thread can inspect it.
+    if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
+        StartDriverCacheSaver();
+        if (!driver_blob.empty()) {
+            driver_saver->saved_hash = XXH3_64bits(driver_blob.data(), driver_blob.size());
+            Common::Backports::Hit(Common::Backports::Id::PipelineCacheBlob);
+        }
     }
 }
 

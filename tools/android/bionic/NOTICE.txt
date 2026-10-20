@@ -1,4 +1,4 @@
-Daedalus Fork — experimental Android/Bionic runtime
+inFAMOUS Second Son — Daedalus Fork 0.1 · Android/Bionic runtime
 Source and build recipes: https://github.com/erickmendes22/iss_android/tree/experimental-bionic
 
 inFAMOUS runtime: Daedalus Fork and upstream contributors.

@@ -1,3 +1,5 @@
+> Historical Linux/glibc integration notes. For the current Bionic v0.1 release, see [the README](../README.md) and [Bionic player guide](ANDROID_BIONIC_PLAYER.md). Statements below about Bionic not being started describe the earlier glibc stage.
+
 # inFAMOUS Second Son — plano do port Android
 
 Projeto `iss_android` separado dos ports de God of War III e Bloodborne. Base upstream: `HayatoG/iss_pc`, commit `1898d449a7edf506d12ef63445f8fc5432e60105`.

@@ -29,7 +29,7 @@ public final class BionicMainActivity extends Activity {
   ImageView art=new ImageView(this);art.setImageResource(getResources().getIdentifier("infamous","drawable",getPackageName()));art.setScaleType(ImageView.ScaleType.CENTER_CROP);art.setAlpha(.28f);root.addView(art,new android.widget.FrameLayout.LayoutParams(-1,-1));root.setBackgroundColor(0xff12090c);
   LinearLayout chrome=new LinearLayout(this);chrome.setOrientation(1);chrome.setPadding(dp(18),dp(12),dp(18),dp(12));root.addView(chrome,new android.widget.FrameLayout.LayoutParams(-1,-1));
   TextView title=label("inFAMOUS SECOND SON",26,0xfffff1e9);title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);chrome.addView(title);
-  chrome.addView(label("DAEDALUS  ·  ANDROID BIONIC",12,0xffff642d));
+  chrome.addView(label("DAEDALUS  ·  0.1  ·  ANDROID BIONIC",12,0xffff642d));
   status=label("",13,0xffddc3be);status.setPadding(0,dp(12),0,dp(8));chrome.addView(status);
   progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);progress.setVisibility(android.view.View.GONE);chrome.addView(progress);
   pages=new LinearLayout(this);pages.setOrientation(1);chrome.addView(pages,new LinearLayout.LayoutParams(-1,0,1));
@@ -60,7 +60,7 @@ public final class BionicMainActivity extends Activity {
    LinearLayout logs=card(content,"LOGS");button(logs,AppLanguage.text("Export latest log", "Exportar último log"),()->startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").putExtra(Intent.EXTRA_TITLE,"iss-android.log"),3));
    LinearLayout fg=card(content,"LOSSLESS.DLL · BLOODFRAME");button(fg,AppLanguage.text("Import Lossless.dll", "Importar Lossless.dll"),()->FramegenSettings.chooseDll(this));button(fg,AppLanguage.text("Configure Bloodframe", "Configurar Bloodframe"),()->FramegenSettings.show(this,null));
   }else{
-   LinearLayout about=card(content,"inFAMOUS SECOND SON — DAEDALUS FORK");about.addView(label(AppLanguage.text("Android port with a Bionic runtime.\n\nFork and modifications: erickmendes22\nDaedalus Emulator\n\nBase project: HayatoG/iss_pc\n\nNo game files are included.", "Port para Android com runtime Bionic.\n\nFork e modificações: erickmendes22\nDaedalus Emulator\n\nProjeto base: HayatoG/iss_pc\n\nNenhum arquivo do jogo está incluído."),17,0xfffff1e9));button(about,"YouTube · @daedalusemulator",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/@daedalusemulator"))));button(about,"GitHub · iss_android",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/erickmendes22/iss_android"))));
+   LinearLayout about=card(content,"inFAMOUS SECOND SON — DAEDALUS FORK");about.addView(label(AppLanguage.text("Version 0.1\nAndroid port with a Bionic runtime.\n\nFork and modifications: erickmendes22\nDaedalus Emulator\n\nBase project: HayatoG/iss_pc\n\nNo game files are included.", "Versão 0.1\nPort para Android com runtime Bionic.\n\nFork e modificações: erickmendes22\nDaedalus Emulator\n\nProjeto base: HayatoG/iss_pc\n\nNenhum arquivo do jogo está incluído."),17,0xfffff1e9));button(about,"YouTube · @daedalusemulator",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/@daedalusemulator"))));button(about,"GitHub · iss_android",()->startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/erickmendes22/iss_android"))));
    LinearLayout help=card(content,AppLanguage.text("CONTROLS", "CONTROLES"));help.addView(label(AppLanguage.text("TOUCH: two fingers to move the car.\nD-pad: gradual swipe; hold a direction to continue.\nGraffiti: L3 + R3 enables the virtual sensor; ✕ shakes the can, R2 sprays and the left stick aims.\n\nOpen the game menu from the left edge or with the Back button.", "TOUCH: dois dedos para mover o carro.\nD-pad: deslize gradual; mantenha pressionado para continuar.\nGrafite: L3 + R3 ativa o sensor virtual; ✕ sacode a lata, R2 pinta e o analógico esquerdo mira.\n\nAbra o menu do jogo pela borda esquerda ou pelo botão Voltar."),16,0xffddc3be));
   }
  }
@@ -132,7 +132,7 @@ public final class BionicMainActivity extends Activity {
      String title=BionicSaveArchive.readTitle(new File(getSharedPreferences("iss",0).getString("game_dir","")));
      try(InputStream in=getContentResolver().openInputStream(uri)){
       if(in==null)throw new IOException(AppLanguage.text("Could not open the ZIP.", "Não foi possível abrir o ZIP."));
-      int slots=BionicSaveArchive.importSaves(saves(),in,title);message=slots+AppLanguage.text(" save slot(s) imported for ", " slot(s) importado(s) para ")+title+AppLanguage.text(". Ready to test.", ". Pronto para testar.");
+      int slots=BionicSaveArchive.importSaves(saves(),in,title);message=slots+AppLanguage.text(" save slot(s) imported for ", " slot(s) importado(s) para ")+title+".";
      }
     }else try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){
      if(out==null)throw new IOException(AppLanguage.text("Could not create the ZIP.", "Não foi possível criar o ZIP."));

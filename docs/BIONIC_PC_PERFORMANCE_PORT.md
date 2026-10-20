@@ -41,3 +41,11 @@ The new ballot alignment mask (`e51a229`, table item 27) is not proof of a visua
 address by eight, making this extra mask produce the same index. The distinct subgroup/profile
 consistency fix (`b37381d`, table item 26) is a further candidate, not part of the approved 1–8.
 Neither is included here or represented as a tested graphics fix.
+
+## Release 0.1 follow-up
+
+Items 26 and 27 were subsequently approved and integrated: stage-valid required subgroup size,
+matching compute translation profile, explicit aligned ballot loads, and shader-cache key inputs.
+The driver-cache saver now starts after worker cache initialization. The ballot IR test and
+controlled shared-memory pair tests check addresses and bounds; neither proves a gameplay fix.
+The prior Build 65 exclusion above is historical. Public notes retain the visual-validation limit.

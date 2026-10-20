@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build an independently installable inFAMOUS Bionic APK (not the glibc APK).
+# Build and verify the inFAMOUS Second Son — Daedalus release APK.
 set -Eeuo pipefail
 trap 'echo "ISS Bionic APK failed at $LINENO: $BASH_COMMAND" >&2' ERR
 cd -- "$(dirname "$0")/../../.."
@@ -31,12 +31,18 @@ cp out/bionic/lib/libisspresent.so "$work/package/lib/arm64-v8a/libisspresent.so
 (cd "$work/package" && zip -q -0 -r "$work/base.apk" assets lib classes.dex)
 "$bt/zipalign" -f 4 "$work/base.apk" "$work/aligned.apk"
 key="$PWD/.local-deps/android/bionic-development.keystore"
+if [[ ! -f "$key" && ${ISS_RELEASE_BUILD:-1} = 1 ]]; then
+  echo "Release signing key missing: restore the existing signing cache; do not replace the key." >&2
+  exit 1
+fi
 if [[ ! -f "$key" ]]; then
   keytool -genkeypair -keystore "$key" -storepass android -keypass android \
     -alias iss-bionic-dev -dname "CN=ISS Bionic Android Experimental" -keyalg RSA \
     -keysize 2048 -validity 10000 -noprompt >/dev/null 2>&1
 fi
-apk="$PWD/out/release/inFAMOUS-Second-Son-Daedalus-Bionic-Experimental.apk"
+version=$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("android/app/BionicAndroidManifest.xml").getroot().get("{http://schemas.android.com/apk/res/android}versionName"))')
+[[ $version =~ ^[0-9]+([.][0-9]+)*$ ]]
+apk="$PWD/out/release/inFAMOUS-Second-Son-Daedalus-v${version}.apk"
 "$bt/apksigner" sign --ks "$key" --ks-key-alias iss-bionic-dev \
   --ks-pass pass:android --key-pass pass:android --out "$apk" "$work/aligned.apk"
 "$bt/apksigner" verify --verbose "$apk"
@@ -44,5 +50,10 @@ apk="$PWD/out/release/inFAMOUS-Second-Son-Daedalus-Bionic-Experimental.apk"
 for member in assets/runtime.tar.gz assets/runtime.sha256 lib/arm64-v8a/libisspresent.so classes.dex; do
   unzip -Z1 "$apk" | grep -qx "$member"
 done
-sha256sum "$apk" > "$apk.sha256"
-echo "Installable Bionic experimental APK built and signature verified: $apk"
+if [[ ${ISS_RELEASE_BUILD:-1} = 1 ]]; then
+  python3 tools/android/bionic/prepare_release.py --apk "$apk" \
+    --aapt "$bt/aapt" --apksigner "$bt/apksigner"
+else
+  (cd -- "$(dirname "$apk")" && sha256sum "$(basename "$apk")") > "$apk.sha256"
+fi
+echo "Installable inFAMOUS Daedalus v${version} APK built and signature verified: $apk"

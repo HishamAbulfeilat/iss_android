@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.concurrent.*;
 import java.util.regex.*;
 
-/** Only the experimental Bionic APK uses this activity.
+/** Only the Bionic APK uses this activity.
  * No Xvfb, FEXDroid bridge, rootfs or Linux/glibc Vulkan loader.
  * Keeps the existing gamepad overlay, virtual graffiti and fullscreen modes.
  */
@@ -51,7 +51,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("ISS Android Bionic experimental — no glibc or Xvfb\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.1 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));

@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Experimental inFAMOUS Second Son on Android Bionic. No Debian/Xvfb/glibc.
+# inFAMOUS Second Son — Daedalus Fork 0.1 on Android Bionic. No Debian/Xvfb/glibc.
 set -eu
 files=${FXD_FILES:?ISS Bionic requires a private data directory}
 base="$files/issport"

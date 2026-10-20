@@ -7,6 +7,7 @@ import subprocess
 import shutil
 import tarfile
 import tempfile
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "out/bionic"
@@ -14,6 +15,9 @@ OUT = ROOT / "out/release"
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
+    manifest = ET.parse(ROOT / "android/app/BionicAndroidManifest.xml").getroot()
+    version = manifest.get("{http://schemas.android.com/apk/res/android}versionName")
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     with tempfile.TemporaryDirectory(prefix="iss-bionic-stage-") as temp:
         stage = Path(temp)
         base = stage / "issport"
@@ -60,6 +64,7 @@ def main():
         (stage / "runtime-manifest.json").write_text(
             json.dumps({"schema": 1, "runtime_backend": "android-bionic",
                         "application_id": "com.daedalus.iss.bionic",
+                        "version": version, "source_commit": commit,
                         "game": "inFAMOUS Second Son",
                         "drivers": {"gen8": json.loads((ROOT / "tools/android/bionic/driver.json").read_text()),
                                     "gen7": json.loads((ROOT / "tools/android/bionic/driver-gen7.json").read_text())}},

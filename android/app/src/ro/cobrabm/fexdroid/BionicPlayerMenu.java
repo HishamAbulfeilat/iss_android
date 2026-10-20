@@ -23,7 +23,7 @@ final class BionicPlayerMenu {
   scrim=new View(a);scrim.setBackgroundColor(0x88000000);scrim.setVisibility(View.GONE);scrim.setOnClickListener(v->close());root.addView(scrim,new FrameLayout.LayoutParams(-1,-1));
   panel=new LinearLayout(a);panel.setOrientation(1);panel.setElevation(dp(16));panel.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xff291116,0xff12090c}));panel.setVisibility(View.GONE);
   ScrollView scroll=new ScrollView(a);items=new LinearLayout(a);items.setOrientation(1);items.setPadding(dp(20),dp(22),dp(18),dp(18));scroll.addView(items);panel.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-  TextView footer=text("inFAMOUS SECOND SON\nDaedalus · Android Bionic",12,0xff8e939c);footer.setPadding(dp(22),dp(10),dp(16),dp(18));panel.addView(footer);
+  TextView footer=text("inFAMOUS SECOND SON\nDaedalus 0.1 · Android Bionic",12,0xff8e939c);footer.setPadding(dp(22),dp(10),dp(16),dp(18));panel.addView(footer);
   root.addView(panel,new FrameLayout.LayoutParams(Math.min(dp(340),Math.round(a.getResources().getDisplayMetrics().widthPixels*0.87f)),-1,Gravity.LEFT));
   apply();
  }
