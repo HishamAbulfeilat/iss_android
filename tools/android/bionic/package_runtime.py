@@ -61,7 +61,8 @@ def main():
             json.dumps({"schema": 1, "runtime_backend": "android-bionic",
                         "application_id": "com.daedalus.iss.bionic",
                         "game": "inFAMOUS Second Son",
-                        "driver": json.loads((ROOT / "tools/android/bionic/driver.json").read_text())},
+                        "drivers": {"gen8": json.loads((ROOT / "tools/android/bionic/driver.json").read_text()),
+                                    "gen7": json.loads((ROOT / "tools/android/bionic/driver-gen7.json").read_text())}},
                        indent=2) + "\n")
         archive = OUT / "iss-bionic-runtime.tar.gz"
         with tarfile.open(archive, "w:gz", compresslevel=6) as tar:

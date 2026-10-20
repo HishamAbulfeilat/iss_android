@@ -78,7 +78,7 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
         "swapchain cannot synchronize with the app");
     if (IssPresent::Client::Configured()) {
         if (!client.Connect(window.GetWidth(), window.GetHeight(), AhbFormat, image_count,
-                            TlgSettings::Get().vsync.load() || lsfg_multiplier >= 2)) {
+                            TlgSettings::Get().vsync.load())) {
             std::printf("Present: no connection to the app: frames are rendered but not shown\n");
         }
     } else {
@@ -87,8 +87,10 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
     Create(window.GetWidth(), window.GetHeight());
 }
 
+// Bloodframe must not force FIFO: on a 60 Hz compositor that backpressures
+// real frames to 30 FPS at 2x or 15 FPS at 4x, even with VSync disabled.
 void Swapchain::UpdateVsync() {
-    const bool fifo = TlgSettings::Get().vsync.load() || framegen_multiplier >= 2;
+    const bool fifo = TlgSettings::Get().vsync.load();
     if (client.Connected()) client.SetFifo(fifo);
 }
 
@@ -266,7 +268,7 @@ void Swapchain::CreateBuffer(u32 index) {
 void Swapchain::SetFrameGeneration(u32 lsfg_multiplier) {
     framegen_multiplier = lsfg_multiplier;
     if (client.Connected() &&
-        !client.SetFifo(TlgSettings::Get().vsync.load() || lsfg_multiplier >= 2)) {
+        !client.SetFifo(TlgSettings::Get().vsync.load())) {
         PeerGone();
     }
     const u32 count = BufferCount(lsfg_multiplier);

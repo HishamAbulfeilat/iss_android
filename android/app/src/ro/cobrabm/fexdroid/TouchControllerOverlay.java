@@ -54,7 +54,7 @@ final class TouchControllerOverlay extends View {
             centers.put(name,new PointF(preferences.getFloat("overlay_x_"+name,DEFAULT[i][0]),
                                         preferences.getFloat("overlay_y_"+name,DEFAULT[i][1])));
         }
-        setContentDescription("Controle PlayStation na tela");
+        setContentDescription(AppLanguage.text("On-screen PlayStation controller", "Controle PlayStation na tela"));
     }
     private PointF center(String name) { return centers.get(name); }
     // The 1280x720 layout drawn at one scale in the centred 16:9 area, as the game (MainActivity):
@@ -269,7 +269,7 @@ final class TouchControllerOverlay extends View {
             c.drawRoundRect(548,9,732,62,13,13,paint);
             paint.setStyle(Paint.Style.FILL); paint.setTextSize(20);
             paint.setTextAlign(Paint.Align.CENTER);
-            c.drawText("CONCLUIR",640,36-(paint.ascent()+paint.descent())/2,paint);
+            c.drawText(AppLanguage.text("DONE", "CONCLUIR"),640,36-(paint.ascent()+paint.descent())/2,paint);
         }
         c.restore();
     }

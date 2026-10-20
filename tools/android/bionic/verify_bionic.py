@@ -18,6 +18,7 @@ def main():
         args.root / "lib/libisscpu.so", args.root / "lib/libtlggpu.so",
         args.root / "lib/libisspresent.so", args.root / "lib/libc++_shared.so",
         args.root / "drivers/gen8/libvulkan_freedreno.so",
+        args.root / "drivers/gen7/libvulkan_freedreno.so",
     ]
     if args.complete:
         required += [

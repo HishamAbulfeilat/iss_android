@@ -985,7 +985,7 @@ void Presenter::ApplyLsfgState(const IssLsfgState::State& next) {
     if (next.On()) {
         lsfg = Lsfg::Create(instance, next);
     }
-    // 交换链跟随实际运行的东西：倍率决定缓冲数，帧生成要求 FIFO——仅在开启时。
+    // Frame generation controls buffer count; FIFO follows the user VSync setting.
     ApplyLsfgOutputMode();
     if (lsfg) {
         LOG_INFO(Render_Vulkan, "LSFG: now x{}, flow {:.2f}, performance {}, fp16 {}",

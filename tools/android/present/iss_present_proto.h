@@ -15,7 +15,7 @@
  *                          socket; a version it does not speak is a close, logged on both sides.
  *   game -> app  MODE      flags (ISS_PRESENT_FLAG_*): the presentation mode from now on, see below.
  *                          Sent when the game's effective mode changes while it runs (Lossless
- *                          Scaling frame generation turned on or off needs FIFO); no answer.
+ *                          Scaling frame generation changes the buffer count); no answer.
  *   game -> app  BUFFER    generation, index, width, height, format. Followed IMMEDIATELY by the
  *                          buffer itself, one more datagram written by
  *                          AHardwareBuffer_sendHandleToUnixSocket (the receiver reads it with

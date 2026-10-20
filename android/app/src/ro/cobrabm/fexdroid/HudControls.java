@@ -27,17 +27,17 @@ final class HudControls {
         heading.setPadding(0, (int)(12 * density), 0, (int)(6 * density));
         parent.addView(heading);
         enabled = new Switch(activity);
-        enabled.setText("Mostrar HUD");
+        enabled.setText(AppLanguage.text("Show HUD", "Mostrar HUD"));
         enabled.setChecked(cfg.enabled);
         parent.addView(enabled);
 
         TextView alignText = new TextView(activity);
-        alignText.setText("Posição horizontal");
+        alignText.setText(AppLanguage.text("Horizontal position", "Posição horizontal"));
         parent.addView(alignText);
         alignment = new RadioGroup(activity);
         alignment.setOrientation(RadioGroup.HORIZONTAL);
         final int[] anchors = {0, 4, 1};
-        final String[] choices = {"Esquerda", "Centro", "Direita"};
+        final String[] choices = {AppLanguage.text("Left", "Esquerda"), AppLanguage.text("Center", "Centro"), AppLanguage.text("Right", "Direita")};
         for (int i = 0; i < choices.length; i++) {
             RadioButton button = new RadioButton(activity);
             button.setId(View.generateViewId());
@@ -49,11 +49,11 @@ final class HudControls {
         parent.addView(alignment);
 
         TextView positionY = new TextView(activity);
-        positionY.setText("Posição vertical");
+        positionY.setText(AppLanguage.text("Vertical position", "Posição vertical"));
         parent.addView(positionY);
         vertical = new RadioGroup(activity);
         vertical.setOrientation(RadioGroup.HORIZONTAL);
-        String[] verticalLabels = {"Topo", "Centro", "Embaixo"};
+        String[] verticalLabels = {AppLanguage.text("Top", "Topo"), AppLanguage.text("Center", "Centro"), AppLanguage.text("Bottom", "Embaixo")};
         for (int i=0; i<verticalLabels.length; i++) {
             RadioButton button = new RadioButton(activity);
             button.setId(View.generateViewId());
@@ -107,12 +107,12 @@ final class HudControls {
         new AlertDialog.Builder(activity)
             .setTitle("Performance HUD")
             .setView(scroll)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Aplicar", (dialog, which) -> {
+            .setNegativeButton(AppLanguage.text("Cancel", "Cancelar"), null)
+            .setPositiveButton(AppLanguage.text("Apply", "Aplicar"), (dialog, which) -> {
                 if (HudConfig.update(ini, controls.values())) {
                     if (updated != null) updated.run();
                 } else {
-                    new AlertDialog.Builder(activity).setMessage("Cannot save performance HUD settings.")
+                    new AlertDialog.Builder(activity).setMessage(AppLanguage.text("Cannot save performance HUD settings.","Não foi possível salvar as configurações do HUD."))
                         .setPositiveButton("OK", null).show();
                 }
             }).show();

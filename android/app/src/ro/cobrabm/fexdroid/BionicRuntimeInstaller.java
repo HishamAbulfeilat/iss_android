@@ -20,6 +20,7 @@ final class BionicRuntimeInstaller {
    "issport/arm64/lib/libisscpu.so","issport/arm64/lib/libtlggpu.so",
    "issport/arm64/lib/libc++_shared.so","issport/arm64/lib/libbloodframe.so","issport/arm64/python/bin/python3.13",
    "issport/arm64/drivers/gen8/libvulkan_freedreno.so",
+   "issport/arm64/drivers/gen7/libvulkan_freedreno.so",
    "issport/run-bionic.sh","issport/launch.py",
    "issport/scripts/prepare.py","issport/scripts/link_modules.py",
    "issport/scripts/patches.py","issport/scripts/iss_mask_patches.py",

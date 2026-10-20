@@ -252,7 +252,8 @@ bool Lsfg::Initialize() {
     // Scope this to the same Turnip Gen8 driver that crashed in the device log.
     // Other 830 drivers retain fast sync-fd presentation by default.
     const bool turnip_gen8_workaround = gpu_name.find("Adreno (TM) 830") != std::string::npos &&
-                                        driver_path.find("/gen8") != std::string::npos &&
+                                        (driver_path.find("/gen8") != std::string::npos ||
+                                         driver_path.find("/custom-drivers/") != std::string::npos) &&
                                         sync_mode.empty();
     sync_host = sync_mode == "host" || turnip_gen8_workaround;
     if (turnip_gen8_workaround) {

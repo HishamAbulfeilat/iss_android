@@ -83,11 +83,13 @@ jobs:
         run: |
           bash tools/android/bionic/build_bloodframe.sh
           bash tools/android/bionic/build_pkg.sh
-      - name: Stage pinned StevenMXZ Turnip Gen8 V37 Patched
+      - name: Stage pinned Turnip Gen8 V38 Patched and v27 R1
         shell: bash -el {0}
         run: |
           python3 tools/android/bionic/stage_driver.py --output out/bionic/drivers/gen8
           test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
+          python3 tools/android/bionic/stage_driver.py --manifest tools/android/bionic/driver-gen7.json --output out/bionic/drivers/gen7
+          test -s out/bionic/drivers/gen7/libvulkan_freedreno.so
       - name: Restore reusable Android Bionic dependency prefix
         id: bionic-deps-cache
         uses: actions/cache/restore@v4
@@ -147,6 +149,7 @@ jobs:
             out/bionic/lib/libisscpu.so
             out/bionic/lib/libtlggpu.so
             out/bionic/drivers/gen8/PINNED-DRIVER.json
+            out/bionic/drivers/gen7/PINNED-DRIVER.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:

@@ -37,13 +37,19 @@ mkdir -p "$TMPDIR" "$HOME/.fex-emu" "$HOME/.cache/fex-emu" "$base/user" "$base/o
 [ -x "$python" ] || { echo "Bionic Python executable missing" >&2; exit 127; }
 [ -x "$probe" ] || { echo "Bionic inFAMOUS probe missing" >&2; exit 127; }
 chip=$("$runtime/bin/kgsl-chip-id" 2>/dev/null || true)
-# Redmagic / Adreno Gen8 builds explicitly prefer the pinned V37 Patched HAL.
-# A user can select the stock loader or enable KGSL-based detection in the UI.
-case "${ISS_BIONIC_DRIVER:-gen8}" in
+# Family-aware defaults: Gen8 on 8xx; v27 R1 on 6xx/7xx; system elsewhere.
+case "${ISS_BIONIC_DRIVER:-auto}" in
  gen8) export ISS_VULKAN_DRIVER="$runtime/drivers/gen8/libvulkan_freedreno.so" ;;
+ gen7) export ISS_VULKAN_DRIVER="$runtime/drivers/gen7/libvulkan_freedreno.so" ;;
+ custom)
+  case "${ISS_CUSTOM_DRIVER:-}" in
+   "$base"/custom-drivers/*/libvulkan_freedreno.so) export ISS_VULKAN_DRIVER="$ISS_CUSTOM_DRIVER" ;;
+   *) echo "Invalid imported driver path" >&2; exit 4 ;;
+  esac ;;
  system) unset ISS_VULKAN_DRIVER ;;
  auto) case "$chip" in
    0x44??????) export ISS_VULKAN_DRIVER="$runtime/drivers/gen8/libvulkan_freedreno.so" ;;
+   0x43??????|0x06??????) export ISS_VULKAN_DRIVER="$runtime/drivers/gen7/libvulkan_freedreno.so" ;;
    *) unset ISS_VULKAN_DRIVER ;;
   esac ;;
  *) echo "Invalid Bionic Vulkan driver selection" >&2; exit 4 ;;

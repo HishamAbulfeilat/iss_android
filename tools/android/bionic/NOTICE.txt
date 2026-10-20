@@ -22,21 +22,17 @@ https://github.com/videobitva/orbis/tree/13f1294a87a53d54f82feec56acbfd03f50667a
 MIT OR Apache-2.0; see orbis-LICENSE-MIT and orbis-LICENSE-APACHE.
 Cargo.lock at that revision identifies the Rust dependencies and versions.
 
-Turnip Gen8 V37 patched: Mesa, StevenMXZ and upstream contributors.
-https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v37
-Source/build recipe: https://github.com/StevenMXZ/Adreno-Tools-Drivers/tree/v37
+Turnip Gen8 V38 Patched and Turnip v27.0.0-R1: Mesa, StevenMXZ and upstream contributors.
+https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v27.0.0-R1
+Gen8 source: https://github.com/whitebelyash/mesa-unified/tree/turnip/gen8
 Additional patches: https://github.com/WinNative-Emu/Drivers/tree/main/patches
+https://github.com/Vauzi-17/710/tree/experiment/patches
 Build repository license: see driver/StevenMXZ-LICENSE-GPL-3.txt.
-Exact archive and library hashes are recorded in arm64/drivers/gen8/PINNED-DRIVER.json.
+Exact archive/library hashes: arm64/drivers/{gen8,gen7}/PINNED-DRIVER.json.
 This Bionic package does not include the glibc Turnip build or the Linux lsfg-vk layer
 mentioned in the shared legacy THIRD_PARTY_LICENSES.txt.
 
 No Sony game files, firmware, PKG, update, save or Lossless.dll are included.
-
-Adreno 7xx automatic driver: Turnip v26.3.0-R6 by StevenMXZ.
-Source: https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v37
-Exact archive/library hashes: arm64/drivers/adreno7xx/PINNED-DRIVER.json.
-Adreno 8xx keeps the existing V37 patched driver; other GPU defaults are unchanged.
 
 Bloodframe frame generation: ducvd89/bloodframe@c29027555cfa8c9fc73c20f03816230becb9f469 (MIT),
 based on GameNative lsfg-vk Android and PancakeTAS lsfg-vk. Source: https://github.com/ducvd89/bloodframe

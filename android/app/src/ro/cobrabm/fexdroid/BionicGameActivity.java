@@ -17,6 +17,8 @@ import java.util.regex.*;
  * Keeps the existing gamepad overlay, virtual graffiti and fullscreen modes.
  */
 public final class BionicGameActivity extends Activity implements SurfaceHolder.Callback {
+ @Override protected void attachBaseContext(android.content.Context base){super.attachBaseContext(AppLanguage.attach(base));}
+
  private FrameLayout frame;
  private SurfaceView surface;
  private TextView status;
@@ -57,7 +59,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   surface=new SurfaceView(this);frame.addView(surface);
   updateDisplayRate();
   controller=new TouchControllerOverlay(this,pad,false);frame.addView(controller);
-  status=new TextView(this);status.setText("Starting inFAMOUS Bionic…");
+  status=new TextView(this);status.setText(AppLanguage.text("Starting inFAMOUS Bionic…","Iniciando inFAMOUS Bionic…"));
   status.setGravity(Gravity.CENTER);status.setTextColor(0xffe0c891);status.setTextSize(18);
 
   frame.addView(status);
@@ -90,7 +92,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   Map<String,String> e=p.environment();e.put("FXD_FILES",files);
   e.put("ISS_GAME_DIR",getIntent().getStringExtra("game_dir"));
   e.put("ISS_BIONIC","1");e.put("ISS_ANDROID_INPUT","1");
-  e.put("ISS_BIONIC_DRIVER",getSharedPreferences("iss",0).getString("bionic_driver","gen8"));
+  e.put("ISS_BIONIC_DRIVER",BionicDriverSettings.selection(this));
+  e.put("ISS_CUSTOM_DRIVER",BionicDriverSettings.customLibrary(this).getPath());
   String outputResolution=getSharedPreferences("iss",0).getString("output_res","1920x1080");
   boolean output1080p="1920x1080".equals(outputResolution);
   e.put("ISS_SCREEN_W",output1080p?"1920":"1280");
@@ -121,7 +124,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    record(result);
    updateDisplayRate();
    if(!result.startsWith("bridge running:")){error(result);return;}
-   audio.start();if(!audio.awaitReady(5000)){error("Audio FIFO did not start");return;}
+   audio.start();if(!audio.awaitReady(5000)){error(AppLanguage.text("Audio FIFO did not start","O áudio FIFO não iniciou"));return;}
    worker.execute(()->{
     try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
      BionicSaveArchive.recover(new File(base,"user/savedata"));
@@ -135,7 +138,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
       byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
      }
      int exit=game.waitFor();record("Bionic game exited "+exit);
-     if(!destroyed&&!restarting)error("Game stopped ("+exit+"). Export log.");
+     if(!destroyed&&!restarting)error(AppLanguage.text("Game stopped (","O jogo parou (")+exit+AppLanguage.text("). Export log.","). Exporte o log."));
      }finally{
       // Hold the save lock until the native writer has actually exited, even on Activity teardown.
       if(game.isAlive())game.destroyForcibly();
@@ -155,11 +158,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   final File marker=new File(base,"android-pad.state.guide");
   if(!marker.isFile())return;
   graffitiGuideDialog=new android.app.AlertDialog.Builder(this)
-   .setTitle("Grafite sem giroscópio")
-   .setMessage("L3 + R3: ativar ou desativar o modo sensor e segurar a lata de lado.\n\n"
-      +"✕ (X): sacudir a lata.\n\n"
-      +"R2: pintar. Mire com o analógico esquerdo; movimentos pequenos dão mais precisão.\n\n"
-      +"L3 + R3 novamente: voltar a andar.")
+   .setTitle(AppLanguage.text("Graffiti without a gyroscope", "Grafite sem giroscópio"))
+   .setMessage(AppLanguage.text("L3 + R3: toggle sensor mode and hold the can sideways.\n\n", "L3 + R3: ativar ou desativar o modo sensor e segurar a lata de lado.\n\n")
+      +AppLanguage.text("✕ (X): shake the can.\n\n", "✕ (X): sacudir a lata.\n\n")
+      +AppLanguage.text("R2: spray. Aim with the left stick; small movements improve precision.\n\n", "R2: pintar. Mire com o analógico esquerdo; movimentos pequenos dão mais precisão.\n\n")
+      +AppLanguage.text("L3 + R3 again: return to walking.", "L3 + R3 novamente: voltar a andar."))
    .setPositiveButton("Entendi",(dialog,which)->{})
    .create();
   graffitiGuideDialog.setOnDismissListener(dialog->{
@@ -183,11 +186,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int ht){}
  @Override public void surfaceDestroyed(SurfaceHolder h){}
  private void restartGame(){
-  if(restarting||destroyed)return;restarting=true;status.setText("Reiniciando inFAMOUS…");status.setVisibility(View.VISIBLE);
+  if(restarting||destroyed)return;restarting=true;status.setText(AppLanguage.text("Restarting inFAMOUS…", "Reiniciando inFAMOUS…"));status.setVisibility(View.VISIBLE);
   synchronized(this){if(game!=null)game.destroyForcibly();}
   worker.execute(()->main.post(()->{if(!destroyed)recreate();}));
  }
- @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==FramegenSettings.IMPORT_DLL&&result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);}
+ @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(BionicDriverSettings.result(this,request,result,data))return;if(request==FramegenSettings.IMPORT_DLL&&result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);}
  @Override public void onBackPressed(){if(menu!=null)menu.toggle();}
  @Override public boolean dispatchKeyEvent(KeyEvent e){
   int code=e.getKeyCode();

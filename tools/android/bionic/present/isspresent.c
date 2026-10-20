@@ -7,8 +7,7 @@
  * them frames are dropped (released at once) and start() says so. All state is behind one mutex.
  * The receive thread owns the socket; the display callbacks (any thread) answer RELEASE.
  *
- * Two presentation modes, chosen by the game in HELLO (ISS_PRESENT_FLAG_FIFO; bbport.ini vsync, or Lossless
- * Scaling frame generation) and changed by its MODE message while it runs (set_fifo):
+ * Two presentation modes, chosen by the game in HELLO (ISS_PRESENT_FLAG_FIFO; user-selected VSync) and changed by its MODE message while it runs (set_fifo):
  *
  *  - Newest wins ("VSync off", the default): present_frame() applies a transaction per FRAME at once.
  *    SurfaceFlinger latches at most one buffer per refresh, so frames that arrive within one refresh

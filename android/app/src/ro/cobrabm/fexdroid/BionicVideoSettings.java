@@ -5,21 +5,10 @@ final class BionicVideoSettings {
   LinearLayout l=new LinearLayout(activity);l.setOrientation(1);l.setPadding(28,20,28,20);
   android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
   if(page!=2){
-  TextView driverLabel=new TextView(activity);driverLabel.setText("Driver Vulkan:");l.addView(driverLabel);
-  Spinner driver=new Spinner(activity);
-  String[] drivers={"Turnip Gen8 V37 Patched (padrão)", "Driver Vulkan do sistema", "Automático (detectar KGSL)"};
-  driver.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,drivers));
-  String selectedDriver=prefs.getString("bionic_driver","gen8");
-  driver.setSelection("system".equals(selectedDriver)?1:"auto".equals(selectedDriver)?2:0);
-  driver.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
-   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
-    prefs.edit().putString("bionic_driver",pos==1?"system":pos==2?"auto":"gen8").apply();
-   }
-   public void onNothingSelected(android.widget.AdapterView<?> parent){}
-  });l.addView(driver);
-  TextView displayLabel=new TextView(activity);displayLabel.setText("Exibição:");l.addView(displayLabel);
+  BionicDriverSettings.add(activity,l);
+  TextView displayLabel=new TextView(activity);displayLabel.setText(AppLanguage.text("Display:", "Exibição:"));l.addView(displayLabel);
   Spinner display=new Spinner(activity);
-  String[] displayValues={"16:9 sem cortes (barras laterais)","Fullscreen sem cortes (esticar)","Fullscreen proporcional (cortar bordas)"};
+  String[] displayValues={AppLanguage.text("16:9 without cropping (side bars)", "16:9 sem cortes (barras laterais)"),AppLanguage.text("Fullscreen without cropping (stretch)", "Fullscreen sem cortes (esticar)"),AppLanguage.text("Fullscreen with aspect ratio (crop edges)", "Fullscreen proporcional (cortar bordas)")};
   display.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,displayValues));
   String currentMode=prefs.getString("display_mode","fill");
   display.setSelection("fit".equals(currentMode)?0:"crop".equals(currentMode)?2:1);
@@ -29,7 +18,7 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(display);
-  TextView resolutionLabel=new TextView(activity);resolutionLabel.setText("Resolução de saída (não altera o patch interno do jogo):");l.addView(resolutionLabel);
+  TextView resolutionLabel=new TextView(activity);resolutionLabel.setText(AppLanguage.text("Output resolution (does not change the internal game patch):", "Resolução de saída (não altera o patch interno do jogo):"));l.addView(resolutionLabel);
   Spinner output=new Spinner(activity);String[] outputValues={"1280 × 720 (720p)","1920 × 1080 (1080p)"};
   output.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,outputValues));
   output.setSelection("1280x720".equals(prefs.getString("output_res","1920x1080"))?0:1);
@@ -41,9 +30,9 @@ final class BionicVideoSettings {
   });l.addView(output);
   }
   if(page!=1){
-  TextView patchLabel=new TextView(activity);patchLabel.setText("Patches internos — CUSA00004 01.00");patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
+  TextView patchLabel=new TextView(activity);patchLabel.setText(AppLanguage.text("Internal patches — CUSA00004 01.00", "Patches internos — CUSA00004 01.00"));patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
   Spinner resolutionPatch=new Spinner(activity);
-  String[] modes={"Original (sem patch)","1280 × 720 interno (720p)","1600 × 900 interno (900p)"};
+  String[] modes={AppLanguage.text("Original (no patch)", "Original (sem patch)"),AppLanguage.text("1280 × 720 internal (720p)", "1280 × 720 interno (720p)"),AppLanguage.text("1600 × 900 internal (900p)", "1600 × 900 interno (900p)")};
   resolutionPatch.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,modes));
   String selected=prefs.getString("internal_res","native");
   resolutionPatch.setSelection("720p".equals(selected)?1:"900p".equals(selected)?2:0);
@@ -53,13 +42,13 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(resolutionPatch);
-  CheckBox blur=new CheckBox(activity);blur.setText("Desativar Motion Blur");
+  CheckBox blur=new CheckBox(activity);blur.setText(AppLanguage.text("Disable Motion Blur", "Desativar Motion Blur"));
   blur.setChecked(prefs.getBoolean("patch_motion_blur",false));
   blur.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_motion_blur",checked).apply());l.addView(blur);
-  CheckBox dof=new CheckBox(activity);dof.setText("Desativar Depth of Field");
+  CheckBox dof=new CheckBox(activity);dof.setText(AppLanguage.text("Disable Depth of Field", "Desativar Depth of Field"));
   dof.setChecked(prefs.getBoolean("patch_dof",false));
   dof.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_dof",checked).apply());l.addView(dof);
-  CheckBox depth=new CheckBox(activity);depth.setText("Desativar Depth Blur");
+  CheckBox depth=new CheckBox(activity);depth.setText(AppLanguage.text("Disable Depth Blur", "Desativar Depth Blur"));
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
 
@@ -67,5 +56,5 @@ final class BionicVideoSettings {
  }
  static void show(Activity a){showPage(a,0);}
  static void showVideo(Activity a){showPage(a,1);}
- private static void showPage(Activity a,int page){ScrollView scroll=new ScrollView(a);scroll.addView(content(a,page));new AlertDialog.Builder(a).setTitle("Vídeo — próximo início").setView(scroll).setPositiveButton("Concluir",null).show();}
+ private static void showPage(Activity a,int page){ScrollView scroll=new ScrollView(a);scroll.addView(content(a,page));new AlertDialog.Builder(a).setTitle(AppLanguage.text("Video — next game start", "Vídeo — próximo início")).setView(scroll).setPositiveButton(AppLanguage.text("Done", "Concluir"),null).show();}
 }
