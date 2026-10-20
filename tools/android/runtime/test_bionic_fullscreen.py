@@ -40,12 +40,12 @@ class FullscreenCase {
  }
  public static void main(String[] args){
   Prefs p=new Prefs();Game g=new Game(p);g.applyFullscreen();
-  assert g.screenMode.equals("fit") && g.window.flags==0 && g.window.view.flags==0;
+  assert g.screenMode.equals("fit") && g.window.flags==1024 && g.window.view.flags==5894;
   p.enabled=true;g.applyFullscreen();
   assert g.screenMode.equals("stretch") && g.window.flags==1024 && g.window.view.flags==5894;
   p.mode="crop";g.applyFullscreen();assert g.screenMode.equals("crop");
   p.enabled=false;g.applyFullscreen();
-  assert g.screenMode.equals("fit") && g.window.flags==0 && g.window.view.flags==0;
+  assert g.screenMode.equals("fit") && g.window.flags==1024 && g.window.view.flags==5894;
   assert p.mode.equals("crop"); // turning off must not discard the chosen fullscreen aspect
   Game restarted=new Game(p);restarted.applyFullscreen();assert restarted.screenMode.equals("fit");
   p.enabled=true;restarted.applyFullscreen();assert restarted.screenMode.equals("crop");

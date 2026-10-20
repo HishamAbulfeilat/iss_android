@@ -70,10 +70,10 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   record("Activity initialized");
  }
  private void applyFullscreen(){
-  boolean enabled=BionicVideoSettings.fullscreen(getSharedPreferences("iss",0));
-  if(enabled)getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-  else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-  getWindow().getDecorView().setSystemUiVisibility(enabled?5894:View.SYSTEM_UI_FLAG_VISIBLE);
+  // Fullscreen selects image fill, not the visibility of Android's system bars.
+  // Keep the whole landscape area available in fit (16:9), crop and stretch modes.
+  getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+  getWindow().getDecorView().setSystemUiVisibility(5894);
   screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
   if(frame!=null)frame.post(this::updateVideoSize);
  }

@@ -21,6 +21,9 @@ export TLG_READBACK_STATS="${TLG_READBACK_STATS:-$ISS_COMPARE_STATS}"
 export TLG_FAULT_PROFILE="${TLG_FAULT_PROFILE:-$ISS_COMPARE_STATS}"
 # Native Bionic deliberately has no optional temporal or spatial upscaling.
 export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 TLG_FSR1=0 TLG_RCAS=0
+# Lighting/post-processing and indirect draws must not disappear while their shaders compile.
+# Keep asynchronous compilation for ordinary geometry; BP07 waits for critical passes.
+export TLG_BP07=1
 export TLG_PAD_FILE="$base/android-pad.state"
 export TLG_CONFIG="$base/user/tlg.ini" ISS_CONFIG="$base/user/tlg.ini"
 export TLG_GPU_USER_DIR="$base/user"

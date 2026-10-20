@@ -9,6 +9,9 @@ Primeira versão pública do port Android com runtime Bionic, tradução de CPU 
 - Fullscreen apenas em Início → Vídeo, desligado por padrão. Desligado usa 16:9 automático e bloqueia os modos; ligado permite esticar ou cortar bordas.
 - Driver Vulkan apenas em Configurações. Resolução definida apenas em Patches, com saída correspondente: 720p, 900p ou 1080p original.
 
+- 16:9 usa toda a altura disponível do jogo, com barras laterais e sem barras de status/navegação do Android. Fullscreen controla apenas o preenchimento da imagem.
+- BP07 ativado no Bionic: passes críticos de tela inteira e desenhos indiretos aguardam seus shaders em vez de serem pulados pela compilação assíncrona. Mitigação para iluminação piscando; confirmação visual ainda depende do teste no aparelho.
+
 ## Recursos
 
 - Interface com tema de inFAMOUS e menu de configurações dentro do jogo.
@@ -34,7 +37,7 @@ A alteração upstream relacionada a partículas, névoa, água e fogo está inc
 
 Android 11 ou superior, ARM64 e GPU/driver Vulkan compatível. Snapdragon/Adreno é o alvo principal. Instale `inFAMOUS-Second-Son-Daedalus-v0.1.apk`, conceda acesso aos arquivos e selecione a pasta do jogo ou instale seu PKG local. A configuração de FPS define uma meta, sem garantir a taxa em todas as cenas.
 
-Esta versão mantém o pacote e o certificado das builds Bionic anteriores e usa código interno 9. Atualize mantendo os dados do app para preservar saves e configurações. A versão glibc é um aplicativo separado.
+Esta versão mantém o pacote e o certificado das builds Bionic anteriores e usa código interno 10. Atualize mantendo os dados do app para preservar saves e configurações. A versão glibc é um aplicativo separado.
 
 Nenhum jogo, firmware, chave ou Lossless.dll é distribuído. Para geração de quadros, importe a DLL da sua própria instalação do Lossless Scaling.
 
@@ -50,4 +53,4 @@ Initial public Android Bionic release of inFAMOUS Second Son — Daedalus Fork. 
 
 This release integrates the eight approved PC performance improvements, subgroup-size consistency and explicit wave64 ballot-load alignment. The upstream particle/fog/water/fire change is included; its visual effect still needs device confirmation. Shader caches refresh automatically after the update. Frame-rate settings are targets, not guaranteed performance.
 
-Requires Android 11+, ARM64 and a compatible Vulkan GPU/driver. Snapdragon/Adreno is the primary target. The APK retains the previous Bionic package and signing certificate, with version code 9. No game files, firmware, keys or Lossless.dll are included. Supply your own compatible game and, for frame generation, your own Lossless Scaling DLL.
+Requires Android 11+, ARM64 and a compatible Vulkan GPU/driver. Snapdragon/Adreno is the primary target. The APK retains the previous Bionic package and signing certificate, with version code 10. No game files, firmware, keys or Lossless.dll are included. Supply your own compatible game and, for frame generation, your own Lossless Scaling DLL.
