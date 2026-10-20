@@ -12,16 +12,16 @@ JAVA=shutil.which('java')
 class FullscreenTests(unittest.TestCase):
     def test_default_off_switching_and_relaunch(self):
         source=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicVideoSettings.java').read_text()
-        policy='\n'.join(method(source,s) for s in (' static boolean fullscreen(', ' static String gameDisplayMode('))
+        policy='\n'.join(method(source,s) for s in (' static boolean fullscreen(', ' static String gameDisplayMode(', ' static String outputResolution('))
         activity=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java').read_text()
         apply=method(activity,' private void applyFullscreen()')
         code=r'''
 import android.content.SharedPreferences;
 class FullscreenCase {
  static class Prefs implements SharedPreferences {
-  Boolean enabled=null;String mode="stretch";
+  Boolean enabled=null;String mode="stretch",resolution="native";
   public boolean getBoolean(String k,boolean fallback){assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
-  public String getString(String k,String fallback){assert k.equals("display_mode");return mode;}
+  public String getString(String k,String fallback){if(k.equals("internal_res"))return resolution;assert k.equals("display_mode");return mode;}
  }
  static class BionicVideoSettings {
 ''' + policy + r'''
@@ -50,8 +50,12 @@ class FullscreenCase {
   Game restarted=new Game(p);restarted.applyFullscreen();assert restarted.screenMode.equals("fit");
   p.enabled=true;restarted.applyFullscreen();assert restarted.screenMode.equals("crop");
   p.mode="fill";restarted.applyFullscreen();assert restarted.screenMode.equals("stretch");
-  p.mode="fit";restarted.applyFullscreen();assert restarted.screenMode.equals("fit");
+  p.mode="fit";restarted.applyFullscreen();assert restarted.screenMode.equals("stretch");
   assert g.updates==4;
+  assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+  p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
+  p.resolution="900p";assert BionicVideoSettings.outputResolution(p).equals("1600x900");
+  p.resolution="old-invalid";assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
  }
 }
 '''

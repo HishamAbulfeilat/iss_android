@@ -102,10 +102,9 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   e.put("ISS_BIONIC","1");e.put("ISS_ANDROID_INPUT","1");
   e.put("ISS_BIONIC_DRIVER",BionicDriverSettings.selection(this));
   e.put("ISS_CUSTOM_DRIVER",BionicDriverSettings.customLibrary(this).getPath());
-  String outputResolution=getSharedPreferences("iss",0).getString("output_res","1920x1080");
-  boolean output1080p="1920x1080".equals(outputResolution);
-  e.put("ISS_SCREEN_W",output1080p?"1920":"1280");
-  e.put("ISS_SCREEN_H",output1080p?"1080":"720");
+  String outputResolution=BionicVideoSettings.outputResolution(getSharedPreferences("iss",0));
+  String[] dimensions=outputResolution.split("x");
+  e.put("ISS_SCREEN_W",dimensions[0]);e.put("ISS_SCREEN_H",dimensions[1]);
   e.put("ISS_PRESENT_SOCKET",base+"/present.sock");
   e.put("TLG_PAD_FILE",base+"/android-pad.state");
   e.put("TLG_SHOW_FPS","0");
@@ -121,7 +120,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
   e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");
-  e.put("TLG_OUTPUT_RES",prefs.getString("output_res","1920x1080"));
+  e.put("TLG_OUTPUT_RES",outputResolution);
   return p.start();
  }
  @Override public void surfaceCreated(SurfaceHolder h){

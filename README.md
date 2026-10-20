@@ -25,7 +25,7 @@ English is the default language. Select Portuguese in **Settings → Language**.
 
 ## Features
 
-- Optional Fullscreen toggle on Home (off by default) and Android game classification.
+- Optional Fullscreen toggle only in Home → Video (off by default) and Android game classification.
 - Native PCM audio mixer feeding Android AudioTrack at fixed s16 stereo / 48 kHz.
 - inFAMOUS-themed launcher and in-game menu, opened from the left edge or Back/Guide.
 - 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
