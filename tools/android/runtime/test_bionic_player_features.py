@@ -66,6 +66,24 @@ int main(){
 }
 '''
         self.compile_run(source,['cc','-std=c11'])
+    def test_requested_source_fps_survives_guest_flip_divider(self):
+        source=r'''#include "iss_frame_pacing.h"
+#include <cassert>
+#include <algorithm>
+int main(){
+ for(int fps: {30,60,120,240})for(int divider: {0,1,2}){
+  int hz=IssFramePacing::VblankHz(fps,divider);
+  assert(hz>=60);
+  // Requests gated by the original game's flip divider must still reach the UI ceiling.
+  assert(std::min(fps,hz/(divider+1))==fps);
+ }
+ assert(IssFramePacing::VblankHz(120,0)==120);
+ assert(IssFramePacing::VblankHz(120,1)==240);
+ assert(IssFramePacing::VblankHz(240,1)==480);
+ assert(IssFramePacing::VblankHz(999,0)==60);
+}
+'''
+        self.compile_run(source,['c++','-std=c++17','-I'+str(ROOT/'port/gpu/shim')])
     def test_live_performance_state_rejects_partial_and_invalid_values(self):
         source=r'''
 #include "iss_performance_state.h"

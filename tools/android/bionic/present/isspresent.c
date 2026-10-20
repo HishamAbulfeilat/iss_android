@@ -90,12 +90,14 @@ static struct {
     int (*prev_release_fence)(ASurfaceTransactionStats*, ASurfaceControl*);
     void (*get_controls)(ASurfaceTransactionStats*, ASurfaceControl***, size_t*);
     void (*release_controls)(ASurfaceControl**);
+    void (*set_frame_rate)(ASurfaceTransaction*, ASurfaceControl*, float, int8_t); /* API 30, optional */
     int ok;
 } api;
 
 static void load_api(void) {
     void* lib = dlopen("libandroid.so", RTLD_NOW);
     if (!lib) return;
+    *(void**)&api.set_frame_rate = dlsym(lib, "ASurfaceTransaction_setFrameRate");
     *(void**)&api.set_on_commit = dlsym(lib, "ASurfaceTransaction_setOnCommit"); /* optional */
 #define SYM(field, name) if (!(*(void**)&api.field = dlsym(lib, name))) return
     SYM(create_from_window, "ASurfaceControl_createFromWindow");
@@ -125,6 +127,7 @@ static struct {
     pthread_mutex_t lock;
     int started;
     int fullscreen;
+    float frame_rate;
     int server_fd;
     char path[108];
     pthread_t thread;
@@ -202,11 +205,19 @@ static void drop_surface_control(void) {
     }
 }
 
+static void apply_frame_rate(void) {
+    if(!api.ok || !api.set_frame_rate || !S.sc)return;
+    ASurfaceTransaction* t=api.txn_create();
+    api.set_frame_rate(t,S.sc,S.frame_rate,0); /* DEFAULT compatibility: game, not fixed-rate video */
+    api.txn_apply(t);api.txn_delete(t);
+    LOGI("display: child surface requests %.1f Hz",S.frame_rate);
+}
+
 static void make_surface_control(void) {
     if (!api.ok || !S.window || S.sc) return;
     S.sc = api.create_from_window(S.window, "isspresent");
     if (!S.sc) LOGE("ASurfaceControl_createFromWindow failed");
-    else LOGI("surface control created");
+    else { LOGI("surface control created"); apply_frame_rate(); }
 }
 
 typedef struct {
@@ -533,6 +544,14 @@ JNIEXPORT void JNICALL Java_ro_cobrabm_fexdroid_IssPresent_nativeSetFullscreen(
     pthread_mutex_unlock(&S.lock);
 }
 
+
+JNIEXPORT void JNICALL Java_ro_cobrabm_fexdroid_IssPresent_nativeSetFrameRate(JNIEnv* env,jclass cls,jfloat rate) {
+    (void)env;(void)cls;
+    if(!(rate>=0.f && rate<=1000.f))return;
+    pthread_mutex_lock(&S.lock);
+    if(S.frame_rate!=rate){S.frame_rate=rate;apply_frame_rate();}
+    pthread_mutex_unlock(&S.lock);
+}
 
 JNIEXPORT jstring JNICALL Java_ro_cobrabm_fexdroid_IssPresent_nativeStart(JNIEnv* env, jclass cls,
         jstring jpath) {

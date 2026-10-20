@@ -33,6 +33,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private boolean destroyed,started,failed;
  private String files,base,screenMode;
  private long lastFrames=-1;
+ private float lastObservedRefresh=-1;
  private synchronized void record(String line){
   try(FileOutputStream f=new FileOutputStream(new File(files,"iss.log"),true)){
    f.write(("[Bionic] "+line+"\n").getBytes(StandardCharsets.UTF_8));
@@ -54,6 +55,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   audio=new AudioBridge(new File(base,"audio.fifo"));
   frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
   surface=new SurfaceView(this);frame.addView(surface);
+  updateDisplayRate();
   controller=new TouchControllerOverlay(this,pad,false);frame.addView(controller);
   status=new TextView(this);status.setText("Starting inFAMOUS Bionic…");
   status.setGravity(Gravity.CENTER);status.setTextColor(0xffe0c891);status.setTextSize(18);
@@ -65,6 +67,12 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   frame.post(this::updateVideoSize);
   surface.getHolder().addCallback(this);
   record("Activity initialized");
+ }
+ void updateDisplayRate(){
+  float hz=BionicDisplayRate.apply(this);
+  IssPresent.frameRate(hz);
+  record("Display: requested "+hz+" Hz; source limit="+BionicPerformanceSettings.limit(getSharedPreferences("iss",0)));
+  if(surface!=null&&surface.getHolder().getSurface().isValid())try{surface.getHolder().getSurface().setFrameRate(hz,Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);}catch(Exception e){record("Display frame-rate hint: "+e.getMessage());}
  }
  private void updateVideoSize(){
   if(frame==null||surface==null)return;
@@ -111,6 +119,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{
    String result=IssPresent.start(h,base+"/present.sock","stretch".equals(screenMode));
    record(result);
+   updateDisplayRate();
    if(!result.startsWith("bridge running:")){error(result);return;}
    audio.start();if(!audio.awaitReady(5000)){error("Audio FIFO did not start");return;}
    worker.execute(()->{
@@ -162,6 +171,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  }
  private void poll(){
   if(destroyed)return;
+  float refresh=getWindowManager().getDefaultDisplay().getRefreshRate();
+  if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
   showGraffitiGuideIfRequested();
   long n=IssPresent.frames();
   if(!failed&&n>0)status.setVisibility(View.GONE);

@@ -16,6 +16,8 @@ public final class IssPresent {
     private static native void nativeSetSurface(Surface surface);
     private static native long nativeFrames();
     private static native void nativeSetFullscreen(boolean enabled);
+    private static native void nativeSetFrameRate(float rate);
+    public static void frameRate(float rate) { nativeSetFrameRate(rate); }
     private static native void nativeShutdown();
 
     private static SurfaceHolder.Callback callback;

@@ -15,6 +15,11 @@ public final class BionicMainActivity extends Activity {
  private static final int IMPORT_SAVE=10, EXPORT_SAVE=11;
  private BionicPkgInstaller pkg;
  private ProgressBar progress;
+ private Dialog setupDialog;
+ private static final int SETUP=1, FOLDER=2, PKG=3, UPDATE_PKG=4;
+ private int pendingSetup;
+ private boolean requestingAccess, waitingForSettings;
+
  private LinearLayout pages, navigation; private int selectedPage;
  @Override public void onCreate(Bundle saved){super.onCreate(saved);
   getWindow().setStatusBarColor(0xff150b0e);getWindow().setNavigationBarColor(0xff150b0e);
@@ -29,7 +34,8 @@ public final class BionicMainActivity extends Activity {
   navigation=new LinearLayout(this);navigation.setPadding(dp(4),dp(4),dp(4),dp(4));navigation.setBackground(background(0xff211015,0xff86362c));chrome.addView(navigation,new LinearLayout.LayoutParams(-1,-2));
   pkg=new BionicPkgInstaller(this,(active,message)->{setBusy(active);status.setText(message);});
   setContentView(root);showPage(saved==null?0:saved.getInt("page",0));refresh();
-  if(!access())requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);
+  if(saved!=null){pendingSetup=saved.getInt("pending_setup",0);requestingAccess=saved.getBoolean("requesting_access",false);waitingForSettings=saved.getBoolean("waiting_settings",false);}
+  if(!requestingAccess&&!waitingForSettings)pages.post(()->beginSetup(false));
  }
  private int dp(float value){return Math.round(value*getResources().getDisplayMetrics().density);}
  private android.graphics.drawable.GradientDrawable background(int fill,int border){android.graphics.drawable.GradientDrawable b=new android.graphics.drawable.GradientDrawable();b.setColor(fill);b.setCornerRadius(dp(22));b.setStroke(dp(1),border);return b;}
@@ -41,7 +47,7 @@ public final class BionicMainActivity extends Activity {
   for(int i=0;i<tabs.length;i++){final int index=i;Button b=new Button(this);b.setText(tabs[i]);b.setAllCaps(false);b.setTextSize(12);b.setTextColor(i==page?0xfffff1e9:0xffc7aba8);b.setBackground(background(i==page?0xffad2532:0x00211015,0x00000000));navigation.addView(b,new LinearLayout.LayoutParams(0,dp(62),1));b.setOnClickListener(v->{if(!busy)showPage(index);});}
   ScrollView sc=new ScrollView(this);sc.setFillViewport(true);LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(0,0,0,dp(18));sc.addView(content);pages.addView(sc,new LinearLayout.LayoutParams(-1,-1));
   if(page==0){
-   LinearLayout game=card(content,"JOGO");button(game,"▶  JOGAR",this::launch);button(game,"Selecionar pasta do jogo",this::choose);button(game,"Instalar jogo por PKG",()->pkg.pick(false));button(game,"Instalar atualização por PKG",()->pkg.pick(true));
+   LinearLayout game=card(content,"JOGO");button(game,"▶  JOGAR",this::launch);button(game,"Selecionar pasta do jogo",this::choose);button(game,"Instalar jogo por PKG",()->installPkg(false));button(game,"Instalar atualização por PKG",()->installPkg(true));
    LinearLayout video=card(content,"EXIBIÇÃO E DESEMPENHO");button(video,"FPS e VSync · "+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,"Vídeo e resolução",()->BionicVideoSettings.showVideo(this));
    button(video,"Geração de quadros — Bloodframe",()->FramegenSettings.show(this,null));
   }else if(page==1){LinearLayout patches=card(content,"PATCHES — inFAMOUS SECOND SON");patches.addView(BionicVideoSettings.content(this,2));
@@ -55,13 +61,46 @@ public final class BionicMainActivity extends Activity {
    LinearLayout help=card(content,"CONTROLES");help.addView(label("TOUCH: dois dedos para mover o carro.\nD-pad: deslize gradual; mantenha pressionado para continuar.\nGrafite: L3 + R3 ativa o sensor virtual; ✕ sacode a lata, R2 pinta e o analógico esquerdo mira.\n\nAbra o menu do jogo pela borda esquerda ou pelo botão Voltar.",16,0xffddc3be));
   }
  }
- @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);out.putInt("page",selectedPage);}
+ @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);out.putInt("page",selectedPage);out.putInt("pending_setup",pendingSetup);out.putBoolean("requesting_access",requestingAccess);out.putBoolean("waiting_settings",waitingForSettings);}
  private void section(LinearLayout l,String title){TextView t=label(title,15,0xffff642d);t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);t.setPadding(0,dp(8),0,dp(12));l.addView(t);}
  private void button(LinearLayout l,String text,Runnable action){Button b=new Button(this);b.setText(text);b.setTextSize(15);b.setAllCaps(false);b.setGravity(android.view.Gravity.CENTER_VERTICAL|android.view.Gravity.LEFT);b.setPadding(dp(14),dp(8),dp(14),dp(8));b.setTextColor(0xfffff1e9);b.setBackground(background(text.contains("JOGAR")?0xffb42635:0xff30171b,0xff79372c));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(8);b.setMinHeight(dp(54));l.addView(b,lp);b.setOnClickListener(v->{if(!busy&&(pkg==null||!pkg.busy()))action.run();});actions.add(b);}
  private boolean access(){return Build.VERSION.SDK_INT>=30&&Environment.isExternalStorageManager()||checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED;}
  private void refresh(){status.setText(getSharedPreferences("iss",0).getString("game_dir","Selecione a pasta do jogo extraído ou instale um PKG."));}
- private void choose(){if(!access()){requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);return;}startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),2);}
- private void launch(){if(busy)return;
+ private boolean gameReady(){String path=getSharedPreferences("iss",0).getString("game_dir","");return !path.isEmpty()&&new File(path,"eboot.bin").canRead()&&new File(path,"art").isDirectory()&&new File(path,"art").canRead();}
+ private void beginSetup(boolean force){
+  if(isFinishing()||isDestroyed()||busy||pkg.busy()||requestingAccess||waitingForSettings||setupDialog!=null&&setupDialog.isShowing())return;
+  if(!access()){requestAccess(SETUP);return;}
+  if(!force&&gameReady())return;
+  AlertDialog d=new AlertDialog.Builder(this).setTitle("Configurar inFAMOUS Second Son")
+   .setMessage("Como você quer adicionar o jogo? Instale um PKG diretamente na pasta escolhida ou selecione uma pasta de jogo já extraída.")
+   .setNegativeButton("Selecionar pasta",(dialog,which)->{setupDialog=null;choose();})
+   .setPositiveButton("Instalar PKG",(dialog,which)->{setupDialog=null;installPkg(false);})
+   .setNeutralButton("Agora não",(dialog,which)->{}).create();
+  setupDialog=d;d.setOnDismissListener(dialog->{if(setupDialog==d)setupDialog=null;});d.show();
+ }
+ private void requestAccess(int next){
+  if(requestingAccess||waitingForSettings)return;
+  pendingSetup=next;requestingAccess=true;
+  requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);
+ }
+ private void continueSetup(){int next=pendingSetup;pendingSetup=0;if(next==FOLDER)choose();else if(next==PKG)installPkg(false);else if(next==UPDATE_PKG)installPkg(true);else if(next==SETUP)beginSetup(false);}
+ private void installPkg(boolean update){if(!access()){requestAccess(update?UPDATE_PKG:PKG);return;}pkg.pick(update);}
+ private void choose(){
+  if(!access()){requestAccess(FOLDER);return;}
+  if(setupDialog!=null&&setupDialog.isShowing())return;
+  Dialog d=new Dialog(this);LinearLayout guide=new LinearLayout(this);guide.setOrientation(1);guide.setPadding(dp(24),dp(24),dp(24),dp(24));guide.setBackground(background(0xff211015,0xffa34432));
+  TextView tag=label("CONFIGURAÇÃO DO JOGO",13,0xffff642d);tag.setLetterSpacing(.12f);guide.addView(tag);
+  TextView title=label("Escolha a pasta do jogo",27,0xfffff1e9);title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);title.setPadding(0,dp(14),0,dp(18));guide.addView(title);
+  TextView description=label("Selecione a pasta extraída de inFAMOUS Second Son, por exemplo CUSA00004 ou CUSA00223. Ela deve conter eboot.bin e a pasta art/.",17,0xffddc3be);guide.addView(description);
+  Button pick=new Button(this);pick.setText("ESCOLHER PASTA DO JOGO");pick.setTextColor(0xfffff1e9);pick.setBackground(background(0xffb42635,0xffd05a3d));pick.setMinHeight(dp(58));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(26);guide.addView(pick,lp);
+  pick.setOnClickListener(v->{d.dismiss();openGameFolderPicker();});
+  ScrollView scroll=new ScrollView(this);scroll.addView(guide);d.setContentView(scroll);d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);setupDialog=d;d.setOnDismissListener(dialog->{if(setupDialog==d)setupDialog=null;});d.show();d.getWindow().setLayout(Math.round(getResources().getDisplayMetrics().widthPixels*.92f),android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+ }
+ private void openGameFolderPicker(){try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),2);}catch(Exception e){status.setText("Não foi possível abrir o seletor de pastas: "+e.getMessage());}}
+ @Override protected void onResume(){super.onResume();if(waitingForSettings){waitingForSettings=false;if(access())continueSetup();else{pendingSetup=0;status.setText("Acesso aos arquivos não concedido. Você pode tentar novamente ao selecionar o jogo.");}}}
+ @Override protected void onDestroy(){if(setupDialog!=null){setupDialog.dismiss();setupDialog=null;}super.onDestroy();}
+
+ private void launch(){if(busy)return;if(!access()||!gameReady()){beginSetup(true);return;}
   try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){}catch(IOException e){status.setText(e.getMessage());return;}
   String path=getSharedPreferences("iss",0).getString("game_dir","");if(!new File(path,"eboot.bin").canRead()||!new File(path,"art").isDirectory()||!new File(path,"art").canRead()){status.setText("Choose the inFAMOUS game folder containing eboot.bin and readable art/.");return;}
   setBusy(true);status.setText("Preparando runtime…");new Thread(()->{try{BionicRuntimeInstaller.install(this);runOnUiThread(()->{setBusy(false);refresh();startActivity(new Intent(this,BionicGameActivity.class).putExtra("game_dir",path));});}catch(Exception e){runOnUiThread(()->{setBusy(false);status.setText(e.toString());});}},"runtime-install").start();}
@@ -117,5 +156,15 @@ public final class BionicMainActivity extends Activity {
    getSharedPreferences("iss",0).edit().putString("game_dir",dir.getPath()).apply();refresh();
   }catch(Exception e){status.setText(e.toString());}}
  @Override public void onBackPressed(){if(busy){status.setText("Aguarde a operação terminar.");return;}super.onBackPressed();}
- @Override public void onRequestPermissionsResult(int req,String[] perms,int[] results){super.onRequestPermissionsResult(req,perms,results);if(req==1&&!access()&&Build.VERSION.SDK_INT>=30)new AlertDialog.Builder(this).setTitle("File access required").setMessage("Allow file access before selecting the game folder.").setPositiveButton("Open settings",(d,w)->startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:"+getPackageName())))).setNegativeButton("Cancel",null).show();}
+ @Override public void onRequestPermissionsResult(int req,String[] perms,int[] results){
+  super.onRequestPermissionsResult(req,perms,results);if(req!=1)return;requestingAccess=false;
+  if(access()){continueSetup();return;}
+  if(Build.VERSION.SDK_INT>=30){
+   new AlertDialog.Builder(this).setTitle("Acesso aos arquivos")
+    .setMessage("Permita o acesso aos arquivos para selecionar a pasta de inFAMOUS Second Son ou instalar um PKG. Na próxima tela, ative a permissão para este aplicativo.")
+    .setPositiveButton("Abrir configurações",(d,w)->{waitingForSettings=true;try{startActivity(new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,Uri.parse("package:"+getPackageName())));}catch(Exception e){waitingForSettings=false;pendingSetup=0;status.setText("Abra as permissões do aplicativo nas configurações do Android.");}})
+    .setNegativeButton("Agora não",(d,w)->{pendingSetup=0;status.setText("Permissão não concedida. Selecione o jogo para tentar novamente.");})
+    .setOnCancelListener(d->{pendingSetup=0;}).show();
+  }else{pendingSetup=0;status.setText("Permissão de arquivos necessária para selecionar o jogo.");}
+ }
 }
