@@ -19,8 +19,8 @@ class FullscreenTests(unittest.TestCase):
 import android.content.SharedPreferences;
 class FullscreenCase {
  static class Prefs implements SharedPreferences {
-  boolean enabled=false;String mode="stretch";
-  public boolean getBoolean(String k,boolean fallback){assert k.equals("fullscreen");return enabled;}
+  Boolean enabled=null;String mode="stretch";
+  public boolean getBoolean(String k,boolean fallback){assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
   public String getString(String k,String fallback){assert k.equals("display_mode");return mode;}
  }
  static class BionicVideoSettings {

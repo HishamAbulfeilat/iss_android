@@ -12,6 +12,16 @@ final class BionicVideoSettings {
   Switch toggle=new Switch(activity);toggle.setText(AppLanguage.text("Fullscreen","Tela cheia (Fullscreen)"));
   toggle.setChecked(fullscreen(prefs));toggle.setPadding(0,16,0,16);
   toggle.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("fullscreen",checked).apply());
+  android.content.SharedPreferences.OnSharedPreferenceChangeListener listener=(settings,key)->{
+   if("fullscreen".equals(key)&&toggle.isChecked()!=fullscreen(settings))toggle.setChecked(fullscreen(settings));
+  };
+  toggle.addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener(){
+   public void onViewAttachedToWindow(android.view.View view){
+    prefs.registerOnSharedPreferenceChangeListener(listener);
+    if(toggle.isChecked()!=fullscreen(prefs))toggle.setChecked(fullscreen(prefs));
+   }
+   public void onViewDetachedFromWindow(android.view.View view){prefs.unregisterOnSharedPreferenceChangeListener(listener);}
+  });
   parent.addView(toggle);
  }
  static LinearLayout content(Activity activity,int page){
