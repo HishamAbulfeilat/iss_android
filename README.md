@@ -1,8 +1,16 @@
-# inFAMOUS Second Son — Daedalus Fork 0.1
+# inFAMOUS Second Son — Daedalus Android Bionic v0.1
 
 Android ARM64 port of **inFAMOUS Second Son**, based on [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), with an Android **Bionic** runtime, FEX CPU translation and native Vulkan presentation through AHardwareBuffer.
 
-Fork and Android adaptations: **erickmendes22 / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
+Fork and Android adaptations: **[erickmendes22](https://github.com/erickmendes22) / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
+
+## Links
+
+- [Downloads and source](https://github.com/erickmendes22/iss_android)
+- [Releases](https://github.com/erickmendes22/iss_android/releases)
+- [Build 71 artifacts](https://github.com/erickmendes22/iss_android/actions/runs/39456999142)
+- [Daedalus Emulator on YouTube](https://www.youtube.com/@daedalusemulator)
+- [Turnip driver releases](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases)
 
 ## Download and requirements
 
@@ -68,6 +76,6 @@ The release source is on `experimental-bionic`; the name is retained for branch 
 
 ## Credits and licenses
 
-[HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), [shadPS4](https://github.com/shadps4-emu/shadPS4), [FEX-Emu](https://github.com/FEX-Emu/FEX), [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android), [Daedalus GoW3](https://github.com/erickmendes22/gow3_android_daedalus_fork), [fexdroid](https://github.com/cobrabm12/fexdroid), Bloodframe, Mesa/Turnip, StevenMXZ and all upstream contributors.
+[HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), [shadPS4](https://github.com/shadps4-emu/shadPS4), [FEX-Emu](https://github.com/FEX-Emu/FEX), [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android), [Daedalus GoW3](https://github.com/erickmendes22/gow3_android_daedalus_fork), [fexdroid](https://github.com/cobrabm12/fexdroid), Bloodframe, Mesa/Turnip, [StevenMXZ / Adreno Tools Drivers](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases) and all upstream contributors.
 
 Source licenses and notices are preserved in the repository and packaged runtime. See [port/LICENSE](port/LICENSE) and [runtime notices](tools/android/bionic/NOTICE.txt). No affiliation with Sony Interactive Entertainment or Sucker Punch Productions.
