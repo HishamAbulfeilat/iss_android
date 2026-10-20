@@ -78,6 +78,11 @@ jobs:
         run: |
           VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
             python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_parallel_recording.py' -v
+      - name: Build Bloodframe and direct PKG extractor
+        shell: bash -el {0}
+        run: |
+          bash tools/android/bionic/build_bloodframe.sh
+          bash tools/android/bionic/build_pkg.sh
       - name: Stage pinned StevenMXZ Turnip Gen8 V37 Patched
         shell: bash -el {0}
         run: |

@@ -25,7 +25,8 @@ test "${#classes[@]}" -gt 0
 cp out/release/iss-bionic-runtime.tar.gz "$work/package/assets/runtime.tar.gz"
 cp out/release/iss-bionic-runtime.sha256 "$work/package/assets/runtime.sha256"
 cp out/bionic/lib/libisspresent.so "$work/package/lib/arm64-v8a/libisspresent.so"
-"$bt/aapt2" link -I "$jar" --manifest android/app/BionicAndroidManifest.xml \
+"$bt/aapt2" compile --dir android/app/res -o "$work/resources.zip"
+"$bt/aapt2" link -I "$jar" -R "$work/resources.zip" --manifest android/app/BionicAndroidManifest.xml \
   --min-sdk-version 30 --target-sdk-version 28 -o "$work/base.apk"
 (cd "$work/package" && zip -q -0 -r "$work/base.apk" assets lib classes.dex)
 "$bt/zipalign" -f 4 "$work/base.apk" "$work/aligned.apk"

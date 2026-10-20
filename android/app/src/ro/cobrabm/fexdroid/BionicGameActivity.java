@@ -20,11 +20,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private FrameLayout frame;
  private SurfaceView surface;
  private TextView status;
- private TextView fpsHud;
+ private TouchControllerOverlay controller;
+ private BionicPlayerMenu menu;
+ private boolean restarting,edgeGesture,swipeConsumed;
+ private float edgeX,edgeY;
  private android.app.AlertDialog graffitiGuideDialog;
- private boolean showFps;
- private long fpsSampleFrames=-1;
- private long fpsSampleNs;
  private PadBridge pad;
  private AudioBridge audio;
  private final Handler main=new Handler(Looper.getMainLooper());
@@ -45,7 +45,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   files=getFilesDir().getPath();base=files+"/issport";
   screenMode=getSharedPreferences("iss",0).getString("display_mode","stretch");
   if("fill".equals(screenMode))screenMode="stretch";
-  showFps=getSharedPreferences("iss",0).getBoolean("show_fps",false);
+  try{FramegenSettings.write(this);}catch(IOException e){record(e.toString());}
+  new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
    out.write("ISS Android Bionic experimental — no glibc or Xvfb\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
@@ -53,35 +54,12 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   audio=new AudioBridge(new File(base,"audio.fifo"));
   frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
   surface=new SurfaceView(this);frame.addView(surface);
-  frame.addView(new TouchControllerOverlay(this,pad,false));
+  controller=new TouchControllerOverlay(this,pad,false);frame.addView(controller);
   status=new TextView(this);status.setText("Starting inFAMOUS Bionic…");
   status.setGravity(Gravity.CENTER);status.setTextColor(0xffe0c891);status.setTextSize(18);
 
-  // Native Bionic loads a Turnip HAL directly; ImGui's Vulkan backend may not
-  // resolve all of its entry points. Render the requested FPS independently
-  // in the Android window, above the SurfaceView (and above the pad overlay).
-  // Count the frames received by IssPresent, never a guessed 60/120 Hz value.
-  fpsHud=new TextView(this);
-  fpsHud.setTextColor(0xfff2f8e9);
-  fpsHud.setTextSize(17);
-  fpsHud.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-  fpsHud.setGravity(Gravity.CENTER);
-  fpsHud.setClickable(false);
-  fpsHud.setFocusable(false);
-  final float density=getResources().getDisplayMetrics().density;
-  int horizontal=Math.round(10*density), vertical=Math.round(6*density);
-  fpsHud.setPadding(horizontal,vertical,horizontal,vertical);
-  android.graphics.drawable.GradientDrawable fpsBg=new android.graphics.drawable.GradientDrawable();
-  fpsBg.setColor(0xb51b2224);
-  fpsBg.setCornerRadius(6*density);
-  fpsHud.setBackground(fpsBg);
-  FrameLayout.LayoutParams fpsParams=new FrameLayout.LayoutParams(
-      FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,
-      Gravity.TOP|Gravity.RIGHT);
-  fpsParams.topMargin=Math.round(14*density);
-  fpsParams.rightMargin=Math.round(14*density);
   frame.addView(status);
-  if(showFps){fpsHud.setVisibility(View.GONE);frame.addView(fpsHud,fpsParams);}
+  menu=new BionicPlayerMenu(this,frame,controller,pad,this::restartGame);
   setContentView(frame);
   frame.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or_,ob)->updateVideoSize());
   frame.post(this::updateVideoSize);
@@ -111,7 +89,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   e.put("ISS_SCREEN_H",output1080p?"1080":"720");
   e.put("ISS_PRESENT_SOCKET",base+"/present.sock");
   e.put("TLG_PAD_FILE",base+"/android-pad.state");
-  e.put("TLG_SHOW_FPS",showFps?"1":"0");
+  e.put("TLG_SHOW_FPS","0");
   e.put("TLG_ANDROID_FPS_ONLY","1");
   java.util.ArrayList<String> patches=new java.util.ArrayList<>();
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
@@ -138,7 +116,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
     try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
      BionicSaveArchive.recover(new File(base,"user/savedata"));
      synchronized(this){
-      if(destroyed)return;
+      if(destroyed||restarting)return;
       record("Executing native Bionic inFAMOUS");
       game=process("/system/bin/sh",base+"/run-bionic.sh");
      }
@@ -147,7 +125,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
       byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
      }
      int exit=game.waitFor();record("Bionic game exited "+exit);
-     if(!destroyed)error("Game stopped ("+exit+"). Export log.");
+     if(!destroyed&&!restarting)error("Game stopped ("+exit+"). Export log.");
      }finally{
       // Hold the save lock until the native writer has actually exited, even on Activity teardown.
       if(game.isAlive())game.destroyForcibly();
@@ -187,34 +165,46 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   long n=IssPresent.frames();
   if(!failed&&n>0)status.setVisibility(View.GONE);
   if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
-  // IssPresent.nativeFrames counts guest frames delivered to the Android
-  // presenter. Sample over elapsed *monotonic* time, not UI refresh events.
-  if(showFps&&fpsHud!=null&&n>0){
-   long now=android.os.SystemClock.elapsedRealtimeNanos();
-   if(fpsSampleFrames<0||n<fpsSampleFrames){
-    fpsSampleFrames=n;fpsSampleNs=now;
-   }else if(now-fpsSampleNs>=400000000L){
-    double fps=(n-fpsSampleFrames)*1000000000.0/(now-fpsSampleNs);
-    fpsHud.setText(String.format(java.util.Locale.US,"%.1f FPS",fps));
-    fpsHud.setVisibility(View.VISIBLE);
-    fpsSampleFrames=n;fpsSampleNs=now;
-   }
-  }
-  main.postDelayed(this::poll,showFps?500:1000);
+  main.postDelayed(this::poll,1000);
  }
  private void error(String message){failed=true;record("ERROR: "+message);main.post(()->{status.setText(message);status.setVisibility(View.VISIBLE);});}
  @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int ht){}
  @Override public void surfaceDestroyed(SurfaceHolder h){}
- @Override public boolean dispatchKeyEvent(KeyEvent e){return pad!=null&&pad.key(e)||super.dispatchKeyEvent(e);}
- @Override public boolean onGenericMotionEvent(MotionEvent e){return pad!=null&&pad.motion(e)||super.onGenericMotionEvent(e);}
+ private void restartGame(){
+  if(restarting||destroyed)return;restarting=true;status.setText("Reiniciando inFAMOUS…");status.setVisibility(View.VISIBLE);
+  synchronized(this){if(game!=null)game.destroyForcibly();}
+  worker.execute(()->main.post(()->{if(!destroyed)recreate();}));
+ }
+ @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(request==FramegenSettings.IMPORT_DLL&&result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);}
+ @Override public void onBackPressed(){if(menu!=null)menu.toggle();}
+ @Override public boolean dispatchKeyEvent(KeyEvent e){
+  int code=e.getKeyCode();
+  if(code==KeyEvent.KEYCODE_BACK||code==KeyEvent.KEYCODE_BUTTON_MODE){if(e.getAction()==KeyEvent.ACTION_UP&&menu!=null)menu.toggle();return true;}
+  if(menu!=null&&menu.opened()){
+   if(code==KeyEvent.KEYCODE_BUTTON_B){if(e.getAction()==KeyEvent.ACTION_UP)menu.close();return true;}
+   return super.dispatchKeyEvent(e);
+  }
+  return pad!=null&&pad.key(e)||super.dispatchKeyEvent(e);
+ }
+ @Override public boolean dispatchTouchEvent(MotionEvent e){
+  float density=getResources().getDisplayMetrics().density;int action=e.getActionMasked();
+  if(action==MotionEvent.ACTION_DOWN){edgeX=e.getX();edgeY=e.getY();edgeGesture=menu!=null&&!menu.opened()&&edgeX<24*density;swipeConsumed=false;}
+  if(swipeConsumed){if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)swipeConsumed=false;return true;}
+  if(action==MotionEvent.ACTION_MOVE&&menu!=null){float dx=e.getX()-edgeX,dy=e.getY()-edgeY;
+   if((edgeGesture&&dx>55*density&&Math.abs(dy)<80*density)||(menu.opened()&&dx< -70*density&&Math.abs(dy)<80*density)){
+    MotionEvent cancel=MotionEvent.obtain(e);cancel.setAction(MotionEvent.ACTION_CANCEL);super.dispatchTouchEvent(cancel);cancel.recycle();menu.toggle();edgeGesture=false;swipeConsumed=true;return true;
+   }
+  }
+  return super.dispatchTouchEvent(e);
+ }
+ @Override public boolean onGenericMotionEvent(MotionEvent e){return menu!=null&&menu.opened()?super.onGenericMotionEvent(e):pad!=null&&pad.motion(e)||super.onGenericMotionEvent(e);}
  @Override protected void onPause(){
-  super.onPause();fpsSampleFrames=-1;fpsSampleNs=0;
-  if(fpsHud!=null)fpsHud.setVisibility(View.GONE);
+  super.onPause();if(menu!=null)menu.pause();
   if(pad!=null)pad.reset();if(audio!=null)audio.pause();
  }
  @Override protected void onResume(){
-  super.onResume();fpsSampleFrames=-1;fpsSampleNs=0;
-  if(audio!=null)audio.resume();
+  super.onResume();
+  if(audio!=null)audio.resume();if(menu!=null)menu.resume();
  }
  @Override protected void onDestroy(){
   synchronized(this){destroyed=true;if(game!=null)game.destroyForcibly();}
@@ -224,6 +214,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    graffitiGuideDialog.dismiss();
    graffitiGuideDialog=null;
   }
+  if(menu!=null)menu.destroy();
   IssPresent.stop();if(audio!=null)audio.stop();
   worker.shutdown();super.onDestroy();
  }

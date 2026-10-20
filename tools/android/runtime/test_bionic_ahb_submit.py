@@ -8,7 +8,7 @@ AHB=(VK/"vk_swapchain_ahb.h").read_text()
 DESKTOP=(VK/"vk_swapchain.h").read_text()
 class FirstFrameAhbSubmit(unittest.TestCase):
     def test_never_queue_wait_on_null_semaphore(self):
-        self.assertEqual(2,P.count("AddImageAcquiredWait(info, swapchain.GetImageAcquiredSemaphore());"))
+        self.assertEqual(4,P.count("AddImageAcquiredWait(info, swapchain.GetImageAcquiredSemaphore());"))
         self.assertNotIn("info.AddWait(swapchain.GetImageAcquiredSemaphore())",P)
         self.assertIn("vk_ahb_acquire_wait.h",P)
         self.assertIn("acquire_imported ? image_acquired[image_index]",AHB)

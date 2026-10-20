@@ -135,6 +135,7 @@ private:
     u32 width = 0;
     u32 height = 0;
     u32 image_count = 3;
+    u32 framegen_multiplier = 0;
     u32 image_index = 0;
     u32 generation = 0;
     u64 frame_counter = 0;

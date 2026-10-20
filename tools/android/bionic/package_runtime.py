@@ -19,8 +19,8 @@ def main():
         base = stage / "issport"
         runtime = base / "arm64"
         for kind, names in {
-            "bin": ("iss-probe", "kgsl-chip-id"),
-            "lib": ("libisscpu.so", "libtlggpu.so", "libc++_shared.so"),
+            "bin": ("iss-probe", "kgsl-chip-id", "orbis-pkg-util"),
+            "lib": ("libisscpu.so", "libtlggpu.so", "libc++_shared.so", "libbloodframe.so"),
         }.items():
             directory = runtime / kind
             directory.mkdir(parents=True)
@@ -51,7 +51,8 @@ def main():
 
         for name in ("user", "tmp", "out"):
             (base / name).mkdir(parents=True)
-        (base / "licenses").mkdir()
+        shutil.copytree(SRC / "licenses", base / "licenses", dirs_exist_ok=True)
+        (base / "licenses").mkdir(exist_ok=True)
         shutil.copy2(ROOT / "tools/android/bionic/NOTICE.txt", base / "licenses/BIONIC-NOTICE.txt")
         shutil.copy2(ROOT / "third_party/FEX/LICENSE", base / "licenses/FEX-LICENSE.txt")
         shutil.copy2(ROOT / ".local-deps/android/bionic-prefix/share/licenses/libucontext/LICENSE",

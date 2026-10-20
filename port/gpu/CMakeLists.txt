@@ -551,3 +551,7 @@ endif()
 if(ISS_ANDROID_GLIBC)
  target_link_libraries(tlggpu PRIVATE "${ISS_CPU_LIBRARY}")
 endif()
+
+if(ANDROID AND ISS_ANDROID_BIONIC)
+ target_include_directories(tlggpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/android/lsfg)
+endif()

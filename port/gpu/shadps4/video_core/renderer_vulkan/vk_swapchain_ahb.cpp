@@ -5,6 +5,7 @@
 #include <android/hardware_buffer.h>
 #include <poll.h>
 #include <unistd.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -59,11 +60,12 @@ bool WaitSyncFile(int fd, int timeout_ms) {
 } // namespace
 
 u32 Swapchain::MaxImageCount() {
-    return BufferCount(0); // the buffer count can follow the live state
+    return std::max(BufferCount(0), BufferCount(4)); // covers live 2x/3x/4x switches
 }
 
 Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window_, u32 lsfg_multiplier)
     : instance{instance_}, window{window_} {
+    framegen_multiplier = lsfg_multiplier;
     image_count = BufferCount(lsfg_multiplier);
     const vk::PhysicalDeviceExternalSemaphoreInfo semaphore_info{
         .handleType = vk::ExternalSemaphoreHandleTypeFlagBits::eSyncFd,
@@ -86,7 +88,7 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
 }
 
 void Swapchain::UpdateVsync() {
-    const bool fifo = TlgSettings::Get().vsync;
+    const bool fifo = TlgSettings::Get().vsync.load() || framegen_multiplier >= 2;
     if (client.Connected()) client.SetFifo(fifo);
 }
 
@@ -262,6 +264,7 @@ void Swapchain::CreateBuffer(u32 index) {
 }
 
 void Swapchain::SetFrameGeneration(u32 lsfg_multiplier) {
+    framegen_multiplier = lsfg_multiplier;
     if (client.Connected() &&
         !client.SetFifo(TlgSettings::Get().vsync.load() || lsfg_multiplier >= 2)) {
         PeerGone();

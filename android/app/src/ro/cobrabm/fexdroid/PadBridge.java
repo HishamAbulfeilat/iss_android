@@ -15,6 +15,8 @@ import java.util.Set;
 final class PadBridge {
     private final File state;
     private boolean swapFaceButtons;
+    private boolean dpadSwipe;
+    void setDpadSwipe(boolean enabled){dpadSwipe=enabled;write();}
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Set<String> keys = new LinkedHashSet<>();
     private final Set<String> virtualKeys = new LinkedHashSet<>();
@@ -88,7 +90,7 @@ final class PadBridge {
 
     void virtual(Set<String> buttons, int leftX, int leftY, int rightX, int rightY,
                  boolean leftActive, boolean rightActive, int leftTrigger, int rightTrigger) {
-        virtualKeys.clear(); virtualKeys.addAll(buttons);
+        virtualKeys.clear(); for(String key:buttons)virtualKeys.add(swapFaceButtons && key.equals("square")?"triangle":swapFaceButtons && key.equals("triangle")?"square":key);
         virtualLx=leftX; virtualLy=leftY; virtualRx=rightX; virtualRy=rightY;
         virtualLeftActive=leftActive; virtualRightActive=rightActive;
         virtualL2=leftTrigger; virtualR2=rightTrigger;
@@ -104,6 +106,7 @@ final class PadBridge {
 
     private void write() {
         StringBuilder text=new StringBuilder();
+        text.append("dpad_swipe=").append(dpadSwipe?1:0).append(' ');
         Set<String> all=new LinkedHashSet<>(keys); all.addAll(virtualKeys);
         int leftTrigger=Math.max(l2,virtualL2), rightTrigger=Math.max(r2,virtualR2);
         for (String key:all) {

@@ -22,6 +22,7 @@
 #include <SDL3/SDL.h>
 #include "mouse_stick.h"
 #include "mouse_touch.h"
+#include "dpad_swipe.h"
 #include <sys/stat.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -793,6 +794,8 @@ static void sample_host(PadData *d) {
 /* Forward declaration: sample_motion reads the Android-injected pad state. */
 static int replay_armed;      /* 1 while a TLG_PAD_REPLAY recording plays, 2 once it ended */
 static uint64_t replay_start; /* 0: (re)start at the next sample */
+static int android_dpad_swipe;
+static IssDpadSwipe android_swipe;
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
     if (!checked) { path=getenv("TLG_PAD_FILE"); checked=1; }
@@ -814,7 +817,7 @@ static void read_inject(void) {
     if (!f) return;
     static const char *sticks[]={"lx=","ly=","rx=","ry="};
     static const char *triggers[]={"l2=","r2="};
-    injected.buttons=0;
+    injected.buttons=0; android_dpad_swipe=0;
     injected_motion=0;
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     for (int i=0;i<2;++i) injected.trigger[i]=-1;
@@ -822,6 +825,7 @@ static void read_inject(void) {
     while (fscanf(f,"%63s",token)==1) {
         if (!strcmp(token,"replay") && replay_armed!=1) { replay_armed=1; replay_start=0; } /* TLG_PAD_REPLAY */
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
+        if (!strcmp(token,"dpad_swipe=1")) android_dpad_swipe=1;
         if (!strcmp(token,"tilt_right")) injected_motion|=1;
         if (!strcmp(token,"tilt_left")) injected_motion|=2;
         if (!strcmp(token,"shake")) injected_motion|=4;
@@ -926,7 +930,20 @@ static void sample(PadData *d) {
             d->left_x=d->left_y=d->right_x=d->right_y=128;
         }
     }
-    if (!play_two_finger(d)) play_click(d);
+    int dpad_touch_active=0;
+    if(android_pad_enabled()) {
+        const unsigned directions=android_dpad_swipe ?
+            ((d->buttons&BTN_UP)?1:0)|((d->buttons&BTN_DOWN)?2:0)|
+            ((d->buttons&BTN_LEFT)?4:0)|((d->buttons&BTN_RIGHT)?8:0) : 0;
+        if(iss_dpad_swipe_step(&android_swipe,directions,now_us())) {
+            dpad_touch_active=1;
+            click.side=-1;
+            d->buttons &= ~(uint32_t)(BTN_UP|BTN_DOWN|BTN_LEFT|BTN_RIGHT|CLICK_LEFT|CLICK_RIGHT|BTN_TOUCHPAD);
+            d->touch_count=1;
+            d->touches[0]=(PadTouch){.x=(uint16_t)android_swipe.x,.y=(uint16_t)android_swipe.y,.id=android_swipe.id};
+        }
+    }
+    if (!dpad_touch_active && !play_two_finger(d)) play_click(d);
     if (hold_after_capture) {
         if (d->buttons) d->buttons=0;
         else hold_after_capture=0;

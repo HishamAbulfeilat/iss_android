@@ -14,6 +14,7 @@ def main():
     readelf = args.ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
     required = [
         args.root / "bin/iss-probe", args.root / "bin/kgsl-chip-id",
+        args.root / "bin/orbis-pkg-util", args.root / "lib/libbloodframe.so",
         args.root / "lib/libisscpu.so", args.root / "lib/libtlggpu.so",
         args.root / "lib/libisspresent.so", args.root / "lib/libc++_shared.so",
         args.root / "drivers/gen8/libvulkan_freedreno.so",
@@ -44,7 +45,7 @@ def main():
         if banned:
             raise SystemExit(f"Linux or unexpectedly dynamic dependencies in {file}: {banned}")
         if file in (args.root / "bin/iss-probe", args.root / "bin/kgsl-chip-id",
-                    args.root / "python/bin/python3.13"):
+                    args.root / "python/bin/python3.13", args.root / "bin/orbis-pkg-util"):
             interp = subprocess.check_output([str(readelf), "-l", str(file)], text=True)
             if "/system/bin/linker64" not in interp:
                 raise SystemExit(f"Not an Android Bionic executable: {file}")

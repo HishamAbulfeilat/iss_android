@@ -1,13 +1,13 @@
 Daedalus Fork — experimental Android/Bionic runtime
-Source and build recipes: https://github.com/erickmendes22/gow3_android_daedalus_fork/tree/experimental-bionic
+Source and build recipes: https://github.com/erickmendes22/iss_android/tree/experimental-bionic
 
-GoW III runtime: zFitness/gow3_android, Daedalus Fork and upstream contributors.
+inFAMOUS runtime: Daedalus Fork and upstream contributors.
 GPL-2.0; see LICENSE-Gow3.txt and the repository's third-party sources/notices.
 
 Android Vulkan HAL loader, AHardwareBuffer presenter and native preparation adaptations:
 Bloodborne-Android, revision 2e4726530b04f76e513e232d272d386e9973c73b (GPL-2.0).
 https://github.com/ducvd89/Bloodborne-Android/tree/2e4726530b04f76e513e232d272d386e9973c73b
-The GoW III preparation format and patch validation remain specific to this fork.
+The inFAMOUS preparation format and patches remain specific to this port.
 
 FEX revision fb925d6fc5cc8576bf0f9ae6978fc6d912485593 and its bundled dependencies:
 see third_party/FEX in the source repository for individual licenses.
@@ -37,3 +37,13 @@ Adreno 7xx automatic driver: Turnip v26.3.0-R6 by StevenMXZ.
 Source: https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v37
 Exact archive/library hashes: arm64/drivers/adreno7xx/PINNED-DRIVER.json.
 Adreno 8xx keeps the existing V37 patched driver; other GPU defaults are unchanged.
+
+Bloodframe frame generation: ducvd89/bloodframe@c29027555cfa8c9fc73c20f03816230becb9f469 (MIT),
+based on GameNative lsfg-vk Android and PancakeTAS lsfg-vk. Source: https://github.com/ducvd89/bloodframe
+See bloodframe license files and bloodframe-source.txt in this directory.
+Host synchronization patch and launcher/menu/HUD adaptations:
+Daedalus GoW3@9b2f68eb3cda4ae7960c07181083650cc155cc6a and Bloodborne-Android (GPL-2.0).
+Launcher icon: inFAMOUS Second Son promotional artwork, Sony Interactive Entertainment/Sucker Punch.
+Source: https://store.playstation.com/pt-br/product/UP9000-CUSA00223_00-SECONDSONSHIP000
+Image: https://image.api.playstation.com/vulcan/img/rnd/202011/0700/enLAr4eVGBxWjrHh5nLTUSnn.png
+No affiliation with or endorsement by Sony Interactive Entertainment.

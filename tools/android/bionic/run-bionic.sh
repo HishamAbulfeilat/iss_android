@@ -55,4 +55,8 @@ else
  echo "ISS Bionic Vulkan: Android system loader, chip=$chip"
 fi
 echo "ISS Android Bionic: game=$TLG_GAME_DIR, output=${ISS_SCREEN_W}x${ISS_SCREEN_H}"
+export ISS_LSFG_STATE_FILE="$base/framegen.state"
+export ISS_LSFG_LIB="$runtime/lib/libbloodframe.so"
+export ISS_LSFG_DLL="$base/Lossless.dll"
+
 exec "$python" "$base/launch.py"
