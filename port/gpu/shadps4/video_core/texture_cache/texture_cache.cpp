@@ -274,6 +274,13 @@ void TextureCache::ProcessDownloadImages() {
     if (Vulkan::WaitDiagnostics::Enabled()) {
         ReportImageCreates();
     }
+    // Avoid waiting for upload workers and taking readback locks when there is no work.
+    const bool report_due = deferred_readbacks && Vulkan::WaitDiagnostics::Enabled() &&
+        std::chrono::steady_clock::now() - readback_report >= std::chrono::seconds(5);
+    if (!has_download_images.load(std::memory_order_acquire) &&
+        !has_pending_readbacks.load(std::memory_order_acquire) && !report_due) {
+        return;
+    }
     if (deferred_readbacks) {
         // Upload workers must finish reading RAM before these pages become inaccessible.
         scheduler.WaitHostCopies();
@@ -321,6 +328,7 @@ void TextureCache::ProcessDownloadImages() {
             }
         }
         download_images.clear();
+        has_download_images.store(false, std::memory_order_release);
         if (Vulkan::WaitDiagnostics::Enabled()) {
             const auto now = std::chrono::steady_clock::now();
             if (now - readback_report >= std::chrono::seconds(5)) {
@@ -363,6 +371,7 @@ void TextureCache::ProcessDownloadImages() {
         }
     }
     download_images.clear();
+    has_download_images.store(false, std::memory_order_release);
     if (pending.empty()) {
         return;
     }
@@ -1332,6 +1341,7 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
             image.info.guest_address != 0) {
             std::unique_lock lk{download_images_mutex};
             download_images.emplace(image_id);
+            has_download_images.store(true, std::memory_order_release);
         }
     }
     if (refresh) {
@@ -1362,6 +1372,7 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
         std::unique_lock lk{download_images_mutex};
         download_images.emplace(image_id);
+        has_download_images.store(true, std::memory_order_release);
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
@@ -1591,7 +1602,7 @@ void TextureCache::UploadDecodedImage(Image& image) {
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
                                      AmdGpu::BorderColorBuffer border_color_base,
-                                     const bool is_depth, float extra_lod_bias) {
+                                     const bool is_depth, float extra_lod_bias, u64* lru_id) {
     // Compare and plain uses of one S# need separate samplers; so do extra LOD biases.
     const u64 hash = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
                                  u64(std::bit_cast<u32>(extra_lod_bias)));
@@ -1604,8 +1615,22 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     } else {
         sampler_lru_cache.Touch(it->second.lru_id, gc_tick);
     }
+    if (lru_id) {
+        *lru_id = it->second.lru_id;
+    }
 
     return it->second.Handle();
+}
+
+bool TextureCache::TouchSamplers(const u64* lru_ids, u32 count, u64 generation) {
+    std::scoped_lock lock{samplers_mutex};
+    if (sampler_generation.load(std::memory_order_relaxed) != generation) {
+        return false;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        sampler_lru_cache.Touch(static_cast<size_t>(lru_ids[i]), gc_tick);
+    }
+    return true;
 }
 
 void TextureCache::RegisterImage(ImageId image_id) {
@@ -1921,6 +1946,7 @@ void TextureCache::GarbageCollectSamplers() {
         const size_t lru_id = samplers.at(hash).lru_id;
         samplers.erase(hash);
         sampler_lru_cache.Free(lru_id);
+        sampler_generation.fetch_add(1, std::memory_order_release);
         return false;
     };
 
@@ -2034,6 +2060,7 @@ void TextureCache::DeleteImage(ImageId image_id) {
         std::unique_lock lk{download_images_mutex};
         if (download_images.contains(image_id)) {
             download_images.erase(image_id);
+            has_download_images.store(!download_images.empty(), std::memory_order_release);
         }
     }
 
