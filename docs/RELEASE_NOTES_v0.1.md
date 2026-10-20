@@ -2,6 +2,12 @@
 
 Primeira versão pública do port Android com runtime Bionic, tradução de CPU pelo FEX e renderização Vulkan nativa via AHardwareBuffer.
 
+## Ajustes finais desta build
+
+- Classificação Android como jogo, equivalente à configuração do GoW3, para identificação pelo modo de jogos do fabricante.
+- Áudio Bionic pelo misturador PCM nativo, com saída s16 estéreo a 48 kHz para o AudioBridge; mantém conversão, volume e portas Audio3d do inFAMOUS.
+- Fullscreen opcional diretamente na tela inicial, desligado por padrão. Desligado mantém 16:9 com barras do sistema; ligado usa o ajuste de imagem escolhido e oculta as barras.
+
 ## Recursos
 
 - Interface com tema de inFAMOUS e menu de configurações dentro do jogo.
@@ -27,7 +33,7 @@ A alteração upstream relacionada a partículas, névoa, água e fogo está inc
 
 Android 11 ou superior, ARM64 e GPU/driver Vulkan compatível. Snapdragon/Adreno é o alvo principal. Instale `inFAMOUS-Second-Son-Daedalus-v0.1.apk`, conceda acesso aos arquivos e selecione a pasta do jogo ou instale seu PKG local. A configuração de FPS define uma meta, sem garantir a taxa em todas as cenas.
 
-Esta versão mantém o pacote e o certificado das builds Bionic anteriores e usa código interno 7. Atualize mantendo os dados do app para preservar saves e configurações. A versão glibc é um aplicativo separado.
+Esta versão mantém o pacote e o certificado das builds Bionic anteriores e usa código interno 8. Atualize mantendo os dados do app para preservar saves e configurações. A versão glibc é um aplicativo separado.
 
 Nenhum jogo, firmware, chave ou Lossless.dll é distribuído. Para geração de quadros, importe a DLL da sua própria instalação do Lossless Scaling.
 
@@ -37,8 +43,10 @@ Créditos: erickmendes22 / Daedalus Emulator, HayatoG/iss_pc, shadPS4, FEX-Emu, 
 
 ## English
 
+This build adds Android game classification, native fixed-format PCM audio output, and an optional Home-screen Fullscreen switch that defaults to off.
+
 Initial public Android Bionic release of inFAMOUS Second Son — Daedalus Fork. Includes the themed launcher and in-game menu, English/Portuguese selection, FPS/VSync settings, Bloodframe, configurable HUD and controls, incremental touchpad swipes, PKG installation, save transfer and driver ZIP import.
 
 This release integrates the eight approved PC performance improvements, subgroup-size consistency and explicit wave64 ballot-load alignment. The upstream particle/fog/water/fire change is included; its visual effect still needs device confirmation. Shader caches refresh automatically after the update. Frame-rate settings are targets, not guaranteed performance.
 
-Requires Android 11+, ARM64 and a compatible Vulkan GPU/driver. Snapdragon/Adreno is the primary target. The APK retains the previous Bionic package and signing certificate, with version code 7. No game files, firmware, keys or Lossless.dll are included. Supply your own compatible game and, for frame generation, your own Lossless Scaling DLL.
+Requires Android 11+, ARM64 and a compatible Vulkan GPU/driver. Snapdragon/Adreno is the primary target. The APK retains the previous Bionic package and signing certificate, with version code 8. No game files, firmware, keys or Lossless.dll are included. Supply your own compatible game and, for frame generation, your own Lossless Scaling DLL.

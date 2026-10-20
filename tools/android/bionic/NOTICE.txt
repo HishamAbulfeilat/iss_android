@@ -43,3 +43,7 @@ Launcher icon: inFAMOUS Second Son promotional artwork, Sony Interactive Enterta
 Source: https://store.playstation.com/pt-br/product/UP9000-CUSA00223_00-SECONDSONSHIP000
 Image: https://image.api.playstation.com/vulcan/img/rnd/202011/0700/enLAr4eVGBxWjrHh5nLTUSnn.png
 No affiliation with or endorsement by Sony Interactive Entertainment.
+
+Native AudioOut PCM FIFO mixing adapted from Daedalus GoW3, source snapshot b3a7c3d,
+which credits Bloodborne-Android 2e472653. ISS AudioOut/Audio3d semantics retained.
+https://github.com/erickmendes22/gow3_android_daedalus_fork/blob/b3a7c3d/src/runtime_audio_bionic.c

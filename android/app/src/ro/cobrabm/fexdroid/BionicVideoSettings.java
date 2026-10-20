@@ -1,16 +1,30 @@
 package ro.cobrabm.fexdroid;
 import android.app.*;import android.widget.*;
 final class BionicVideoSettings {
+ static boolean fullscreen(android.content.SharedPreferences prefs){return prefs.getBoolean("fullscreen",false);}
+ static String gameDisplayMode(android.content.SharedPreferences prefs){
+  if(!fullscreen(prefs))return "fit";
+  String mode=prefs.getString("display_mode","stretch");
+  return "crop".equals(mode)?"crop":"fit".equals(mode)?"fit":"stretch";
+ }
+ static void fullscreenOption(Activity activity,LinearLayout parent){
+  android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
+  Switch toggle=new Switch(activity);toggle.setText(AppLanguage.text("Fullscreen","Tela cheia (Fullscreen)"));
+  toggle.setChecked(fullscreen(prefs));toggle.setPadding(0,16,0,16);
+  toggle.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("fullscreen",checked).apply());
+  parent.addView(toggle);
+ }
  static LinearLayout content(Activity activity,int page){
   LinearLayout l=new LinearLayout(activity);l.setOrientation(1);l.setPadding(28,20,28,20);
   android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
   if(page!=2){
+  fullscreenOption(activity,l);
   BionicDriverSettings.add(activity,l);
-  TextView displayLabel=new TextView(activity);displayLabel.setText(AppLanguage.text("Display:", "Exibição:"));l.addView(displayLabel);
+  TextView displayLabel=new TextView(activity);displayLabel.setText(AppLanguage.text("Image fit when Fullscreen is enabled:", "Ajuste da imagem com Fullscreen ativado:"));l.addView(displayLabel);
   Spinner display=new Spinner(activity);
   String[] displayValues={AppLanguage.text("16:9 without cropping (side bars)", "16:9 sem cortes (barras laterais)"),AppLanguage.text("Fullscreen without cropping (stretch)", "Fullscreen sem cortes (esticar)"),AppLanguage.text("Fullscreen with aspect ratio (crop edges)", "Fullscreen proporcional (cortar bordas)")};
   display.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,displayValues));
-  String currentMode=prefs.getString("display_mode","fill");
+  String currentMode=prefs.getString("display_mode","stretch");
   display.setSelection("fit".equals(currentMode)?0:"crop".equals(currentMode)?2:1);
   display.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
    public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){

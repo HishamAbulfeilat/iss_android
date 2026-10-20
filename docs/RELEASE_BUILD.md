@@ -8,7 +8,7 @@ Run `.github/workflows/bionic-experimental.yml` from this branch. It compiles Ja
 
 The existing `.local-deps/android/bionic-development.keystore` and alias are retained. The workflow restores the original signing cache (`iss-bionic-development-signing-v1`). Release builds require that key and compare the final APK certificate with `tools/android/bionic/signing-certificate.sha256`, taken from Build 65. A missing or different key fails the build instead of publishing an APK that cannot update previous installations. The key is not included in artifacts.
 
-The app reports version `0.1`, uses version code `7` (greater than Build 65's `6`) and retains package `com.daedalus.iss.bionic`. Do not lower the version code in future releases. For local development only, `ISS_RELEASE_BUILD=0` allows the existing development-key generation path; such output does not pass the release certificate checks.
+The app reports version `0.1`, uses version code `8` (greater than Build 65's `6`) and retains package `com.daedalus.iss.bionic`. Do not lower the version code in future releases. For local development only, `ISS_RELEASE_BUILD=0` allows the existing development-key generation path; such output does not pass the release certificate checks.
 
 ## Prepared assets
 

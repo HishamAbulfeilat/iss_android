@@ -44,10 +44,9 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  @Override public void onCreate(Bundle saved){
   super.onCreate(saved);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-  getWindow().getDecorView().setSystemUiVisibility(5894);
+  applyFullscreen();
   files=getFilesDir().getPath();base=files+"/issport";
-  screenMode=getSharedPreferences("iss",0).getString("display_mode","stretch");
-  if("fill".equals(screenMode))screenMode="stretch";
+  screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
@@ -70,6 +69,15 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   surface.getHolder().addCallback(this);
   record("Activity initialized");
  }
+ private void applyFullscreen(){
+  boolean enabled=BionicVideoSettings.fullscreen(getSharedPreferences("iss",0));
+  if(enabled)getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+  else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+  getWindow().getDecorView().setSystemUiVisibility(enabled?5894:View.SYSTEM_UI_FLAG_VISIBLE);
+  screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
+  if(frame!=null)frame.post(this::updateVideoSize);
+ }
+ @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)applyFullscreen();}
  void updateDisplayRate(){
   float hz=BionicDisplayRate.apply(this);
   IssPresent.frameRate(hz);
@@ -218,7 +226,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(pad!=null)pad.reset();if(audio!=null)audio.pause();
  }
  @Override protected void onResume(){
-  super.onResume();
+  super.onResume();applyFullscreen();
   if(audio!=null)audio.resume();if(menu!=null)menu.resume();
  }
  @Override protected void onDestroy(){

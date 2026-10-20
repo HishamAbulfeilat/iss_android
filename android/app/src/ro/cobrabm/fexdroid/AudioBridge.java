@@ -11,7 +11,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 
-/** Game audio: SDL's disk driver writes the mixed output (s16 stereo 48 kHz, run-gow3.sh) into a
+/** Game audio: the host mixer writes fixed s16 stereo 48 kHz PCM into a
  *  FIFO; this plays it. The FIFO is held open read-write, so the game's open never blocks and a
  *  restarted game writes into the same pipe. The playback rate paces the game's audio thread.
  *  Self-healing: the supervisor loop reinitializes the AudioTrack and reopens the FIFO on any
@@ -149,7 +149,7 @@ final class AudioBridge {
                 if (pipe!=null) try { pipe.close(); } catch (IOException ignored) {}
                 pipeHandle=null;
                 // Drop the ready marker while the bridge is between sessions; the next successful
-                // init recreates it. run-gow3.sh only consults it at game start, so a transient
+                // init recreates it. The launcher only consults it at game start, so a transient
                 // absence is harmless.
                 if (running) ready.delete();
             }

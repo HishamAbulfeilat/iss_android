@@ -6,7 +6,7 @@ Fork and Android adaptations: **erickmendes22 / [Daedalus Emulator](https://www.
 
 ## Download and requirements
 
-Download `inFAMOUS-Second-Son-Daedalus-v0.1.apk` from this repository's [Releases](https://github.com/erickmendes22/iss_android/releases). Version **0.1**, Android version code **7**, package `com.daedalus.iss.bionic`.
+Download `inFAMOUS-Second-Son-Daedalus-v0.1.apk` from this repository's [Releases](https://github.com/erickmendes22/iss_android/releases). Version **0.1**, Android version code **8**, package `com.daedalus.iss.bionic`.
 
 - Android 11 or newer, ARM64 and a compatible Vulkan GPU/driver.
 - Snapdragon/Adreno is the primary target; other GPU families have not been validated.
@@ -25,6 +25,8 @@ English is the default language. Select Portuguese in **Settings → Language**.
 
 ## Features
 
+- Optional Fullscreen toggle on Home (off by default) and Android game classification.
+- Native PCM audio mixer feeding Android AudioTrack at fixed s16 stereo / 48 kHz.
 - inFAMOUS-themed launcher and in-game menu, opened from the left edge or Back/Guide.
 - 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
 - Bundled Turnip Gen8 V38 Patched for Adreno 8xx and Turnip v27.0.0-R1 for Adreno 6xx/7xx; custom driver ZIP import.

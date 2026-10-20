@@ -25,11 +25,9 @@ export TLG_PAD_FILE="$base/android-pad.state"
 export TLG_CONFIG="$base/user/tlg.ini" ISS_CONFIG="$base/user/tlg.ini"
 export TLG_GPU_USER_DIR="$base/user"
 export TLG_AUDIO_FIFO="$base/audio.fifo"
-# Preserve the existing Android AudioTrack FIFO path used by the glibc build.
-# The Bionic probe links SDL3 statically; 'disk' routes its PCM to AudioBridge.
-export SDL_AUDIO_DRIVER=disk SDL_AUDIODRIVER=disk
-export SDL_AUDIO_DISK_OUTPUT_FILE="$base/audio.fifo" SDL_AUDIO_DISK_TIMESCALE=0
-export SDL_AUDIO_FORMAT=S16LE SDL_AUDIO_CHANNELS=2 SDL_AUDIO_FREQUENCY=48000
+# Native AudioOut mixes all ports to AudioBridge's fixed s16/stereo/48 kHz FIFO.
+# SDL remains available for gamepads; no SDL audio device/JNI is used by Bionic.
+unset SDL_AUDIO_DRIVER SDL_AUDIODRIVER SDL_AUDIO_DISK_OUTPUT_FILE SDL_AUDIO_DISK_TIMESCALE
 export TLG_PAD_QUIET=1
 export ISS_PRESENT_SOCKET="$base/present.sock"
 export ISS_SCREEN_W="${ISS_SCREEN_W:-1280}" ISS_SCREEN_H="${ISS_SCREEN_H:-720}"

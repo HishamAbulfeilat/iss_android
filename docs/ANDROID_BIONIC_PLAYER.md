@@ -53,7 +53,20 @@ em Adreno 6xx/7xx. É possível importar um driver ZIP nas opções de vídeo.
 
 ## Atualização para 0.1
 
-O APK usa código interno 7 e mantém pacote/certificado das builds Bionic anteriores.
+O APK usa código interno 8 e mantém pacote/certificado das builds Bionic anteriores.
 Atualize sem limpar os dados para manter saves, drivers importados e configurações.
 A versão glibc permanece separada. O cache de shaders muda automaticamente quando
 necessário; a primeira execução pode recompilar shaders.
+
+## Fullscreen e áudio nativo
+
+Fullscreen fica disponível diretamente na tela inicial e começa desligado. Desligado,
+a imagem fica em 16:9 e as barras do sistema permanecem visíveis. Ligado, oculta as
+barras e usa o ajuste de imagem selecionado nas opções de vídeo.
+
+O aplicativo é classificado como jogo no manifest Android, como o GoW3. A ativação
+da interface de jogos do fabricante usa essa classificação.
+
+AudioOut e Audio3d enviam seus fluxos ao misturador PCM nativo. A saída para o
+AudioBridge é sempre s16 estéreo a 48 kHz, independentemente do formato de cada
+porta do jogo. O log registra a abertura do FIFO e a primeira saída não silenciosa.
