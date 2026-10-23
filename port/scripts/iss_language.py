@@ -1,4 +1,4 @@
-"""Resolve PS4 language IDs using inFAMOUS' own lang_text/audio_*.xpp names.
+"""Resolve PS4 language IDs using inFAMOUS' own lang_<language>_text/audio.xpp names.
 
 Only directory metadata is read. No archive is modified and no missing language
 is synthesized. English is the conservative fallback for incomplete dumps.
@@ -15,7 +15,7 @@ LANGUAGES = {
     'zh_TW': (10, 'chinese'), 'zh': (11, 'chinese_s'),
     'pt_BR': (17, 'brazilian'), 'es_LA': (20, 'latino'), 'fr_CA': (22, 'quebecois'),
 }
-PACKAGE = re.compile(r'^lang_(text|audio)_([a-z_]+?)(_p)?\.xpp$', re.I)
+PACKAGE = re.compile(r'^lang_([a-z_]+?)_(text|audio)(_p)?\.xpp$', re.I)
 
 
 def installed_packages(game):
@@ -37,8 +37,10 @@ def installed_packages(game):
                         pending.append((Path(entry.path), depth + 1))
                     elif entry.is_file(follow_symlinks=False):
                         match = PACKAGE.fullmatch(entry.name)
-                        if match and entry.stat(follow_symlinks=False).st_size > 0:
-                            packages[match[1].lower()].add(match[2].lower())
+                        # _p is a separate patch variant in the executable's
+                        # formatter, not evidence that the base archive exists.
+                        if match and not match[3] and entry.stat(follow_symlinks=False).st_size > 0:
+                            packages[match[2].lower()].add(match[1].lower())
         except OSError:
             continue
     return packages

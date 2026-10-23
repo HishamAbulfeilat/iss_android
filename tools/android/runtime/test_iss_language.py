@@ -25,11 +25,13 @@ class GameLanguageTests(unittest.TestCase):
     def test_real_package_names_nonempty_files_patch_variants_and_no_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             game=Path(tmp);cache=game/'art/cache';cache.mkdir(parents=True)
-            for name in ['lang_text_brazilian.xpp','lang_audio_brazilian_p.xpp']:
+            for name in ['lang_brazilian_text.xpp','lang_brazilian_audio.xpp']:
                 (cache/name).write_bytes(b'archive')
-            (cache/'lang_audio_german.xpp').write_bytes(b'')
-            (cache/'lang_text_german.xpp.bak').write_bytes(b'archive')
-            (cache/'lang_text_german.xpp').symlink_to(cache/'lang_text_brazilian.xpp')
+            (cache/'lang_german_audio.xpp').write_bytes(b'')
+            (cache/'lang_german_text_p.xpp').write_bytes(b'patch only')
+            (cache/'lang_german_audio_p.xpp').write_bytes(b'patch only')
+            (cache/'lang_german_text.xpp.bak').write_bytes(b'archive')
+            (cache/'lang_german_text.xpp').symlink_to(cache/'lang_brazilian_text.xpp')
             packages=installed_packages(game)
             self.assertEqual(packages,{'text':{'brazilian'},'audio':{'brazilian'}})
             env={'ISS_APP_LANGUAGE':'pt_BR','TLG_LANGUAGE':'8'}
