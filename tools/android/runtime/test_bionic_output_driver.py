@@ -87,10 +87,6 @@ public class ImportTest{
  static void reject(byte[] b)throws Exception{try{ImportValidator.validateElf(b);throw new AssertionError("accepted invalid driver");}catch(java.io.IOException expected){}}
  public static void main(String[] args)throws Exception{
   byte[] b=Files.readAllBytes(Paths.get(args[0]));ImportValidator.validateElf(b);
-  if(!AppLanguage.text("English","Português").equals("English"))throw new AssertionError("default language");
-  java.lang.reflect.Field field=AppLanguage.class.getDeclaredField("portuguese");field.setAccessible(true);field.setBoolean(null,true);
-  if(!AppLanguage.text("English","Português").equals("Português"))throw new AssertionError("language switch");
-  field.setBoolean(null,false);
   byte[] bad=b.clone();bad[18]=62;reject(bad);bad=b.clone();bad[216]='X';reject(bad);
   bad=b.clone();bad[4]=1;reject(bad);bad=b.clone();bad[198]=0;reject(bad);reject(new byte[0]);
  }
@@ -99,9 +95,7 @@ public class ImportTest{
             actual=(JAVA/'BionicDriverSettings.java').read_text()
             validator=actual[actual.index(' static void validateElf('):actual.index(' private static void importZip(')]
             (p/'ImportValidator.java').write_text('package ro.cobrabm.fexdroid; import java.io.*; import java.nio.*; final class ImportValidator {'+validator+'}')
-            language=(JAVA/'AppLanguage.java').read_text()
-            method=language[language.index(' static String text('):language.index(' static void show(')]
-            (p/'AppLanguage.java').write_text('package ro.cobrabm.fexdroid; final class AppLanguage { private static volatile boolean portuguese;'+method+'}')
+            (p/'AppLanguage.java').write_text('package ro.cobrabm.fexdroid; final class AppLanguage {static String text(String en,String pt){return en;}}')
             compile=subprocess.run(['java','com.sun.tools.javac.Main','-encoding','UTF-8','-d',temp,str(p/'AppLanguage.java'),str(p/'ImportValidator.java'),str(p/'ImportTest.java')],capture_output=True,text=True)
             self.assertEqual(0,compile.returncode,compile.stderr)
             result=subprocess.run(['java','-ea','-cp',temp,'ro.cobrabm.fexdroid.ImportTest',str(p/'driver.so')],capture_output=True,text=True)

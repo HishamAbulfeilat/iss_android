@@ -31,7 +31,7 @@ The Bionic APK updates the previous Bionic builds using the same package and sig
 3. If needed, install the matching update PKG into the selected game folder.
 4. Choose the settings below, then tap **PLAY**. Driver and resolution changes apply on the next game start.
 
-English is the default language. Select Portuguese in **Settings → Language**.
+Language defaults to **Automatic**, following the phone language with English fallback. **Settings → Language** also offers English, Portuguese, Spanish, French, German, Italian, Russian, Japanese, Korean and simplified Chinese. The game follows the selection on its next start when both its text and audio packages are installed; otherwise it uses English. Untranslated technical messages use English.
 
 ## Settings layout
 
@@ -40,7 +40,7 @@ English is the default language. Select Portuguese in **Settings → Language**.
 | Home → Video | The only Fullscreen switch; disabled by default. Off uses automatic 16:9 and disables mode selection. On enables stretch or proportional filling with cropped edges. Android system bars remain hidden during gameplay in both cases. |
 | Home → FPS and VSync | 30 / 60 / 120 / 240 FPS targets and VSync. |
 | Home → Bloodframe | Frame-generation settings. |
-| Patches | Original 1080p, 720p or 900p resolution; motion blur, depth of field and depth blur patches for CUSA00004 01.00. Output resolution follows the selected resolution patch; there is no separate output-resolution selector. |
+| Patches | Original 1080p, 720p or 900p resolution; motion blur, depth of field and depth blur signature-validated patches for CUSA00004/CUSA00223/CUSA00263; the supplied regional executable is also recognized across APP_VER values. Output resolution follows the selected resolution patch; there is no separate output-resolution selector. |
 | Settings → Vulkan driver | Automatic GPU detection, bundled or system drivers, and driver ZIP import. |
 | Settings | Language, HUD, controls, save import/export, log export and Lossless.dll import. |
 
@@ -52,7 +52,7 @@ English is the default language. Select Portuguese in **Settings → Language**.
 - 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
 - Bundled Turnip Gen8 V38 Patched for Adreno 8xx and Turnip v27.0.0-R1 for Adreno 6xx/7xx; custom driver ZIP import.
 - Bloodframe frame generation, configured separately from the game's source FPS. Import your own `Lossless.dll` to use it.
-- Configurable HUD and inFAMOUS-themed touch controls; optional draggable swipepad, physical controllers, incremental D-pad swipes and a two-finger TOUCH action. Automatic input routing reads the game menu lifecycle on matching executables; AUTO/MENU/GAME and L1+R1+Start provide an override.
+- Configurable HUD and inFAMOUS-themed Mobile action controls (default), with drag-to-look camera and an optional Classic controller layout. Each layout saves its positions separately; optional draggable swipepad, physical controllers, incremental D-pad swipes and a two-finger TOUCH action. Automatic input routing reads the game menu lifecycle on matching executables; AUTO/MENU/GAME and L1+R1+Start provide an override.
 - Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
 - Direct PKG installation, save import/export and log export.
 

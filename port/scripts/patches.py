@@ -73,10 +73,20 @@ GAMES=[({'CUSA01623'},PATCHES_DIR/'God_of_War_III_Remastered.xml','01.02',
         'd85c8135d330c3b601bf5dc3f1dd86bd6119fb8a9fce372bed2c9785f9a79299'),
        # Mask-only patches: every pattern is required to match a UNIQUE place in
        # CUSA00004 v01.00's own executable PT_LOAD before any write is allowed.
-       ({'CUSA00004'},PATCHES_DIR/'InfamousSecondSon.xml','01.00',None)]
+       ({'CUSA00004','CUSA00223','CUSA00263'},PATCHES_DIR/'InfamousSecondSon.xml','01.00',None)]
 # Recognized builds without patch support yet, so the launcher can name them instead of a generic
 # mismatch. The full 01.02 update has this eboot for both CUSA01623 and CUSA01715.
 UNPORTED_BUILDS={'6e72330e9092e5164049b865e5568f2d450904001a73fe0a2f4b39194c195b3c':'full 01.02 update'}
+# Regional 1.07 executable supplied for validation. The XML retains its original
+# revision; unique masks are still checked against the linked executable at boot.
+ISS_VERIFIED_EBOOTS={'2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab'}
+
+def profile_version_matches(game, profile):
+    if game_app_version(game)==profile[2]:
+        return True
+    return (profile[1].name=='InfamousSecondSon.xml' and
+            eboot_sha256(game) in ISS_VERIFIED_EBOOTS)
+
 DMEM_RETAIL_MB=5056  # runtime_memory.c POOL_SIZE default
 
 
@@ -118,7 +128,7 @@ def game_patchable(game):
     if not game:
         return False
     profile=game_profile(game_title_id(game))
-    return bool(profile) and game_app_version(game)==profile[2] and eboot_matches(game,profile)
+    return bool(profile) and profile_version_matches(game,profile) and eboot_matches(game,profile)
 
 
 # God of War III notes: the texture fix and the resolution patches both resize the video arena;
@@ -229,7 +239,7 @@ def main():
     # The patches are byte writes at the addresses of one game build: on another they would
     # corrupt code, so such a game runs unpatched.
     version=game_app_version(a.game_dir)
-    if version!=needed and not os.environ.get('TLG_FORCE_PATCHES'):
+    if not profile_version_matches(a.game_dir,profile) and not os.environ.get('TLG_FORCE_PATCHES'):
         write_patches(a.out,[])
         print(f'Patches: game version {version}, {xml.name} is for {needed}: none applied')
         return
@@ -243,7 +253,7 @@ def main():
         return
     names=selected_patches(xml,needed,a.extra,os.environ.get('TLG_PATCHES_ONLY')=='1')
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
-    if title == 'CUSA00004':
+    if xml.name == 'InfamousSecondSon.xml':
         from iss_mask_patches import compile_masks
         writes=compile_masks(xml,names,needed,a.out/'boot-linked.bin',a.out/'eboot.elf')
     else:

@@ -14,7 +14,7 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
-/** Translucent PlayStation-style controls with a persistent, draggable layout. */
+/** Native mobile action layout and optional classic pad, each with its own saved positions. */
 final class TouchControllerOverlay extends View {
     private static final String[] NAMES={
         "l2","l1","touchpad","options","r1","r2",
@@ -27,6 +27,33 @@ final class TouchControllerOverlay extends View {
         {1120,405},{1190,475},{1120,545},{1050,475},
         {320,612},{420,614},{860,614},{960,612},{492,105},{640,568}
     };
+    private static final float[][] MOBILE={
+        {955,335},{925,600},{640,97},{1180,90},{1040,515},{1190,355},
+        {95,302},{40,357},{150,357},{95,412},
+        {1080,420},{1035,630},{1160,620},{1190,490},
+        {180,575},{365,645},{445,645},{810,460},{465,97},{640,600}
+    };
+    private boolean mobile;
+    private int cameraX=128,cameraY=128;
+    private long cameraEpoch;
+    private void cameraMotion(float dx,float dy){
+        cameraX=axis(Math.max(-1f,Math.min(1f,dx/35f)));
+        cameraY=axis(Math.max(-1f,Math.min(1f,dy/35f)));
+        final long epoch=++cameraEpoch;
+        // A drag supplies camera motion, not a latched right stick. Stop after
+        // the last motion event even while the finger remains on the screen.
+        postDelayed(()->{if(cameraEpoch==epoch){cameraX=cameraY=128;publish();}},60);
+    }
+    private String layoutKey(String property,String name){return (mobile?"mobile_":"")+"overlay_"+property+"_"+name;}
+    private void loadLayout(){
+        float[][] defaults=mobile?MOBILE:DEFAULT;
+        for(int i=0;i<NAMES.length;i++){
+            String name=NAMES[i];
+            sizes.put(name,Math.max(0.6f,Math.min(1.6f,preferences.getFloat(layoutKey("size",name),1f))));
+            centers.put(name,new PointF(preferences.getFloat(layoutKey("x",name),defaults[i][0]),
+                preferences.getFloat(layoutKey("y",name),defaults[i][1])));
+        }
+    }
     private final PadBridge pad;
     private final SharedPreferences preferences;
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -44,7 +71,11 @@ final class TouchControllerOverlay extends View {
     private float size(String name){Float value=sizes.get(name);return value==null?1f:value;}
     private Runnable onEditDone;
     private boolean swipepadEnabled;
-    void applyPreferences(){release();swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);invalidate();}
+    void applyPreferences(){
+        release();swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
+        boolean next=preferences.getBoolean("mobile_controls",true);
+        if(mobile!=next){mobile=next;loadLayout();}invalidate();
+    }
 
     TouchControllerOverlay(Context context,PadBridge pad,boolean mouseEnabled) {
         super(context); this.pad=pad; this.mouseEnabled=mouseEnabled;
@@ -52,13 +83,8 @@ final class TouchControllerOverlay extends View {
         preferences=context.getSharedPreferences("iss",Context.MODE_PRIVATE);
         guideMarker=new java.io.File(context.getFilesDir(),"issport/android-pad.state.guide");
         swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
-        for (int i=0;i<NAMES.length;i++) {
-            String name=NAMES[i];
-            sizes.put(name,Math.max(0.6f,Math.min(1.6f,preferences.getFloat("overlay_size_"+name,1f))));
-            centers.put(name,new PointF(preferences.getFloat("overlay_x_"+name,DEFAULT[i][0]),
-                                        preferences.getFloat("overlay_y_"+name,DEFAULT[i][1])));
-        }
-        setContentDescription(AppLanguage.text("On-screen PlayStation controller", "Controle PlayStation na tela"));
+        mobile=preferences.getBoolean("mobile_controls",true);loadLayout();
+        setContentDescription(AppLanguage.text("On-screen controller", "Controle na tela"));
     }
     private PointF center(String name) { return centers.get(name); }
     // The 1280x720 layout drawn at one scale in the centred 16:9 area, as the game (MainActivity):
@@ -81,20 +107,21 @@ final class TouchControllerOverlay extends View {
     }
     private String hit(float x,float y) {
         PointF dpad=dpadCenter();
-        if (!editing && distance(x,y,dpad)<112 && distance(center("up").x,center("up").y,dpad)<115 &&
+        if (!editing && distance(x,y,dpad)<(mobile?80:112) && distance(center("up").x,center("up").y,dpad)<115 &&
             distance(center("left").x,center("left").y,dpad)<115 &&
             distance(center("right").x,center("right").y,dpad)<115 &&
             distance(center("down").x,center("down").y,dpad)<115) return "dpad";
         String winner=null; float best=Float.MAX_VALUE;
         for (String name:NAMES) {
+            if(mobile&&!editing&&name.equals("rightstick"))continue;
             if(name.equals("swipepad")&&(!swipepadEnabled||(!editing&&pad.isMenuMode()&&!pad.isAutomaticMode())))continue;
             PointF p=center(name);
             float dx=Math.abs(x-p.x)/size(name),dy=Math.abs(y-p.y)/size(name);
             boolean inside=rectangle(name) ? dx<(name.equals("swipepad")?120:name.equals("touchpad") ? 72 : 62) && dy<(name.equals("swipepad")?59:38)
-                    : distance(x,y,p)/size(name)<(stick(name) ? 70 : name.equals("l3") || name.equals("r3") ? 39 : 48);
+                    : distance(x,y,p)/size(name)<(stick(name) ? 70 : name.equals("l3") || name.equals("r3") ? (mobile?30:39) : mobile&&(name.equals("up")||name.equals("down")||name.equals("left")||name.equals("right"))?30:48);
             if (inside && distance(x,y,p)<best) { best=distance(x,y,p); winner=name; }
         }
-        return winner;
+        return winner==null&&mobile&&!editing&&x>640&&y>170&&!guideMarker.isFile()?"rightstick":winner;
     }
     private static int axis(float v) { return Math.max(0,Math.min(255,Math.round((v+1f)*127.5f))); }
 
@@ -118,9 +145,9 @@ final class TouchControllerOverlay extends View {
                 lx=axis(Math.max(-1f,Math.min(1f,(p.x-c.x)/(56f*size(control)))));
                 ly=axis(Math.max(-1f,Math.min(1f,(p.y-c.y)/(56f*size(control)))));
             } else if (control.equals("rightstick")) {
-                right=true; PointF c=center(control);
-                rx=axis(Math.max(-1f,Math.min(1f,(p.x-c.x)/(56f*size(control)))));
-                ry=axis(Math.max(-1f,Math.min(1f,(p.y-c.y)/(56f*size(control)))));
+                right=true;PointF c=center(control);
+                rx=mobile?cameraX:axis(Math.max(-1f,Math.min(1f,(p.x-c.x)/(56f*size(control)))));
+                ry=mobile?cameraY:axis(Math.max(-1f,Math.min(1f,(p.y-c.y)/(56f*size(control)))));
             } else if(control.equals("swipepad")) {
                 if(!finger&&(pad.isAutomaticMode()||!pad.isMenuMode())){
                     PointF c=center(control);float s=size(control);
@@ -141,7 +168,7 @@ final class TouchControllerOverlay extends View {
         pad.virtual(pressed,lx,ly,rx,ry,left,right,l2,r2);
         invalidate();
     }
-    void release() { controls.clear(); positions.clear(); publish(); }
+    void release() { controls.clear(); positions.clear();cameraEpoch++;cameraX=cameraY=128;publish(); }
     void edit(Runnable done) { release(); editing=true; onEditDone=done; invalidate(); }
     private void finishEdit() {
         editPointer=-1; dragged=null; pinchDistance=0; editing=false; invalidate();
@@ -151,9 +178,9 @@ final class TouchControllerOverlay extends View {
     void resetLayout() {
         SharedPreferences.Editor editor=preferences.edit();
         for (int i=0;i<NAMES.length;i++) {
-            String name=NAMES[i]; centers.get(name).set(DEFAULT[i][0],DEFAULT[i][1]);
-            sizes.put(name,1f);editor.remove("overlay_size_"+name);
-            editor.remove("overlay_x_"+name).remove("overlay_y_"+name);
+            String name=NAMES[i]; float[][] defaults=mobile?MOBILE:DEFAULT;centers.get(name).set(defaults[i][0],defaults[i][1]);
+            sizes.put(name,1f);editor.remove(layoutKey("size",name));
+            editor.remove(layoutKey("x",name)).remove(layoutKey("y",name));
         }
         editor.apply(); release(); invalidate();
     }
@@ -180,12 +207,12 @@ final class TouchControllerOverlay extends View {
                     Math.max(36-barY,Math.min(684+barY,layoutY(e,index))));
                 invalidate();
             } else if(action==MotionEvent.ACTION_POINTER_UP && e.getPointerId(at)!=editPointer && dragged!=null){
-                preferences.edit().putFloat("overlay_size_"+dragged,size(dragged)).apply();pinchDistance=0;
+                preferences.edit().putFloat(layoutKey("size",dragged),size(dragged)).apply();pinchDistance=0;
             } else if ((action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_POINTER_UP)
                        && id==editPointer && dragged!=null) {
                 PointF p=center(dragged);
-                preferences.edit().putFloat("overlay_size_"+dragged,size(dragged)).putFloat("overlay_x_"+dragged,p.x)
-                    .putFloat("overlay_y_"+dragged,p.y).apply();
+                preferences.edit().putFloat(layoutKey("size",dragged),size(dragged)).putFloat(layoutKey("x",dragged),p.x)
+                    .putFloat(layoutKey("y",dragged),p.y).apply();
                 editPointer=-1; dragged=null;
             }
             return true;
@@ -194,7 +221,7 @@ final class TouchControllerOverlay extends View {
         if (action==MotionEvent.ACTION_DOWN || action==MotionEvent.ACTION_POINTER_DOWN) {
             float x=layoutX(e,at),y=layoutY(e,at);
             String name=hit(x,y);
-            if("swipepad".equals(name))for(int i=0;i<controls.size();i++)if(name.equals(controls.valueAt(i)))return true;
+            if(("swipepad".equals(name)||stick(name==null?"":name)))for(int i=0;i<controls.size();i++)if(name.equals(controls.valueAt(i)))return true;
             if("inputmode".equals(name)){release();pad.cycleInputMode();invalidate();return true;}
             if("options".equals(name)){release();pad.gameMenuButton();}
             // Outside the virtual controls, touches reach the SDL guide only
@@ -203,13 +230,19 @@ final class TouchControllerOverlay extends View {
             if (name==null && !mouseEnabled && !guideMarker.isFile()) return true;
             controls.put(id,name==null ? "mouse" : name);
             positions.put(id,new PointF(x,y));
+            if(mobile&&"rightstick".equals(name)){cameraEpoch++;cameraX=cameraY=128;}
         } else if (action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_POINTER_UP) {
-            controls.remove(id); positions.remove(id);
+            if(mobile&&"rightstick".equals(controls.get(id))){cameraEpoch++;cameraX=cameraY=128;}
+            controls.remove(id);positions.remove(id);
         }
         if (action==MotionEvent.ACTION_MOVE) {
             for (int i=0;i<e.getPointerCount();i++) {
                 PointF p=positions.get(e.getPointerId(i));
-                if (p!=null) p.set(layoutX(e,i),layoutY(e,i));
+                if (p!=null){
+                    float x=layoutX(e,i),y=layoutY(e,i);
+                    if(mobile&&"rightstick".equals(controls.get(e.getPointerId(i))))cameraMotion(x-p.x,y-p.y);
+                    p.set(x,y);
+                }
             }
         }
         publish(); return true;
@@ -265,12 +298,30 @@ final class TouchControllerOverlay extends View {
         c.drawCircle(knobX,knobY,28,paint);
         paint.setColor(0xff15202c); paint.setTypeface(Typeface.DEFAULT_BOLD);
         paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(22);
-        c.drawText(name.equals("leftstick") ? "L" : "R",knobX,
+        c.drawText(mobile?"":name.equals("leftstick") ? "L" : "R",knobX,
                    knobY-(paint.ascent()+paint.descent())/2,paint);
         c.restore();
     }
     @Override protected void onDraw(Canvas c) {
         super.onDraw(c); c.save(); c.translate(offsetX(),offsetY()); c.scale(scale(),scale());
+        if(mobile){
+            action(c,"l2","◎",AppLanguage.text("Aim","Mirar"));
+            action(c,"r2","⊕",AppLanguage.text("Fire","Atirar"));
+            action(c,"l1","ϟ",AppLanguage.text("Power","Poder"));
+            action(c,"r1","✦",AppLanguage.text("Special","Especial"));
+            action(c,"cross","↥",AppLanguage.text("Jump","Pular"));
+            action(c,"circle","»",AppLanguage.text("Dash","Esquivar"));
+            action(c,"square","✊",AppLanguage.text("Melee","Corpo a corpo"));
+            action(c,"triangle","♨",AppLanguage.text("Drain","Absorver"));
+            rectangle(c,"options",88,"Ⅱ");rectangle(c,"touchpad",110,AppLanguage.text("Touch","Toque"));
+            rectangle(c,"inputmode",100,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
+            circle(c,"up",26,"▲",0xaaffb59b);circle(c,"left",26,"◀",0xaaffb59b);
+            circle(c,"right",26,"▶",0xaaffb59b);circle(c,"down",26,"▼",0xaaffb59b);
+            drawStick(c,"leftstick");
+            if(editing)drawStick(c,"rightstick");
+            circle(c,"l3",26,"L3",0xaaffb59b);circle(c,"r3",26,"R3",0xaaffb59b);
+            if(swipepadEnabled)drawSwipepad(c);
+        }else{
         rectangle(c,"l2",108,"L2"); rectangle(c,"l1",108,"L1");
         rectangle(c,"r1",108,"R1"); rectangle(c,"r2",108,"R2");
         rectangle(c,"touchpad",126,"TOUCH"); rectangle(c,"options",108,"START");
@@ -282,6 +333,7 @@ final class TouchControllerOverlay extends View {
         circle(c,"cross",39,"×",0xff88aaff); circle(c,"square",39,"□",0xffd6a0ce);
         drawStick(c,"leftstick"); drawStick(c,"rightstick");
         circle(c,"l3",29,"L3",0xffa0aec0); circle(c,"r3",29,"R3",0xffa0aec0);
+        }
         if (editing) {
             paint.setStyle(Paint.Style.FILL); paint.setColor(0xcc15171d);
             c.drawRoundRect(548,9,732,62,13,13,paint);
@@ -292,6 +344,18 @@ final class TouchControllerOverlay extends View {
             c.drawText(AppLanguage.text("DONE", "CONCLUIR"),640,36-(paint.ascent()+paint.descent())/2,paint);
         }
         c.restore();
+    }
+    private void action(Canvas c,String name,String icon,String label){
+        PointF p=center(name);c.save();c.scale(size(name),size(name),p.x,p.y);
+        boolean down=pressed.contains(name);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(down?0xccb93526:0x66301920);
+        c.drawCircle(p.x,p.y,42,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setColor(down?0xffffc18a:0xbbff8054);
+        c.drawCircle(p.x,p.y,42,paint);
+        paint.setStyle(Paint.Style.FILL);paint.setColor(0xfffce3d5);paint.setTypeface(Typeface.DEFAULT_BOLD);
+        paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(30);c.drawText(icon,p.x,p.y+5,paint);
+        paint.setTextSize(12);if(paint.measureText(label)>80)paint.setTextSize(12*80/paint.measureText(label));
+        c.drawText(label,p.x,p.y+26,paint);c.restore();
     }
     private void drawSwipepad(Canvas c){
         PointF p=center("swipepad");float s=size("swipepad");c.save();c.scale(s,s,p.x,p.y);

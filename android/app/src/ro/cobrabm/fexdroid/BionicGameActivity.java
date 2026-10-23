@@ -99,6 +99,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   ProcessBuilder p=new ProcessBuilder(command).redirectErrorStream(true);
   Map<String,String> e=p.environment();e.put("FXD_FILES",files);
   e.put("ISS_GAME_DIR",getIntent().getStringExtra("game_dir"));
+  e.put("ISS_APP_LANGUAGE",AppLanguage.gameLanguage());
   e.put("ISS_BIONIC","1");e.put("ISS_ANDROID_INPUT","1");
   e.put("ISS_BIONIC_DRIVER",BionicDriverSettings.selection(this));
   e.put("ISS_CUSTOM_DRIVER",BionicDriverSettings.customLibrary(this).getPath());
@@ -170,7 +171,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
       +AppLanguage.text("✕ (X): shake the can.\n\n", "✕ (X): sacudir a lata.\n\n")
       +AppLanguage.text("R2: spray. Aim with the left stick; small movements improve precision.\n\n", "R2: pintar. Mire com o analógico esquerdo; movimentos pequenos dão mais precisão.\n\n")
       +AppLanguage.text("L3 + R3 again: return to walking.", "L3 + R3 novamente: voltar a andar."))
-   .setPositiveButton("Entendi",(dialog,which)->{})
+   .setPositiveButton(AppLanguage.text("Done","Entendi"),(dialog,which)->{})
    .create();
   graffitiGuideDialog.setOnDismissListener(dialog->{
    if(marker.exists()&&!marker.delete())record("Could not delete graffiti guide marker");

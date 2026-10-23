@@ -4,7 +4,8 @@ import sys, struct, tempfile, unittest, xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT/'port/scripts'))
 from iss_mask_patches import compile_masks,mask_tokens
-from patches import game_profile,selected_patches
+from patches import game_profile,selected_patches,profile_version_matches
+from unittest.mock import patch
 XML=ROOT/'port/patches/InfamousSecondSon.xml'
 
 def fixture(folder,patterns):
@@ -32,6 +33,15 @@ class BachataPatchTests(unittest.TestCase):
         self.assertEqual(selected_patches(XML,'01.00',''),[])
         with self.assertRaisesRegex(ValueError,'choose one resolution'):
             selected_patches(XML,'01.00','Render resolution 1280x720;Render resolution 1600x900')
+    def test_regions_and_verified_executable_version_gate(self):
+        expected=game_profile('CUSA00004')
+        for title in ('CUSA00223','CUSA00263'):
+            self.assertEqual(game_profile(title),expected)
+        self.assertIsNone(game_profile('CUSA01624'))
+        with patch('patches.game_app_version',return_value='01.07'),patch('patches.eboot_sha256',return_value='2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab'):
+            self.assertTrue(profile_version_matches('game',expected))
+        with patch('patches.game_app_version',return_value='01.07'),patch('patches.eboot_sha256',return_value='different executable'):
+            self.assertFalse(profile_version_matches('game',expected))
     def test_compile_all_five_synthetic_signatures(self):
         for item in ET.parse(XML).getroot().findall('Metadata'):
             sigs=[x.get('Address') for x in item.findall('.//Line')]

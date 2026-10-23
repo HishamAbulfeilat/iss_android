@@ -114,6 +114,8 @@ def main():
     user = data / "user"
     user.mkdir(parents=True, exist_ok=True)
     setup_environment(env, user)
+    from iss_language import configure_language
+    configure_language(env, game)
     readbacks = env.get("TLG_READBACKS", env["ISS_READBACKS"])
     mode = {"0": "Disabled", "1": "Relaxed", "2": "Precise"}.get(readbacks, readbacks)
     print(f"ISS boot defaults: inFAMOUS preset, readbacks={mode} ({readbacks}), temporal upscale off", flush=True)

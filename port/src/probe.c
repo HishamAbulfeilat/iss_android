@@ -636,7 +636,7 @@ static void install_infamous_menu_watch(const char *app0,Segment *segments,uint6
     char path[4096],serial[32]="";
     snprintf(path,sizeof(path),"%s/sce_sys/param.sfo",app0?app0:".");
     sfo_value(path,"TITLE_ID",serial,sizeof(serial),NULL);
-    if(strcmp(serial,"CUSA00004")&&strcmp(serial,"CUSA00223"))return;
+    if(strcmp(serial,"CUSA00004")&&strcmp(serial,"CUSA00223")&&strcmp(serial,"CUSA00263"))return;
     if(!mapped(segments,count,ISS_MENU_OPEN_SITE,sizeof(iss_menu_open_signature)) ||
        !mapped(segments,count,ISS_MENU_CLOSE_SITE,sizeof(iss_menu_close_signature)) ||
        !mapped(segments,count,ISS_MENU_COUNT_OFFSET,4) || !iss_menu_signatures_match(image,size)){

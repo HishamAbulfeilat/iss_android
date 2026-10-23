@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Patch><TitleID><ID>CUSA00004</ID></TitleID>
+<Patch><TitleID><ID>CUSA00004</ID><ID>CUSA00223</ID><ID>CUSA00263</ID></TitleID>
 <Metadata Title="inFAMOUS Second Son" Name="Render resolution 1280x720" Note="Internal render resolution 1280x720; display output stays 1920x1080 and the UI is unaffected." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="00050000" />
