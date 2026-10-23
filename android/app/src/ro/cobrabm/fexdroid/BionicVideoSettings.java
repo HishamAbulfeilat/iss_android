@@ -11,6 +11,16 @@ final class BionicVideoSettings {
   String patch=prefs.getString("internal_res","native");
   return "720p".equals(patch)?"1280x720":"900p".equals(patch)?"1600x900":"1920x1080";
  }
+ static String internalPatchName(String key){
+  switch(key){
+   case "720p":return "Render resolution 1280x720";
+   case "900p":return "Render resolution 1600x900";
+   case "540p":return "Render resolution 960x540";
+   case "480p":return "Render resolution 854x480";
+   case "360p":return "Render resolution 640x360";
+   default:return null;
+  }
+ }
  static LinearLayout content(Activity activity,int page){
   LinearLayout l=new LinearLayout(activity);l.setOrientation(1);l.setPadding(28,20,28,20);
   android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
@@ -33,13 +43,15 @@ final class BionicVideoSettings {
   if(page!=1){
   TextView patchLabel=new TextView(activity);patchLabel.setText(AppLanguage.text("Internal patches — verified executable", "Patches internos — executável validado"));patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
   Spinner resolutionPatch=new Spinner(activity);
-  String[] modes={AppLanguage.text("Original (no patch)", "Original (sem patch)"),AppLanguage.text("1280 × 720 internal (720p)", "1280 × 720 interno (720p)"),AppLanguage.text("1600 × 900 internal (900p)", "1600 × 900 interno (900p)")};
+  String[] keys={"native","720p","900p","540p","480p","360p"};
+  String[] modes={AppLanguage.text("Original (no patch)", "Original (sem patch)"),AppLanguage.text("1280 × 720 internal (720p)", "1280 × 720 interno (720p)"),AppLanguage.text("1600 × 900 internal (900p)", "1600 × 900 interno (900p)"),AppLanguage.text("960 × 540 internal (540p, experimental)", "960 × 540 interno (540p, experimental)"),AppLanguage.text("854 × 480 internal (480p, experimental)", "854 × 480 interno (480p, experimental)"),AppLanguage.text("640 × 360 internal (360p, experimental)", "640 × 360 interno (360p, experimental)")};
   resolutionPatch.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,modes));
   String selected=prefs.getString("internal_res","native");
-  resolutionPatch.setSelection("720p".equals(selected)?1:"900p".equals(selected)?2:0);
+  int selectedIndex=0;for(int i=0;i<keys.length;i++)if(keys[i].equals(selected))selectedIndex=i;
+  resolutionPatch.setSelection(selectedIndex);
   resolutionPatch.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
    public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
-    prefs.edit().putString("internal_res",pos==1?"720p":pos==2?"900p":"native").apply();
+    if(pos>=0&&pos<keys.length)prefs.edit().putString("internal_res",keys[pos]).apply();
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(resolutionPatch);
@@ -52,6 +64,13 @@ final class BionicVideoSettings {
   CheckBox depth=new CheckBox(activity);depth.setText(AppLanguage.text("Disable Depth Blur", "Desativar Depth Blur"));
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
+
+  CheckBox shadows=new CheckBox(activity);shadows.setText(AppLanguage.text("Disable shadow maps (experimental)", "Desativar mapas de sombras (experimental)"));
+  shadows.setChecked(prefs.getBoolean("patch_shadows",false));
+  shadows.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_shadows",checked).apply());l.addView(shadows);
+  CheckBox beams=new CheckBox(activity);beams.setText(AppLanguage.text("Disable light beams (experimental)", "Desativar fachos de luz (experimental)"));
+  beams.setChecked(prefs.getBoolean("patch_light_beams",false));
+  beams.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_light_beams",checked).apply());l.addView(beams);
 
   }return l;
  }

@@ -1,5 +1,6 @@
 """Strict CUSA00004 01.00 signature-to-image offset compiler (never edits eboot)."""
 from pathlib import Path
+import hashlib
 import mmap
 import struct
 import xml.etree.ElementTree as ET
@@ -77,6 +78,11 @@ def compile_masks(xml, names, version, linked_image, eboot_elf):
     found={m.get('Name'):m for m in root.iter('Metadata') if m.get('AppVer') == version and m.get('AppElf','eboot.bin') == 'eboot.bin'}
     for name in names:
         if name not in found: raise ValueError(f'{name}: missing v{version} patch')
+    verified={found[name].get('ElfSHA256') for name in names if found[name].get('ElfSHA256')}
+    if verified:
+        digest=hashlib.sha256(Path(eboot_elf).read_bytes()).hexdigest()
+        if verified!={digest}:
+            raise ValueError('Selected render patch requires the verified inFAMOUS executable; ELF hash mismatch')
     with Path(linked_image).open('rb') as fh, mmap.mmap(fh.fileno(),0,access=mmap.ACCESS_READ) as blob:
         base,size=image_range(blob)
         executable_regions=executable(eboot_elf)

@@ -89,8 +89,18 @@ porta do jogo. O log registra a abertura do FIFO e a primeira saída não silenc
 
 ### Mobile controls and regional language selection
 
-The default Mobile layout groups actions around the right thumb instead of a row of shoulder buttons. Move with the left stick and drag unused space on the right to look; the optional Classic layout retains its original saved positions. Both layouts preserve the same PadBridge mappings, swipepad, physical controller and native automatic menu detection. Each layout has independent move/resize/reset preferences.
+The default Mobile layout uses the approved Direto arrangement: aim, power and spray on the upper left, camera drag and combat actions on the right. Movement floats under the left thumb; the fire button also supports camera drag. The optional rounded swipepad sits at the top, with tap/hold click inside and no duplicate Touch button. Auxiliary controls include sensor-mode activation for graffiti; hold Spray on the left and drag on the right to paint. Classic left-stick sensor aiming remains available. The optional Classic layout retains its original saved positions. Both layouts preserve the same PadBridge mappings, swipepad, physical controller and native automatic menu detection. Each layout has independent move/resize/reset preferences.
 
-Settings → Language defaults to Automatic. Supported UI languages: English, Portuguese, Spanish, French, German, Italian, Russian, Japanese, Korean and simplified Chinese. Unsupported system languages resolve to English; explicit choices override the system. Technical diagnostics without a translation retain English. On next boot, the launcher scans only metadata under art/ for the executable's lang_<language>_text.xpp and lang_<language>_audio.xpp names. A locale requires both packages; missing resources select PS4 English (1). ISS_LANGUAGE and TLG_LANGUAGE are set together so an inherited environment cannot override the UI choice.
+Settings → Language defaults to Automatic. Supported UI languages: English, Portuguese, Spanish, French, German, Italian, Russian, Japanese, Korean and simplified Chinese. Unsupported system languages resolve to English; explicit choices override the system. Technical diagnostics without a translation retain English. On next boot, the launcher scans only metadata under art/ for lang_<language>_text.xpps and lang_<language>_audio.xpps names (also accepting .xpp). Language-specific PlayGo metadata can identify archive layouts without visible packages. A visible locale requires both base text and audio packages; missing resources select PS4 English (1). ISS_LANGUAGE and TLG_LANGUAGE are set together so an inherited environment cannot override the UI choice.
 
 The existing mask catalog now lists CUSA00004, CUSA00223 and CUSA00263. The supplied eboot SHA-256 `2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab` permits the regional APP_VER mismatch; other mismatched builds remain rejected. Every selected signature still must match exactly once in executable PT_LOAD ranges. The game binary is never modified or distributed.
+
+### Optional render patches
+
+Patches includes experimental 960x540, 854x480 and 640x360 internal rendering,
+plus independent switches to disable shadow-map draws and spotlight light beams.
+Game output remains 1920x1080. The shadow switch preserves the shared depth
+pre-pass and forces the engine's own clear for cached maps. The beam switch
+preserves the main lighting and final composition. Both render switches require
+the exact validated ELF hash as well as unique masks and stay off by default.
+Binary execution and conflict checks do not replace on-device visual validation.

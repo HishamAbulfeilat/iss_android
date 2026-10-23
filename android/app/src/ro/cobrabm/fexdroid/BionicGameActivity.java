@@ -114,11 +114,13 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
   String resolution=prefs.getString("internal_res","native");
-  if("720p".equals(resolution))patches.add("Render resolution 1280x720");
-  else if("900p".equals(resolution))patches.add("Render resolution 1600x900");
+  String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
+  if(resolutionPatch!=null)patches.add(resolutionPatch);
   if(prefs.getBoolean("patch_motion_blur",false))patches.add("Disable motion blur");
   if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
+  if(prefs.getBoolean("patch_shadows",false))patches.add("Disable shadow maps");
+  if(prefs.getBoolean("patch_light_beams",false))patches.add("Disable light beams");
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
   e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");
   e.put("TLG_OUTPUT_RES",outputResolution);

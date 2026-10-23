@@ -2,6 +2,7 @@
 from pathlib import Path
 import importlib.util
 import os
+import struct
 import shutil
 import subprocess
 import sys
@@ -10,7 +11,7 @@ import unittest
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT/'port/scripts'))
-from iss_language import configure_language,installed_packages,resolve_language,LANGUAGES
+from iss_language import configure_language,installed_packages,resolve_language,LANGUAGES,playgo_languages
 
 class GameLanguageTests(unittest.TestCase):
     def test_all_installed_languages_and_incomplete_fallback(self):
@@ -39,6 +40,34 @@ class GameLanguageTests(unittest.TestCase):
             self.assertEqual(env['TLG_LANGUAGE'],'17');self.assertEqual(env['ISS_LANGUAGE'],'17')
             env['ISS_APP_LANGUAGE']='de';configure_language(env,game)
             self.assertEqual(env['TLG_LANGUAGE'],'1')
+
+    def test_real_xpps_extensions_do_not_force_brazilian_to_english(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game=Path(tmp);cache=game/'art/cache';cache.mkdir(parents=True)
+            for name in ('lang_brazilian_text.xpps','lang_brazilian_audio.xpps','lang_brazilian_text_p.xpps','lang_brazilian_audio_p.xpps'):
+                (cache/name).write_bytes(b'archive')
+            packages=installed_packages(game)
+            self.assertEqual(resolve_language('pt_BR',packages)[:2],(17,'pt_BR'))
+            env={'ISS_APP_LANGUAGE':'pt_BR'};configure_language(env,game)
+            self.assertEqual(env['TLG_LANGUAGE'],'17')
+            (cache/'lang_brazilian_audio.xpps').unlink()
+            self.assertEqual(resolve_language('pt_BR',installed_packages(game))[0],1)
+
+    def test_playgo_masks_and_malformed_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game=Path(tmp);system=game/'sce_sys';system.mkdir()
+            path=system/'playgo-chunk.dat'
+            for endian in ('little','big'):
+                data=bytearray(296);data[:4]=b'plgo';struct.pack_into('<H',data,10,3);struct.pack_into('<I',data,192,200)
+                for index,mask in enumerate((0,(1<<64)-1,(1<<(63-17))|(1<<(63-1)))):
+                    data[200+index*32+16:200+index*32+24]=mask.to_bytes(8,endian)
+                path.write_bytes(data)
+                self.assertEqual(playgo_languages(game),{1,17})
+                self.assertEqual(resolve_language('pt_BR',{'text':set(),'audio':set()},playgo_languages(game))[0],17)
+                # Metadata must not excuse a visibly incomplete language pair.
+                self.assertEqual(resolve_language('pt_BR',{'text':{'brazilian'},'audio':set()},{17})[0],1)
+            for bad in (b'',b'plgo',data[:210],b'bad!'+data[4:]):
+                path.write_bytes(bad);self.assertEqual(playgo_languages(game),set())
 
     @unittest.skipUnless(shutil.which('java'),'Java unavailable')
     def test_android_locale_policy_and_actual_catalog(self):

@@ -1,4 +1,4 @@
-"""Synthetic G3PROBE5 / real Bachata XML smoke tests."""
+"""Synthetic G3PROBE5 / inFAMOUS XML validation."""
 from pathlib import Path
 import sys, struct, tempfile, unittest, xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[3]
@@ -8,11 +8,16 @@ from patches import game_profile,selected_patches,profile_version_matches
 from unittest.mock import patch
 XML=ROOT/'port/patches/InfamousSecondSon.xml'
 
-def fixture(folder,patterns):
+def fixture(folder,patterns,merge_contained=False):
     code=bytearray(b'\xcc'*40)
+    if merge_contained:
+        patterns=sorted(patterns,key=lambda x:len(mask_tokens(x)),reverse=True)
     for item in patterns:
+        payload=bytes(0x90 if x is None else x for x in mask_tokens(item))
+        if merge_contained and payload in code:
+            continue
         code.extend(b'\xcc'*19)
-        code.extend(bytes(0x90 if x is None else x for x in mask_tokens(item)))
+        code.extend(payload)
     code.extend(b'\xcc'*40)
     elf=bytearray(512)
     struct.pack_into('<Q',elf,0x20,64)
@@ -24,11 +29,11 @@ def fixture(folder,patterns):
     hdr+=struct.pack('<Q',0)+struct.pack('<Q',0)+struct.pack('<3Q',0,len(code),5)
     (folder/'boot-linked.bin').write_bytes(hdr+code)
 
-class BachataPatchTests(unittest.TestCase):
+class InfamousPatchTests(unittest.TestCase):
     def test_catalog_and_conflicts(self):
         self.assertEqual(game_profile('CUSA00004')[2],'01.00')
         allpatch=ET.parse(XML).getroot().findall('Metadata')
-        self.assertEqual(len(allpatch),5)
+        self.assertEqual(len(allpatch),10)
         self.assertTrue(all(x.get('AppVer')=='01.00' for x in allpatch))
         self.assertEqual(selected_patches(XML,'01.00',''),[])
         with self.assertRaisesRegex(ValueError,'choose one resolution'):
@@ -42,15 +47,28 @@ class BachataPatchTests(unittest.TestCase):
             self.assertTrue(profile_version_matches('game',expected))
         with patch('patches.game_app_version',return_value='01.07'),patch('patches.eboot_sha256',return_value='different executable'):
             self.assertFalse(profile_version_matches('game',expected))
-    def test_compile_all_five_synthetic_signatures(self):
+    def test_compile_all_catalog_signatures(self):
         for item in ET.parse(XML).getroot().findall('Metadata'):
             sigs=[x.get('Address') for x in item.findall('.//Line')]
             with self.subTest(item.get('Name')),tempfile.TemporaryDirectory() as d:
-                path=Path(d);fixture(path,sigs)
-                writes=compile_masks(XML,[item.get('Name')],'01.00',path/'boot-linked.bin',path/'eboot.elf')
+                path=Path(d);fixture(path,sigs,merge_contained=True)
+                catalog=ET.parse(XML)
+                # Synthetic fixtures test signatures independently of the real ELF gate.
+                for meta in catalog.getroot().findall('Metadata'):meta.attrib.pop('ElfSHA256',None)
+                test_xml=path/'catalog.xml';catalog.write(test_xml)
+                writes=compile_masks(test_xml,[item.get('Name')],'01.00',path/'boot-linked.bin',path/'eboot.elf')
                 self.assertEqual(len(writes),len(sigs))
+    def test_render_patches_reject_an_unverified_executable(self):
+        for name in ('Disable shadow maps','Disable light beams'):
+            item=next(x for x in ET.parse(XML).getroot().findall('Metadata') if x.get('Name')==name)
+            self.assertEqual(len(item.get('ElfSHA256')),64)
+            with tempfile.TemporaryDirectory() as d:
+                path=Path(d);fixture(path,[x.get('Address') for x in item.findall('.//Line')])
+                with self.assertRaisesRegex(ValueError,'ELF hash mismatch'):
+                    compile_masks(XML,[name],'01.00',path/'boot-linked.bin',path/'eboot.elf')
+
     def test_fail_closed_when_missing_ambiguous_or_wrong_version(self):
-        item=ET.parse(XML).getroot().findall('Metadata')[2]
+        item=next(x for x in ET.parse(XML).getroot().findall('Metadata') if x.get('Name')=='Disable motion blur')
         sigs=[x.get('Address') for x in item.findall('.//Line')]
         with tempfile.TemporaryDirectory() as d:
             path=Path(d);fixture(path,sigs[:1])

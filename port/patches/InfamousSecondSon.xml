@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Patch><TitleID><ID>CUSA00004</ID><ID>CUSA00223</ID><ID>CUSA00263</ID></TitleID>
-<Metadata Title="inFAMOUS Second Son" Name="Render resolution 1280x720" Note="Internal render resolution 1280x720; display output stays 1920x1080 and the UI is unaffected." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+<Patch>
+    <TitleID>
+        <ID>CUSA00004</ID>
+        <ID>CUSA00223</ID>
+        <ID>CUSA00263</ID>
+    </TitleID>
+    <Metadata Title="inFAMOUS Second Son" Name="Render resolution 1280x720" Note="Internal render resolution 1280x720; display output stays 1920x1080 and the UI is unaffected." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="00050000" />
             <Line Type="mask" Address="38 04 00 00 C7 03" Offset="0" Value="D0020000" />
@@ -12,7 +17,7 @@
             <Line Type="mask" Address="0F 44 CF 0F 44" Offset="0" Value="909090" />
         </PatchList>
     </Metadata>
-<Metadata Title="inFAMOUS Second Son" Name="Render resolution 1600x900" Note="Internal render resolution 1600x900; display output stays 1920x1080." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="inFAMOUS Second Son" Name="Render resolution 1600x900" Note="Internal render resolution 1600x900; display output stays 1920x1080." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="40060000" />
             <Line Type="mask" Address="38 04 00 00 C7 03" Offset="0" Value="84030000" />
@@ -24,20 +29,73 @@
             <Line Type="mask" Address="0F 44 CF 0F 44" Offset="0" Value="909090" />
         </PatchList>
     </Metadata>
-<Metadata Title="inFAMOUS Second Son" Name="Disable motion blur" Note="Forces the engine's own motion-blur-off path and skips the blur passes/composite plus the second post chain from the upstream patch." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="inFAMOUS Second Son" Name="Render resolution 960x540" Note="Experimental internal resolution 960x540; display remains 1920x1080. Both normal and high-resolution renderer branches are covered. Binary-validated; visual/device validation pending." Author="erickmendes22 (based on junminlee2004)" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="C0030000" />
+            <Line Type="mask" Address="38 04 00 00 C7 03" Offset="0" Value="1C020000" />
+            <Line Type="mask" Address="00 0F 00 00 BE" Offset="0" Value="80070000" />
+            <Line Type="mask" Address="80 07 00 00 B8" Offset="0" Value="C0030000" />
+            <Line Type="mask" Address="70 08 00 00 BF" Offset="0" Value="38040000" />
+            <Line Type="mask" Address="38 04 00 00 BA" Offset="0" Value="1C020000" />
+            <Line Type="mask" Address="0F 44 DE 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="0F 44 CF 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="B8 80 0C 00 00 B9 70 08 00 00" Offset="1" Value="C0030000" />
+            <Line Type="mask" Address="BA 08 07 00 00 0F 44 DE 0F 44 C6" Offset="1" Value="1C020000" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="inFAMOUS Second Son" Name="Render resolution 854x480" Note="Experimental internal resolution 854x480; display remains 1920x1080. Both normal and high-resolution renderer branches are covered. Binary-validated; visual/device validation pending." Author="erickmendes22 (based on junminlee2004)" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="56030000" />
+            <Line Type="mask" Address="38 04 00 00 C7 03" Offset="0" Value="E0010000" />
+            <Line Type="mask" Address="00 0F 00 00 BE" Offset="0" Value="80070000" />
+            <Line Type="mask" Address="80 07 00 00 B8" Offset="0" Value="56030000" />
+            <Line Type="mask" Address="70 08 00 00 BF" Offset="0" Value="38040000" />
+            <Line Type="mask" Address="38 04 00 00 BA" Offset="0" Value="E0010000" />
+            <Line Type="mask" Address="0F 44 DE 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="0F 44 CF 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="B8 80 0C 00 00 B9 70 08 00 00" Offset="1" Value="56030000" />
+            <Line Type="mask" Address="BA 08 07 00 00 0F 44 DE 0F 44 C6" Offset="1" Value="E0010000" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="inFAMOUS Second Son" Name="Render resolution 640x360" Note="Experimental internal resolution 640x360; display remains 1920x1080. Both normal and high-resolution renderer branches are covered. Binary-validated; visual/device validation pending." Author="erickmendes22 (based on junminlee2004)" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="mask" Address="80 07 00 00 C7 43 10" Offset="0" Value="80020000" />
+            <Line Type="mask" Address="38 04 00 00 C7 03" Offset="0" Value="68010000" />
+            <Line Type="mask" Address="00 0F 00 00 BE" Offset="0" Value="80070000" />
+            <Line Type="mask" Address="80 07 00 00 B8" Offset="0" Value="80020000" />
+            <Line Type="mask" Address="70 08 00 00 BF" Offset="0" Value="38040000" />
+            <Line Type="mask" Address="38 04 00 00 BA" Offset="0" Value="68010000" />
+            <Line Type="mask" Address="0F 44 DE 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="0F 44 CF 0F 44" Offset="0" Value="909090" />
+            <Line Type="mask" Address="B8 80 0C 00 00 B9 70 08 00 00" Offset="1" Value="80020000" />
+            <Line Type="mask" Address="BA 08 07 00 00 0F 44 DE 0F 44 C6" Offset="1" Value="68010000" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="inFAMOUS Second Son" Name="Disable motion blur" Note="Forces the engine's own motion-blur-off path and skips the blur passes/composite plus the second post chain from the upstream patch." Author="junminlee2004" PatchVer="1.1" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="0F 85 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 80 38 00 0F 85 ?? ?? ?? ??" Offset="0" Value="E98B04000090" />
             <Line Type="mask" Address="0F 83 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? C5 FA 10 88 AC 00 00 00" Offset="0" Value="E9FD02000090" />
         </PatchList>
     </Metadata>
-<Metadata Title="inFAMOUS Second Son" Name="Disable depth of field" Note="Forces the engine's own depth-of-field-off path and skips the DOF post-processing chain." Author="junminlee2004" PatchVer="1.2" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="inFAMOUS Second Son" Name="Disable depth of field" Note="Forces the engine's own depth-of-field-off path and skips the DOF post-processing chain." Author="junminlee2004" PatchVer="1.2" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="0F 85 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? C5 F0 57 C9 C5 FA 10 80 54 01 00 00" Offset="0" Value="E90206000090" />
         </PatchList>
     </Metadata>
-<Metadata Title="inFAMOUS Second Son" Name="Disable depth blur" Note="Forces the engine's own depth-blur-off path and skips the FX_DEPTH_BLUR pass." Author="junminlee2004" PatchVer="1.2" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="inFAMOUS Second Son" Name="Disable depth blur" Note="Forces the engine's own depth-blur-off path and skips the FX_DEPTH_BLUR pass." Author="junminlee2004" PatchVer="1.2" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="0F 84 ?? ?? ?? ?? 4C 8D 75 A0 C7 45 A0 00 00 00 00" Offset="0" Value="E92803000090" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="inFAMOUS Second Son" Name="Disable shadow maps" ElfSHA256="b3afd173a379f83e1e408e71fdef22b78f93092d332b79decd48a18a08bfc605" Note="Experimental: skips only the shadow-map wrapper, preserving the shared depth pre-pass. Forces the existing depth clear for cached maps and preserves resolve/conversion and state cleanup. Binary control flow validated; device visuals pending." Author="erickmendes22" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="mask" Address="49 8B 47 08 48 8B 00 4C 8B A0 78 05 00 00 4D 85 E4" Offset="0" Value="E9DE0000009090" />
+            <Line Type="mask" Address="83 B8 40 24 00 00 02 74 0B 4C 89 FF 4C 89 F6 E8" Offset="7" Value="9090" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="inFAMOUS Second Son" Name="Disable light beams" ElfSHA256="b3afd173a379f83e1e408e71fdef22b78f93092d332b79decd48a18a08bfc605" Note="Experimental: skips the dedicated spotlight beam draw using its original stack/canary epilogue. Main diffuse/specular lights, light target setup, shadows and final composition remain active. Binary control flow validated; device visuals pending." Author="erickmendes22" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+        <PatchList>
+            <Line Type="mask" Address="48 8B 46 08 4C 8B 36 41 0F B7 B7 7C 01 00 00" Offset="0" Value="E90C0100009090" />
         </PatchList>
     </Metadata>
 </Patch>

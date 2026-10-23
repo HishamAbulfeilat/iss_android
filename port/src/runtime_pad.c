@@ -381,6 +381,11 @@ static float aim_curve(float v) {
     return v<0 ? -t*t : t*t;
 }
 static struct { uint32_t buttons; int stick[4], trigger[2]; } injected={0,{-1,-1,-1,-1},{-1,-1}};
+static int android_spray_stick_pair(const int axes[4]) {
+    return ((axes[2]>=0 && abs(axes[2]-128)>13) ||
+            (axes[3]>=0 && abs(axes[3]-128)>13)) ? 2 : 0;
+}
+
 static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     const uint64_t now=now_us();
     float dt=motion.last_us ? (float)(now-motion.last_us)*1e-6f : 0.f;
@@ -472,8 +477,11 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             roll=1.5708f; simulated=1;
             if (injected.buttons&BTN_CROSS) shake=1;
             float sx=0.f, sy=0.f;
-            if (injected.stick[0]>=0) sx=((float)injected.stick[0]-128.f)/127.f;
-            if (injected.stick[1]>=0) sy=((float)injected.stick[1]-128.f)/127.f;
+            /* Mobile: hold spray on the left, drag the camera on the right.
+             * Keep the classic left-stick path when the right stick is idle. */
+            const int pair=android_spray_stick_pair(injected.stick);
+            if (injected.stick[pair]>=0) sx=((float)injected.stick[pair]-128.f)/127.f;
+            if (injected.stick[pair+1]>=0) sy=((float)injected.stick[pair+1]-128.f)/127.f;
             /* Stabilize only virtual spray: ~100ms axis smoothing,
              * a slower motion range and a bounded step after slow frames. */
             const float spray_dt=fminf(dt,0.050f);

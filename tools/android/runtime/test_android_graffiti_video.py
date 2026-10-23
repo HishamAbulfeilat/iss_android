@@ -4,6 +4,9 @@ No emulator or Android device is needed for the source-level invariants.
 """
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -27,6 +30,26 @@ class GraffitiAndDisplayTests(unittest.TestCase):
         # Stick-neutral behavior and gamepad button masks in the physical
         # branch are not replaced with the virtual smoothing.
         self.assertNotIn("spray_axis_x", physical)
+
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler unavailable')
+    def test_virtual_spray_uses_right_drag_with_classic_fallback(self):
+        text=PAD.read_text()
+        start=text.index('static int android_spray_stick_pair(')
+        helper=text[start:text.index('\n}',start)+2]
+        program='#include <stdlib.h>\n#include <assert.h>\n'+helper+'''
+int main(void){
+ int a[4]={128,128,128,128};assert(android_spray_stick_pair(a)==0);
+ a[0]=220;assert(android_spray_stick_pair(a)==0);
+ a[2]=160;assert(android_spray_stick_pair(a)==2);
+ a[2]=128;a[3]=90;assert(android_spray_stick_pair(a)==2);
+ a[2]=a[3]=-1;assert(android_spray_stick_pair(a)==0);
+ a[2]=130;a[3]=125;assert(android_spray_stick_pair(a)==0);
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'spray.c';binary=Path(tmp)/'spray';source.write_text(program)
+            subprocess.run(['cc','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)],check=True,capture_output=True,text=True)
+            subprocess.run([str(binary)],check=True,capture_output=True,text=True)
 
     def test_16_9_and_fullscreen_never_claim_impossible_geometry(self):
         activity = ACT.read_text()

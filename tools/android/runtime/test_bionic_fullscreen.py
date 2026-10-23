@@ -12,7 +12,7 @@ JAVA=shutil.which('java')
 class FullscreenTests(unittest.TestCase):
     def test_default_off_switching_and_relaunch(self):
         source=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicVideoSettings.java').read_text()
-        policy='\n'.join(method(source,s) for s in (' static boolean fullscreen(', ' static String gameDisplayMode(', ' static String outputResolution('))
+        policy='\n'.join(method(source,s) for s in (' static boolean fullscreen(', ' static String gameDisplayMode(', ' static String outputResolution(', ' static String internalPatchName('))
         activity=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java').read_text()
         apply=method(activity,' private void applyFullscreen()')
         code=r'''
@@ -55,6 +55,13 @@ class FullscreenCase {
   assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
   p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   p.resolution="900p";assert BionicVideoSettings.outputResolution(p).equals("1600x900");
+  for(String key:new String[]{"540p","480p","360p"}){
+   p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+  }
+  assert BionicVideoSettings.internalPatchName("540p").equals("Render resolution 960x540");
+  assert BionicVideoSettings.internalPatchName("480p").equals("Render resolution 854x480");
+  assert BionicVideoSettings.internalPatchName("360p").equals("Render resolution 640x360");
+  assert BionicVideoSettings.internalPatchName("native")==null;
   p.resolution="old-invalid";assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
  }
 }

@@ -21,33 +21,66 @@ class MobileControlsTest(unittest.TestCase):
    'android/graphics/Paint.java':'''package android.graphics;public class Paint{public static int ANTI_ALIAS_FLAG=1;public enum Style{FILL,STROKE}public enum Align{CENTER}public Paint(int a){}public void setStyle(Style s){}public void setColor(int c){}public void setStrokeWidth(float n){}public void setTextSize(float n){}public void setTypeface(Typeface t){}public void setTextAlign(Align a){}public float ascent(){return -10;}public float descent(){return 2;}public float measureText(String s){return s.length()*8;}}''',
    'android/graphics/Canvas.java':'''package android.graphics;public class Canvas{public void save(){}public void restore(){}public void scale(float a,float b){}public void scale(float a,float b,float x,float y){}public void translate(float x,float y){}public void drawCircle(float a,float b,float r,Paint p){}public void drawText(String s,float a,float b,Paint p){}public void drawRoundRect(float a,float b,float c,float d,float e,float f,Paint p){}public void drawLine(float a,float b,float c,float d,Paint p){}}''',
    'android/util/SparseArray.java':'''package android.util;import java.util.*;public class SparseArray<T>{private TreeMap<Integer,T> m=new TreeMap<>();public int size(){return m.size();}public T get(int k){return m.get(k);}public void put(int k,T v){m.put(k,v);}public void remove(int k){m.remove(k);}public void clear(){m.clear();}public int keyAt(int i){return new ArrayList<>(m.keySet()).get(i);}public T valueAt(int i){return m.get(keyAt(i));}}''',
-   'android/view/View.java':'''package android.view;import android.content.*;import android.graphics.*;public class View{public View(Context c){}public java.util.List<Runnable> delayed=new java.util.ArrayList<>();public boolean postDelayed(Runnable r,long ms){delayed.add(r);return true;}public void runDelayed(){for(Runnable r:delayed)r.run();delayed.clear();}public void invalidate(){}public void setContentDescription(String s){}public int getWidth(){return 1280;}public int getHeight(){return 720;}public boolean onTouchEvent(MotionEvent e){return false;}protected void onDraw(Canvas c){}}''',
+   'android/view/View.java':'''package android.view;import android.content.*;import android.graphics.*;public class View{public View(Context c){}static class Task{long at;Runnable r;Task(long a,Runnable b){at=a;r=b;}}long now;public java.util.List<Task> delayed=new java.util.ArrayList<>();public boolean postDelayed(Runnable r,long ms){delayed.add(new Task(now+ms,r));return true;}public void advance(long ms){now+=ms;while(true){Task next=null;for(Task t:delayed)if(t.at<=now&&(next==null||t.at<next.at))next=t;if(next==null)break;delayed.remove(next);next.r.run();}}public void runDelayed(){advance(1000);}public void invalidate(){}public void setContentDescription(String s){}public int getWidth(){return 1280;}public int getHeight(){return 720;}public boolean onTouchEvent(MotionEvent e){return false;}protected void onDraw(Canvas c){}}''',
    'android/view/MotionEvent.java':'''package android.view;public class MotionEvent{public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6;int a,at;int[] ids;float[] xy;public MotionEvent(int a,int at,int[] ids,float... xy){this.a=a;this.at=at;this.ids=ids;this.xy=xy;}public int getActionMasked(){return a;}public int getActionIndex(){return at;}public int getPointerId(int i){return ids[i];}public int getPointerCount(){return ids.length;}public int findPointerIndex(int id){for(int i=0;i<ids.length;i++)if(ids[i]==id)return i;return -1;}public float getX(int i){return xy[2*i];}public float getY(int i){return xy[2*i+1];}}''',
-   'ro/cobrabm/fexdroid/PadBridge.java':'''package ro.cobrabm.fexdroid;import java.util.*;class PadBridge{Set<String> buttons;int lx,ly,rx,ry,l2,r2;boolean finger;Runnable change;void onModeChanged(Runnable r){change=r;}boolean isMenuMode(){return false;}boolean isAutomaticMode(){return true;}void touch(boolean f,int x,int y){finger=f;}void virtual(Set<String>b,int lx,int ly,int rx,int ry,boolean l,boolean r,int l2,int r2){buttons=new HashSet<>(b);this.lx=lx;this.ly=ly;this.rx=rx;this.ry=ry;this.l2=l2;this.r2=r2;}void cycleInputMode(){change.run();}void gameMenuButton(){change.run();}}''',
+   'ro/cobrabm/fexdroid/PadBridge.java':'''package ro.cobrabm.fexdroid;import java.util.*;class PadBridge{Set<String> buttons;int lx,ly,rx,ry,l2,r2;boolean finger,menu;Runnable change;void onModeChanged(Runnable r){change=r;}boolean isMenuMode(){return menu;}boolean isAutomaticMode(){return true;}void touch(boolean f,int x,int y){finger=f;}void virtual(Set<String>b,int lx,int ly,int rx,int ry,boolean l,boolean r,int l2,int r2){buttons=new HashSet<>(b);this.lx=lx;this.ly=ly;this.rx=rx;this.ry=ry;this.l2=l2;this.r2=r2;}void cycleInputMode(){change.run();}void gameMenuButton(){menu=!menu;change.run();}}''',
    'ro/cobrabm/fexdroid/AppLanguage.java':'package ro.cobrabm.fexdroid;class AppLanguage{static String text(String e,String p){return e;}}',
    'ro/cobrabm/fexdroid/XInput.java':'package ro.cobrabm.fexdroid;class XInput{static void moveTo(int x,int y){}static void button(int b,boolean d){}}',
    'ro/cobrabm/fexdroid/MobileTest.java':'''package ro.cobrabm.fexdroid;
 import android.content.*;import android.view.*;import java.util.*;import android.graphics.*;
 class MobileTest{
  static void event(TouchControllerOverlay v,int a,int at,int[] ids,float... xy){assert v.onTouchEvent(new MotionEvent(a,at,ids,xy));}
+ static Map<String,PointF> centers(TouchControllerOverlay v)throws Exception{java.lang.reflect.Field f=v.getClass().getDeclaredField("centers");f.setAccessible(true);return (Map<String,PointF>)f.get(v);}
+ static String hit(TouchControllerOverlay v,float x,float y)throws Exception{java.lang.reflect.Method m=v.getClass().getDeclaredMethod("hit",float.class,float.class);m.setAccessible(true);return (String)m.invoke(v,x,y);}
+ static void down(TouchControllerOverlay v,String name)throws Exception{PointF q=centers(v).get(name);event(v,0,0,new int[]{1},q.x,q.y);}
+ static void up(TouchControllerOverlay v,String name)throws Exception{PointF q=centers(v).get(name);event(v,1,0,new int[]{1},q.x,q.y);}
  public static void main(String[] args)throws Exception{
   Context c=new Context();PadBridge p=new PadBridge();TouchControllerOverlay v=new TouchControllerOverlay(c,p,false);
-  event(v,0,0,new int[]{1},180,575);assert p.lx==128&&p.ly==128;
-  event(v,5,1,new int[]{1,2},180,575,800,300);assert p.lx==128&&p.rx==128;
-  event(v,2,0,new int[]{1,2},210,550,840,280);assert p.lx>128&&p.ly<128&&p.rx>128&&p.ry<128;
-  event(v,5,2,new int[]{1,2,3},210,550,840,280,1190,355);assert p.r2==255&&p.rx>128&&p.lx>128;
+  Map<String,PointF> layout=centers(v);
+  assert layout.get("l1").x<640&&layout.get("l2").x<640&&layout.get("spray").x<640;
+  assert layout.get("l1").y<360&&layout.get("l2").y<360;
+  event(v,0,0,new int[]{1},230,585);assert p.lx==128&&p.ly==128;
+  event(v,5,1,new int[]{1,2},230,585,700,400);assert p.lx==128&&p.rx==128;
+  event(v,2,0,new int[]{1,2},250,565,740,380);assert p.lx>128&&p.ly<128&&p.rx>128&&p.ry<128;
+  PointF fire=layout.get("r2");
+  event(v,5,2,new int[]{1,2,3},250,565,740,380,fire.x,fire.y);assert p.r2==255&&p.rx>128&&p.lx>128;
   v.runDelayed();assert p.rx==128&&p.ry==128&&p.r2==255;
-  event(v,6,1,new int[]{1,2,3},210,550,840,280,1190,355);assert p.rx==128&&p.ry==128&&p.r2==255;
-  event(v,3,0,new int[]{1},210,550);assert p.lx==128&&p.r2==0&&p.buttons.isEmpty();
-  // Toggling layout must release active presses, retain old classic positions,
-  // and restore mobile positions independently when switching back.
-  c.prefs.edit().putFloat("overlay_x_cross",1111).putBoolean("mobile_controls",false).apply();v.applyPreferences();
-  java.lang.reflect.Field f=v.getClass().getDeclaredField("centers");f.setAccessible(true);Map<String,PointF> centers=(Map<String,PointF>)f.get(v);
-  assert centers.get("cross").x==1111;
-  c.prefs.edit().putBoolean("mobile_controls",true).apply();v.applyPreferences();assert centers.get("cross").x==1160;
+  event(v,6,1,new int[]{1,2,3},250,565,740,380,fire.x,fire.y);
+  event(v,2,0,new int[]{1,3},250,565,fire.x+20,fire.y-15);assert p.r2==255&&p.rx>128&&p.ry<128&&p.lx>128;
+  event(v,3,0,new int[]{1},250,565);assert p.lx==128&&p.r2==0&&p.buttons.isEmpty();
+  // Holding a power or aim never consumes the opposite camera finger.
+  for(String name:new String[]{"l1","l2"}){
+   PointF q=layout.get(name);down(v,name);
+   event(v,5,1,new int[]{1,2},q.x,q.y,700,400);
+   event(v,2,0,new int[]{1,2},q.x,q.y,735,380);
+   assert p.rx>128&&p.ry<128;
+   assert name.equals("l1")?p.buttons.contains("l1"):p.l2==255;
+   v.release();
+  }
+  down(v,"spray");assert p.r2==255&&!p.buttons.contains("l3");
+  PointF spray=layout.get("spray");event(v,5,1,new int[]{1,2},spray.x,spray.y,700,400);
+  event(v,2,0,new int[]{1,2},spray.x,spray.y,730,380);assert p.r2==255&&p.rx>128;v.release();
+  down(v,"utilities");up(v,"utilities");down(v,"graffiti");assert p.buttons.contains("l3")&&p.buttons.contains("r3");v.release();
+  // A touch inside the top swipepad is a click; motion is a real swipe.
   c.prefs.edit().putBoolean("swipepad_enabled",true).apply();v.applyPreferences();
-  event(v,0,0,new int[]{1},640,600);assert p.finger;v.release();assert !p.finger;
+  assert !"touchpad".equals(hit(v,640,60));
+  down(v,"swipepad");assert p.finger&&!p.buttons.contains("touchpad_left");
+  up(v,"swipepad");assert !p.finger&&p.buttons.contains("touchpad_left")&&p.buttons.contains("touchpad_right");
+  v.advance(90);assert p.buttons.isEmpty();
+  down(v,"swipepad");event(v,2,0,new int[]{1},675,220);v.advance(200);
+  assert p.finger&&!p.buttons.contains("touchpad_left");up(v,"swipepad");assert p.buttons.isEmpty()&&!p.finger;
+  down(v,"swipepad");v.advance(180);assert !p.finger&&p.buttons.contains("touchpad_left");up(v,"swipepad");assert p.buttons.isEmpty();
+  down(v,"swipepad");v.release();v.runDelayed();assert !p.finger&&p.buttons.isEmpty();
+  // Closing auxiliary controls must release a held D-pad, not latch it invisibly.
+  down(v,"utilities");up(v,"utilities");
+  event(v,0,0,new int[]{1},185,390);assert p.buttons.contains("right");
+  PointF utility=layout.get("utilities");event(v,5,1,new int[]{1,2},185,390,utility.x,utility.y);assert p.buttons.isEmpty();v.release();
+  // Classic positions and mobile positions remain independent, including reset.
+  c.prefs.edit().putFloat("overlay_x_cross",1111).putBoolean("mobile_controls",false).apply();v.applyPreferences();
+  assert centers(v).get("cross").x==1111;
+  c.prefs.edit().putBoolean("mobile_controls",true).apply();v.applyPreferences();assert centers(v).get("cross").x==1126;
   v.resetLayout();assert c.prefs.getFloat("overlay_x_cross",0)==1111;
+  c.prefs.edit().putBoolean("swipepad_enabled",false).apply();v.applyPreferences();assert "touchpad".equals(hit(v,640,60));
  }
 }'''
   }

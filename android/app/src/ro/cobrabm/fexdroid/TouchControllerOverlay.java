@@ -19,21 +19,65 @@ final class TouchControllerOverlay extends View {
     private static final String[] NAMES={
         "l2","l1","touchpad","options","r1","r2",
         "up","left","right","down","triangle","circle","cross","square",
-        "leftstick","l3","r3","rightstick","inputmode","swipepad"
+        "leftstick","l3","r3","rightstick","inputmode","swipepad","utilities","graffiti","spray"
     };
     private static final float[][] DEFAULT={
-        {87,105},{213,105},{640,105},{773,105},{1067,105},{1193,105},
+        {87,105},{213,105},{640,105},{830,40},{1067,105},{1193,105},
         {160,395},{90,465},{230,465},{160,535},
         {1120,405},{1190,475},{1120,545},{1050,475},
-        {320,612},{420,614},{860,614},{960,612},{492,105},{640,568}
+        {320,612},{420,614},{860,614},{960,612},{450,40},{640,200},{75,60},{400,430},{358,137}
     };
+    // Approved Direto: aim, spray and power left; camera drag and combat right.
     private static final float[][] MOBILE={
-        {955,335},{925,600},{640,97},{1180,90},{1040,515},{1190,355},
-        {95,302},{40,357},{150,357},{95,412},
-        {1080,420},{1035,630},{1160,620},{1190,490},
-        {180,575},{365,645},{445,645},{810,460},{465,97},{640,600}
+        {154,216},{358,281},{640,60},{1190,72},{909,317},{1126,324},
+        {135,340},{85,390},{185,390},{135,440},
+        {845,482},{922,619},{1126,619},{1190,490},
+        {230,585},{280,350},{280,430},{810,460},{330,60},{640,200},
+        {90,72},{400,430},{358,137}
     };
-    private boolean mobile;
+    private static final float PAD_HALF_W=140,PAD_HALF_H=102,PAD_CORNER=54;
+    private boolean mobile,utilitiesOpen;
+    private PointF moveOrigin,swipeOrigin;
+    private int swipePointer=-1;
+    private boolean swipeMoved,swipeClick,swipePulse;
+    private long swipeEpoch;
+    private static boolean direction(String name){return name.equals("up")||name.equals("down")||name.equals("left")||name.equals("right");}
+    private boolean visible(String name){
+        if(name.equals("touchpad")&&swipepadEnabled)return false;
+        if(name.equals("swipepad"))return swipepadEnabled;
+        boolean extra=name.equals("utilities")||name.equals("graffiti")||name.equals("spray");
+        if(!mobile)return !extra;
+        if(name.equals("rightstick"))return false;
+        if(direction(name)||name.equals("l3")||name.equals("r3")||name.equals("inputmode")||name.equals("graffiti"))return editing||utilitiesOpen;
+        return true;
+    }
+    private float radius(String name){
+        if(stick(name))return 70;
+        if(!mobile)return name.equals("l3")||name.equals("r3")?39:48;
+        if(name.equals("r2"))return 60;
+        if(name.equals("cross"))return 42;
+        if(direction(name))return 28;
+        if(name.equals("utilities")||name.equals("graffiti"))return 30;
+        return 35;
+    }
+    private void startSwipe(int id,float x,float y){
+        swipePointer=id;swipeOrigin=new PointF(x,y);swipeMoved=swipeClick=swipePulse=false;
+        final long epoch=++swipeEpoch;
+        postDelayed(()->{if(epoch==swipeEpoch&&swipePointer>=0&&!swipeMoved){swipeClick=true;publish();}},180);
+    }
+    private void endSwipe(boolean cancelled){
+        boolean tap=!cancelled&&swipePointer>=0&&!swipeMoved&&!swipeClick;
+        swipePointer=-1;swipeOrigin=null;swipeClick=false;swipePulse=tap;
+        final long epoch=++swipeEpoch;
+        if(tap)postDelayed(()->{if(epoch==swipeEpoch){swipePulse=false;publish();}},90);
+    }
+    private void hideAuxiliary(){
+        for(int i=controls.size()-1;i>=0;i--){
+            String name=controls.valueAt(i);
+            boolean remove=direction(name)||name.equals("dpad")||name.equals("l3")||name.equals("r3")||name.equals("graffiti");
+            if(remove){int id=controls.keyAt(i);controls.remove(id);positions.remove(id);}
+        }
+    }
     private int cameraX=128,cameraY=128;
     private long cameraEpoch;
     private void cameraMotion(float dx,float dy){
@@ -44,7 +88,7 @@ final class TouchControllerOverlay extends View {
         // the last motion event even while the finger remains on the screen.
         postDelayed(()->{if(cameraEpoch==epoch){cameraX=cameraY=128;publish();}},60);
     }
-    private String layoutKey(String property,String name){return (mobile?"mobile_":"")+"overlay_"+property+"_"+name;}
+    private String layoutKey(String property,String name){return (mobile?"mobile_direct_v1_":"")+(name.equals("swipepad")?"swipepad_top_"+property:"overlay_"+property+"_"+name);}
     private void loadLayout(){
         float[][] defaults=mobile?MOBILE:DEFAULT;
         for(int i=0;i<NAMES.length;i++){
@@ -79,14 +123,14 @@ final class TouchControllerOverlay extends View {
 
     TouchControllerOverlay(Context context,PadBridge pad,boolean mouseEnabled) {
         super(context); this.pad=pad; this.mouseEnabled=mouseEnabled;
-        pad.onModeChanged(this::release);
+        pad.onModeChanged(()->{release();utilitiesOpen=mobile&&pad.isMenuMode();invalidate();});
         preferences=context.getSharedPreferences("iss",Context.MODE_PRIVATE);
         guideMarker=new java.io.File(context.getFilesDir(),"issport/android-pad.state.guide");
         swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
         mobile=preferences.getBoolean("mobile_controls",true);loadLayout();
         setContentDescription(AppLanguage.text("On-screen controller", "Controle na tela"));
     }
-    private PointF center(String name) { return centers.get(name); }
+    private PointF center(String name) { return mobile&&name.equals("leftstick")&&moveOrigin!=null?moveOrigin:centers.get(name); }
     // The 1280x720 layout drawn at one scale in the centred 16:9 area, as the game (MainActivity):
     // round on any screen shape. Controls may be dragged into the bars around it.
     private float scale() { return Math.max(1e-3f,Math.min(getWidth()/1280f,getHeight()/720f)); }
@@ -107,21 +151,29 @@ final class TouchControllerOverlay extends View {
     }
     private String hit(float x,float y) {
         PointF dpad=dpadCenter();
-        if (!editing && distance(x,y,dpad)<(mobile?80:112) && distance(center("up").x,center("up").y,dpad)<115 &&
+        if (visible("up") && !editing && distance(x,y,dpad)<(mobile?80:112) && distance(center("up").x,center("up").y,dpad)<115 &&
             distance(center("left").x,center("left").y,dpad)<115 &&
             distance(center("right").x,center("right").y,dpad)<115 &&
             distance(center("down").x,center("down").y,dpad)<115) return "dpad";
         String winner=null; float best=Float.MAX_VALUE;
         for (String name:NAMES) {
-            if(mobile&&!editing&&name.equals("rightstick"))continue;
-            if(name.equals("swipepad")&&(!swipepadEnabled||(!editing&&pad.isMenuMode()&&!pad.isAutomaticMode())))continue;
+            if(!visible(name)||(mobile&&!editing&&name.equals("leftstick")))continue;
             PointF p=center(name);
             float dx=Math.abs(x-p.x)/size(name),dy=Math.abs(y-p.y)/size(name);
-            boolean inside=rectangle(name) ? dx<(name.equals("swipepad")?120:name.equals("touchpad") ? 72 : 62) && dy<(name.equals("swipepad")?59:38)
-                    : distance(x,y,p)/size(name)<(stick(name) ? 70 : name.equals("l3") || name.equals("r3") ? (mobile?30:39) : mobile&&(name.equals("up")||name.equals("down")||name.equals("left")||name.equals("right"))?30:48);
+            boolean inside;
+            if(name.equals("swipepad")){
+                // Match the rounded hit surface to the visual; corners remain free.
+                float cx=Math.max(0,dx-(PAD_HALF_W-PAD_CORNER));
+                float cy=Math.max(0,dy-(PAD_HALF_H-PAD_CORNER));
+                inside=dx<PAD_HALF_W&&dy<PAD_HALF_H&&cx*cx+cy*cy<PAD_CORNER*PAD_CORNER;
+            }else if(rectangle(name)&&(!mobile||name.equals("options")||name.equals("inputmode")||name.equals("touchpad"))){
+                inside=dx<(name.equals("touchpad")?72:62)&&dy<38;
+            }else inside=distance(x,y,p)/size(name)<(mobile&&!stick(name)?Math.max(44,radius(name)+9):radius(name));
             if (inside && distance(x,y,p)<best) { best=distance(x,y,p); winner=name; }
         }
-        return winner==null&&mobile&&!editing&&x>640&&y>170&&!guideMarker.isFile()?"rightstick":winner;
+        if(winner!=null||editing||!mobile||guideMarker.isFile())return winner;
+        if(x<470&&y>350)return "leftstick";
+        return x>640&&y>170?"rightstick":null;
     }
     private static int axis(float v) { return Math.max(0,Math.min(255,Math.round((v+1f)*127.5f))); }
 
@@ -149,13 +201,15 @@ final class TouchControllerOverlay extends View {
                 rx=mobile?cameraX:axis(Math.max(-1f,Math.min(1f,(p.x-c.x)/(56f*size(control)))));
                 ry=mobile?cameraY:axis(Math.max(-1f,Math.min(1f,(p.y-c.y)/(56f*size(control)))));
             } else if(control.equals("swipepad")) {
-                if(!finger&&(pad.isAutomaticMode()||!pad.isMenuMode())){
+                if(!swipeClick&&!finger&&(pad.isAutomaticMode()||!pad.isMenuMode())){
                     PointF c=center(control);float s=size(control);
-                    tx=Math.round((p.x-(c.x-120*s))/(240*s)*1919);
-                    ty=Math.round((p.y-(c.y-59*s))/(118*s)*942);finger=true;
+                    tx=Math.round((p.x-(c.x-PAD_HALF_W*s))/(2*PAD_HALF_W*s)*1919);
+                    ty=Math.round((p.y-(c.y-PAD_HALF_H*s))/(2*PAD_HALF_H*s)*942);finger=true;
                 }
             } else if (control.equals("l2")) { l2=255; pressed.add(control); }
-            else if (control.equals("r2")) { r2=255; pressed.add(control); }
+            else if (control.equals("r2")) { r2=255; pressed.add(control);if(mobile&&!right){rx=cameraX;ry=cameraY;right=true;} }
+            else if(control.equals("spray")){r2=255;pressed.add("spray");}
+            else if(control.equals("graffiti")){pressed.add("l3");pressed.add("r3");}
             else if (control.equals("touchpad")) { pressed.add("touchpad_left"); pressed.add("touchpad_right"); } /* Both ends: lift Reggie's car. */
             else if (control.equals("mouse")) {
                 if (!mouse) XInput.moveTo(Math.max(0,Math.min(1279,Math.round(p.x))),
@@ -163,12 +217,19 @@ final class TouchControllerOverlay extends View {
                 mouse=true;
             } else pressed.add(control);
         }
+        if(swipeClick||swipePulse){
+            // Same native two-end click as TOUCH, retaining the car interaction.
+            finger=false;pressed.add("touchpad_left");pressed.add("touchpad_right");
+        }
         if (mouse!=mouseDown) { XInput.button(1,mouse); mouseDown=mouse; }
         pad.touch(finger,tx,ty);
         pad.virtual(pressed,lx,ly,rx,ry,left,right,l2,r2);
         invalidate();
     }
-    void release() { controls.clear(); positions.clear();cameraEpoch++;cameraX=cameraY=128;publish(); }
+    void release() {
+        controls.clear();positions.clear();moveOrigin=null;cameraEpoch++;cameraX=cameraY=128;
+        endSwipe(true);utilitiesOpen=false;publish();
+    }
     void edit(Runnable done) { release(); editing=true; onEditDone=done; invalidate(); }
     private void finishEdit() {
         editPointer=-1; dragged=null; pinchDistance=0; editing=false; invalidate();
@@ -221,18 +282,24 @@ final class TouchControllerOverlay extends View {
         if (action==MotionEvent.ACTION_DOWN || action==MotionEvent.ACTION_POINTER_DOWN) {
             float x=layoutX(e,at),y=layoutY(e,at);
             String name=hit(x,y);
+            if("utilities".equals(name)){utilitiesOpen=!utilitiesOpen;if(!utilitiesOpen)hideAuxiliary();publish();return true;}
             if(("swipepad".equals(name)||stick(name==null?"":name)))for(int i=0;i<controls.size();i++)if(name.equals(controls.valueAt(i)))return true;
             if("inputmode".equals(name)){release();pad.cycleInputMode();invalidate();return true;}
-            if("options".equals(name)){release();pad.gameMenuButton();}
+            if("options".equals(name)){release();pad.gameMenuButton();utilitiesOpen=mobile&&pad.isMenuMode();}
             // Outside the virtual controls, touches reach the SDL guide only
             // while that modal is shown. Never emulate mouse clicks during
             // gameplay (SDL maps its left button to R2).
             if (name==null && !mouseEnabled && !guideMarker.isFile()) return true;
             controls.put(id,name==null ? "mouse" : name);
             positions.put(id,new PointF(x,y));
+            if("swipepad".equals(name))startSwipe(id,x,y);
+            if(mobile&&"leftstick".equals(name))moveOrigin=new PointF(x,y);
             if(mobile&&"rightstick".equals(name)){cameraEpoch++;cameraX=cameraY=128;}
         } else if (action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_POINTER_UP) {
-            if(mobile&&"rightstick".equals(controls.get(id))){cameraEpoch++;cameraX=cameraY=128;}
+            String old=controls.get(id);
+            if(mobile&&("rightstick".equals(old)||"r2".equals(old))){cameraEpoch++;cameraX=cameraY=128;}
+            if("swipepad".equals(old))endSwipe(false);
+            if("leftstick".equals(old))moveOrigin=null;
             controls.remove(id);positions.remove(id);
         }
         if (action==MotionEvent.ACTION_MOVE) {
@@ -240,7 +307,12 @@ final class TouchControllerOverlay extends View {
                 PointF p=positions.get(e.getPointerId(i));
                 if (p!=null){
                     float x=layoutX(e,i),y=layoutY(e,i);
-                    if(mobile&&"rightstick".equals(controls.get(e.getPointerId(i))))cameraMotion(x-p.x,y-p.y);
+                    String control=controls.get(e.getPointerId(i));
+                    float dx=x-p.x,dy=y-p.y;
+                    if(mobile&&("rightstick".equals(control)||"r2".equals(control))&&(dx!=0||dy!=0))cameraMotion(dx,dy);
+                    if("swipepad".equals(control)&&swipeOrigin!=null&&distance(x,y,swipeOrigin)>10*size("swipepad")){
+                        if(!swipeMoved){swipeEpoch++;swipeMoved=true;swipeClick=swipePulse=false;}
+                    }
                     p.set(x,y);
                 }
             }
@@ -305,26 +377,32 @@ final class TouchControllerOverlay extends View {
     @Override protected void onDraw(Canvas c) {
         super.onDraw(c); c.save(); c.translate(offsetX(),offsetY()); c.scale(scale(),scale());
         if(mobile){
-            action(c,"l2","◎",AppLanguage.text("Aim","Mirar"));
-            action(c,"r2","⊕",AppLanguage.text("Fire","Atirar"));
             action(c,"l1","ϟ",AppLanguage.text("Power","Poder"));
             action(c,"r1","✦",AppLanguage.text("Special","Especial"));
+            action(c,"triangle","♨",AppLanguage.text("Drain","Absorver"));
+            action(c,"l2","◎",AppLanguage.text("Aim","Mirar"));
+            action(c,"r2","⊕",AppLanguage.text("Fire","Atirar"));
             action(c,"cross","↥",AppLanguage.text("Jump","Pular"));
             action(c,"circle","»",AppLanguage.text("Dash","Esquivar"));
             action(c,"square","✊",AppLanguage.text("Melee","Corpo a corpo"));
-            action(c,"triangle","♨",AppLanguage.text("Drain","Absorver"));
-            rectangle(c,"options",88,"Ⅱ");rectangle(c,"touchpad",110,AppLanguage.text("Touch","Toque"));
-            rectangle(c,"inputmode",100,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
-            circle(c,"up",26,"▲",0xaaffb59b);circle(c,"left",26,"◀",0xaaffb59b);
-            circle(c,"right",26,"▶",0xaaffb59b);circle(c,"down",26,"▼",0xaaffb59b);
-            drawStick(c,"leftstick");
-            if(editing)drawStick(c,"rightstick");
-            circle(c,"l3",26,"L3",0xaaffb59b);circle(c,"r3",26,"R3",0xaaffb59b);
+            action(c,"utilities","☰",AppLanguage.text("Controls","Controles"));
+            action(c,"spray","▥","Spray");
+            rectangle(c,"options",78,"Ⅱ");
+            if(!swipepadEnabled)rectangle(c,"touchpad",110,AppLanguage.text("Touch","Toque"));
+            if(utilitiesOpen||editing){
+                rectangle(c,"inputmode",100,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
+                circle(c,"up",26,"▲",0xaaffb59b);circle(c,"left",26,"◀",0xaaffb59b);
+                circle(c,"right",26,"▶",0xaaffb59b);circle(c,"down",26,"▼",0xaaffb59b);
+                circle(c,"l3",29,"L3",0xaaffb59b);circle(c,"r3",29,"R3",0xaaffb59b);
+                action(c,"graffiti","▥",AppLanguage.text("Sensor mode","Modo sensor"));
+            }
+            if(moveOrigin!=null||editing)drawStick(c,"leftstick");
+            else drawMovementHint(c);
             if(swipepadEnabled)drawSwipepad(c);
         }else{
         rectangle(c,"l2",108,"L2"); rectangle(c,"l1",108,"L1");
         rectangle(c,"r1",108,"R1"); rectangle(c,"r2",108,"R2");
-        rectangle(c,"touchpad",126,"TOUCH"); rectangle(c,"options",108,"START");
+        if(!swipepadEnabled)rectangle(c,"touchpad",126,"TOUCH"); rectangle(c,"options",108,"START");
         rectangle(c,"inputmode",112,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
         if(swipepadEnabled)drawSwipepad(c);
         circle(c,"up",39,"▲",0xffefb19a); circle(c,"left",39,"◀",0xffefb19a);
@@ -345,29 +423,77 @@ final class TouchControllerOverlay extends View {
         }
         c.restore();
     }
+    private void drawMovementHint(Canvas c){
+        PointF p=centers.get("leftstick");paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);
+        paint.setColor(0x55ffb896);c.drawCircle(p.x,p.y,33,paint);c.drawCircle(p.x,p.y,9,paint);
+    }
     private void action(Canvas c,String name,String icon,String label){
-        PointF p=center(name);c.save();c.scale(size(name),size(name),p.x,p.y);
-        boolean down=pressed.contains(name);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(down?0xccb93526:0x66301920);
-        c.drawCircle(p.x,p.y,42,paint);
-        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setColor(down?0xffffc18a:0xbbff8054);
-        c.drawCircle(p.x,p.y,42,paint);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(0xfffce3d5);paint.setTypeface(Typeface.DEFAULT_BOLD);
-        paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(30);c.drawText(icon,p.x,p.y+5,paint);
-        paint.setTextSize(12);if(paint.measureText(label)>80)paint.setTextSize(12*80/paint.measureText(label));
-        c.drawText(label,p.x,p.y+26,paint);c.restore();
+        PointF p=center(name);float r=radius(name);c.save();c.scale(size(name),size(name),p.x,p.y);
+        boolean down=pressed.contains(name)||name.equals("utilities")&&utilitiesOpen;
+        paint.setStyle(Paint.Style.FILL);paint.setColor(down?0xaab93526:0x44150d10);c.drawCircle(p.x,p.y,r,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(name.equals("r2")?3:1.5f);paint.setColor(down?0xffffc18a:0xaaffb08a);
+        c.drawCircle(p.x,p.y,r,paint);
+        if(name.equals("r2")){paint.setColor(0x77ff642d);c.drawCircle(p.x,p.y,r-7,paint);}
+        c.save();c.translate(p.x,p.y);paint.setColor(0xfff6d9c7);paint.setStrokeWidth(2.5f);
+        if(name.equals("r2")||name.equals("l2")){
+            c.drawCircle(0,0,name.equals("r2")?16:11,paint);
+            c.drawLine(-23,0,-8,0,paint);c.drawLine(8,0,23,0,paint);c.drawLine(0,-23,0,-8,paint);c.drawLine(0,8,0,23,paint);
+        }else if(name.equals("cross")){
+            c.drawLine(0,17,0,-17,paint);c.drawLine(0,-17,-13,-3,paint);c.drawLine(0,-17,13,-3,paint);
+            c.drawLine(-14,20,14,20,paint);
+        }else if(name.equals("circle")){
+            c.drawLine(-16,-13,-3,0,paint);c.drawLine(-3,0,-16,13,paint);
+            c.drawLine(-2,-13,11,0,paint);c.drawLine(11,0,-2,13,paint);c.drawLine(-24,0,-15,0,paint);
+        }else if(name.equals("square")){
+            c.drawRoundRect(-16,-10,14,9,5,5,paint);c.drawLine(-16,-10,-11,-18,paint);
+            c.drawLine(-11,-18,12,-18,paint);c.drawLine(12,-18,14,-10,paint);c.drawLine(-10,9,-7,20,paint);c.drawLine(10,9,7,20,paint);
+            c.drawLine(-6,-17,-6,-6,paint);c.drawLine(3,-17,3,-6,paint);
+        }else if(name.equals("l1")){
+            c.drawLine(4,-21,-14,3,paint);c.drawLine(-14,3,2,3,paint);
+            c.drawLine(2,3,-4,21,paint);c.drawLine(-4,21,15,-5,paint);
+            c.drawLine(15,-5,0,-5,paint);c.drawLine(0,-5,4,-21,paint);
+        }else if(name.equals("r1")){
+            c.drawLine(0,-22,-5,-5,paint);c.drawLine(-5,-5,-13,-12,paint);
+            c.drawLine(-13,-12,-17,7,paint);c.drawLine(-17,7,-8,18,paint);
+            c.drawLine(-8,18,8,18,paint);c.drawLine(8,18,17,7,paint);
+            c.drawLine(17,7,12,-8,paint);c.drawLine(12,-8,6,0,paint);c.drawLine(6,0,0,-22,paint);
+        }else if(name.equals("triangle")){
+            c.drawCircle(0,0,6,paint);
+            for(int sign:new int[]{-1,1}){
+                c.drawLine(sign*23,0,sign*12,0,paint);c.drawLine(sign*12,0,sign*17,-5,paint);c.drawLine(sign*12,0,sign*17,5,paint);
+                c.drawLine(0,sign*23,0,sign*12,paint);c.drawLine(0,sign*12,-5,sign*17,paint);c.drawLine(0,sign*12,5,sign*17,paint);
+            }
+        }else if(name.equals("utilities")){
+            for(int y=-10;y<=10;y+=10)c.drawLine(-12,y,12,y,paint);
+        }else if(name.equals("graffiti")||name.equals("spray")){
+            c.drawRoundRect(-8,-7,8,15,3,3,paint);c.drawLine(-4,-7,-4,-13,paint);c.drawLine(-4,-13,5,-13,paint);
+            c.drawLine(10,-13,18,-17,paint);c.drawLine(11,-9,21,-9,paint);
+        }else{
+            paint.setStyle(Paint.Style.FILL);paint.setTypeface(Typeface.DEFAULT_BOLD);paint.setTextSize(30);paint.setTextAlign(Paint.Align.CENTER);
+            c.drawText(icon,0,10,paint);
+        }
+        c.restore();
+        if(editing||down||name.equals("l1")||name.equals("r1")||name.equals("triangle")||name.equals("cross")||name.equals("circle")){
+            paint.setStyle(Paint.Style.FILL);paint.setColor(0xccf6d9c7);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(14);
+            if(paint.measureText(label)>100)paint.setTextSize(14*100/paint.measureText(label));
+            c.drawText(label,p.x,p.y+r+17,paint);
+        }
+        c.restore();
     }
     private void drawSwipepad(Canvas c){
         PointF p=center("swipepad");float s=size("swipepad");c.save();c.scale(s,s,p.x,p.y);
-        paint.setStyle(Paint.Style.FILL);paint.setColor(0x88140d13);
-        c.drawRoundRect(p.x-120,p.y-59,p.x+120,p.y+59,9,9,paint);
-        boolean disabled=pad.isMenuMode()&&!pad.isAutomaticMode();
-        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(2);paint.setColor(disabled?0x778c7878:0xccff642d);
-        c.drawRoundRect(p.x-120,p.y-59,p.x+120,p.y+59,9,9,paint);
-        c.drawLine(p.x-18,p.y,p.x+18,p.y,paint);c.drawLine(p.x,p.y-18,p.x,p.y+18,paint);
-        paint.setStyle(Paint.Style.FILL);paint.setTypeface(Typeface.DEFAULT_BOLD);paint.setTextSize(16);paint.setTextAlign(Paint.Align.CENTER);
-        c.drawText(disabled?AppLanguage.text("SWIPE · GAME MODE","SWIPE · MODO JOGO"):"SWIPE",p.x,p.y-36,paint);
-        for(int i=0;i<controls.size();i++)if("swipepad".equals(controls.valueAt(i))){PointF f=positions.get(controls.keyAt(i));if(f!=null)c.drawCircle(p.x+Math.max(-116,Math.min(116,(f.x-p.x)/s)),p.y+Math.max(-55,Math.min(55,(f.y-p.y)/s)),7,paint);break;}
+        boolean lit=swipePointer>=0||swipePulse;
+        paint.setStyle(Paint.Style.FILL);paint.setColor(lit?0x773c2020:0x44140d13);
+        c.drawRoundRect(p.x-PAD_HALF_W,p.y-PAD_HALF_H,p.x+PAD_HALF_W,p.y+PAD_HALF_H,PAD_CORNER,PAD_CORNER,paint);
+        paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setColor(lit?0xffffa471:0x88d69676);
+        c.drawRoundRect(p.x-PAD_HALF_W,p.y-PAD_HALF_H,p.x+PAD_HALF_W,p.y+PAD_HALF_H,PAD_CORNER,PAD_CORNER,paint);
+        paint.setStyle(Paint.Style.FILL);paint.setTypeface(Typeface.DEFAULT_BOLD);paint.setTextSize(11);paint.setTextAlign(Paint.Align.CENTER);
+        paint.setColor(0x66f5d7c6);c.drawText("TOUCHPAD",p.x,p.y+4,paint);
+        for(int i=0;i<controls.size();i++)if("swipepad".equals(controls.valueAt(i))){
+            PointF f=positions.get(controls.keyAt(i));
+            if(f!=null){paint.setColor(0xaaff9c65);c.drawCircle(p.x+Math.max(-PAD_HALF_W+8,Math.min(PAD_HALF_W-8,(f.x-p.x)/s)),p.y+Math.max(-PAD_HALF_H+8,Math.min(PAD_HALF_H-8,(f.y-p.y)/s)),7,paint);}
+            break;
+        }
         c.restore();
     }
 }
