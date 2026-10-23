@@ -16,6 +16,29 @@ final class PadBridge {
     private final File state;
     private boolean swapFaceButtons;
     private boolean dpadSwipe;
+    // Start/Options opens/closes the game menu; the explicit override handles other exits.
+    private boolean menuMode;
+    private boolean automaticMode=true;
+    private Runnable modeChanged;
+    void onModeChanged(Runnable listener){modeChanged=listener;}
+    private boolean touchDown;
+    private int touchX=960,touchY=471,touchId;
+    boolean isMenuMode(){return menuMode;}
+    boolean isAutomaticMode(){return automaticMode;}
+    void setMenuMode(boolean enabled){reset();automaticMode=false;menuMode=enabled;write();if(modeChanged!=null)modeChanged.run();}
+    void cycleInputMode(){
+        if(automaticMode)setMenuMode(true);
+        else if(menuMode)setMenuMode(false);
+        else {reset();automaticMode=true;write();if(modeChanged!=null)modeChanged.run();}
+    }
+    void gameMenuButton(){
+        boolean next=!menuMode;reset();menuMode=next;automaticMode=true;write();
+        if(modeChanged!=null)modeChanged.run();
+    }
+    void touch(boolean down,int x,int y){
+        if(down&&!touchDown)touchId=(touchId+1)&127;
+        touchDown=down;touchX=Math.max(0,Math.min(1919,x));touchY=Math.max(0,Math.min(942,y));
+    }
     void setDpadSwipe(boolean enabled){dpadSwipe=enabled;write();}
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Set<String> keys = new LinkedHashSet<>();
@@ -64,6 +87,10 @@ final class PadBridge {
     boolean key(KeyEvent e) {
         String name=name(e);
         if (name==null) return false;
+        if(name.equals("options")&&e.getAction()==KeyEvent.ACTION_DOWN&&e.getRepeatCount()==0){
+            if(keys.contains("l1")&&keys.contains("r1")){cycleInputMode();return true;}
+            gameMenuButton();
+        }
         if (e.getAction()==KeyEvent.ACTION_DOWN) keys.add(name);
         else if (e.getAction()==KeyEvent.ACTION_UP) keys.remove(name);
         // Publish button transitions immediately; the runtime samples at 20 ms intervals.
@@ -98,6 +125,7 @@ final class PadBridge {
     }
 
     void reset() {
+        touchDown=false;
         keys.clear(); lx=ly=rx=ry=128; l2=r2=hatX=hatY=0;
         virtualKeys.clear(); virtualLx=virtualLy=virtualRx=virtualRy=128;
         virtualL2=virtualR2=0; virtualLeftActive=virtualRightActive=false;
@@ -107,6 +135,9 @@ final class PadBridge {
     private void write() {
         StringBuilder text=new StringBuilder();
         text.append("dpad_swipe=").append(dpadSwipe?1:0).append(' ');
+        text.append("input_menu=").append(menuMode?1:0).append(' ');
+        text.append("input_auto=").append(automaticMode?1:0).append(' ');
+        if(touchDown&&(automaticMode||!menuMode))text.append("finger=1 tx=").append(touchX).append(" ty=").append(touchY).append(" tid=").append(touchId).append(' ');
         Set<String> all=new LinkedHashSet<>(keys); all.addAll(virtualKeys);
         int leftTrigger=Math.max(l2,virtualL2), rightTrigger=Math.max(r2,virtualR2);
         for (String key:all) {

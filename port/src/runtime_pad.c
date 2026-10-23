@@ -23,6 +23,7 @@
 #include "mouse_stick.h"
 #include "mouse_touch.h"
 #include "dpad_swipe.h"
+#include "iss_menu_state.h"
 #include <sys/stat.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -343,6 +344,10 @@ static void load_button_maps(void) {
  *   A notice on screen tells the mode; leaving it puts the controller upright again.
  * TLG_MOTION=off disables real sensors (simulation still works). */
 static int injected_motion; /* TLG_PAD_FILE tokens: 1 tilt_right (T), 2 tilt_left (G), 4 shake (Y) */
+static int android_menu_mode;
+static int android_menu_automatic;
+static const uint32_t *game_menu_counter;
+void runtime_pad_menu_counter(const uint32_t *counter){game_menu_counter=counter;}
 typedef struct { float w, x, y, z; } Quat;
 static struct { Quat q; float roll, pitch, yaw, aim_pitch; uint64_t last_us; int sensors, warned, mode, toggle_held; } motion={{1,0,0,0},0,0,0,0,0,-1,0,0,0};
 static Quat quat_mul(Quat a, Quat b) {
@@ -381,6 +386,8 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
     float dt=motion.last_us ? (float)(now-motion.last_us)*1e-6f : 0.f;
     if (dt>0.1f) dt=0.1f;
     motion.last_us=now;
+    // Menu navigation must never become a can shake or simulated camera motion.
+    if(android_pad_enabled() && android_menu_mode){motion.toggle_held=0;return;}
     if (motion.sensors<0) { const char *e=getenv("TLG_MOTION"); motion.sensors=!(e && !strcmp(e,"off")); }
     /* Real sensors. */
     float gyro[3]={0,0,0}, accel[3]={0,0,0};
@@ -798,6 +805,7 @@ static int replay_armed;      /* 1 while a TLG_PAD_REPLAY recording plays, 2 onc
 static uint64_t replay_start; /* 0: (re)start at the next sample */
 static int android_dpad_swipe;
 static IssDpadSwipe android_swipe;
+static struct { int down,x,y,id; } android_finger;
 static void read_inject(void) {
     static const char *path; static int checked; static uint64_t last_check; static struct timespec mtime;
     if (!checked) { path=getenv("TLG_PAD_FILE"); checked=1; }
@@ -819,7 +827,8 @@ static void read_inject(void) {
     if (!f) return;
     static const char *sticks[]={"lx=","ly=","rx=","ry="};
     static const char *triggers[]={"l2=","r2="};
-    injected.buttons=0; android_dpad_swipe=0;
+    injected.buttons=0; android_dpad_swipe=0; android_menu_mode=0; android_menu_automatic=0;
+    android_finger.down=0; android_finger.x=960; android_finger.y=471; android_finger.id=0;
     injected_motion=0;
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     for (int i=0;i<2;++i) injected.trigger[i]=-1;
@@ -829,6 +838,12 @@ static void read_inject(void) {
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
         if (!strcmp(token,"touchpad_both")) injected.buttons|=CLICK_LEFT|CLICK_RIGHT;
         if (!strcmp(token,"dpad_swipe=1")) android_dpad_swipe=1;
+        if (!strcmp(token,"input_menu=1")) android_menu_mode=1;
+        if (!strcmp(token,"input_auto=1")) android_menu_automatic=1;
+        if (!strcmp(token,"finger=1")) android_finger.down=1;
+        if (!strncmp(token,"tx=",3)) {int v=atoi(token+3);android_finger.x=v<0?0:v>1919?1919:v;}
+        if (!strncmp(token,"ty=",3)) {int v=atoi(token+3);android_finger.y=v<0?0:v>942?942:v;}
+        if (!strncmp(token,"tid=",4)) android_finger.id=atoi(token+4)&127;
         if (!strcmp(token,"tilt_right")) injected_motion|=1;
         if (!strcmp(token,"tilt_left")) injected_motion|=2;
         if (!strcmp(token,"shake")) injected_motion|=4;
@@ -915,6 +930,9 @@ static int hold_after_capture;
 static void sample(PadData *d) {
     /* Read before sample_host so the injected motion reaches the same frame. */
     read_inject();
+    // Sample even when the Android state file has not changed: closing through
+    // a menu item must restore gameplay controls without another Start press.
+    if(android_menu_automatic){int mode=iss_menu_read(game_menu_counter);if(mode>=0)android_menu_mode=mode;}
     sample_host(d);
     if (tlggpu_overlay_captures_input()) { hold_after_capture=1; click.side=-1; return; }
     record_sample(d); /* the click sources as they are: a replay plays them again */
@@ -928,14 +946,14 @@ static void sample(PadData *d) {
     if (injected.trigger[1]>=0) { d->r2=(uint8_t)injected.trigger[1]; if (d->r2>30) d->buttons|=BTN_R2; }
     if (android_pad_enabled()) {
         if ((injected.buttons&(BTN_L3|BTN_R3))==(BTN_L3|BTN_R3)) d->buttons &= ~(uint32_t)(BTN_L3|BTN_R3);
-        if (motion.mode) {
+        if (motion.mode && !android_menu_mode) {
             d->buttons &= ~(uint32_t)BTN_CROSS;
             d->left_x=d->left_y=d->right_x=d->right_y=128;
         }
     }
     int dpad_touch_active=0;
     if(android_pad_enabled()) {
-        const unsigned directions=android_dpad_swipe ?
+        const unsigned directions=android_dpad_swipe && !android_menu_mode && !android_finger.down ?
             ((d->buttons&BTN_UP)?1:0)|((d->buttons&BTN_DOWN)?2:0)|
             ((d->buttons&BTN_LEFT)?4:0)|((d->buttons&BTN_RIGHT)?8:0) : 0;
         const int contact=iss_dpad_swipe_step(&android_swipe,directions,now_us());
@@ -947,6 +965,13 @@ static void sample(PadData *d) {
             d->touch_count=contact?1:0;
             if(contact)d->touches[0]=(PadTouch){.x=(uint16_t)android_swipe.x,.y=(uint16_t)android_swipe.y,.id=android_swipe.id};
         }
+    }
+    if(android_pad_enabled() && !android_menu_mode && android_finger.down) {
+        // Direct screen contact wins over emulated click tails and D-pad strokes.
+        click.side=-1;two.active=0;dpad_touch_active=1;
+        d->buttons &= ~(uint32_t)(CLICK_LEFT|CLICK_RIGHT|BTN_TOUCHPAD);
+        d->touch_count=1;
+        d->touches[0]=(PadTouch){.x=(uint16_t)android_finger.x,.y=(uint16_t)android_finger.y,.id=(uint8_t)android_finger.id};
     }
     if (!dpad_touch_active && !play_two_finger(d)) play_click(d);
     if (hold_after_capture) {

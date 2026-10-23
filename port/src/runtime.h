@@ -120,6 +120,7 @@ int32_t runtime_audio_host_output(int32_t handle, const void *data, int pace);
 int32_t runtime_audio_host_close(int32_t handle);
 uintptr_t runtime_pad_resolve(const char *name);
 void runtime_pad_report(void);
+void runtime_pad_menu_counter(const uint32_t *counter);
 /* probe --gamepad: prints one "Gamepad:" line for the first pad found (returns 1) or none (0). */
 int runtime_pad_describe(void);
 uintptr_t runtime_rtc_resolve(const char *name);

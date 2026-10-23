@@ -37,10 +37,25 @@ esquerda/centro/direita e topo/centro/base ou arraste o HUD para uma dessas posi
 Com geração ativa mostra taxas medidas de origem e apresentação. Contadores de
 utilização indisponíveis no sistema aparecem como N/A.
 
-O D-pad físico e virtual desliza o touchpad progressivamente enquanto pressionado;
-soltar levanta o dedo. A opção pode ser desligada para voltar a enviar direções
-normais. O botão TOUCH continua sendo o clique do touchpad. O editor permite
-arrastar cada controle e usar dois dedos para mudar seu tamanho; tudo persiste.
+Os controles usam o tema carvão/vermelho/laranja do inFAMOUS. Em **Automático**,
+o runtime lê o contador real de menus do jogo: D-pad e X mantêm suas funções de
+navegação, e o grafite fica suspenso enquanto o menu está aberto. Ao fechar o menu
+por qualquer opção, o mapeamento de gameplay volta sem depender de outro Start.
+Essa leitura é habilitada apenas se duas assinaturas de código e a região de
+memória coincidirem com o executável analisado. Em outra versão, Start/Options
+serve de alternativa; a detecção automática precisa ser confirmada em aparelho.
+
+O botão **AUTO / MENU / JOGO** alterna o modo manualmente. No controle físico,
+segure **L1 + R1** e aperte **Start** para alternar sem enviar Start ao jogo.
+Apertar Start normalmente volta ao Automático. O modo do jogo é independente do
+menu de configurações do port (Voltar/Guide).
+
+Em gameplay, o D-pad físico e virtual desliza o touchpad progressivamente enquanto
+pressionado; soltar levanta o dedo. A opção pode ser desligada para enviar direções
+normais. **Swipepad na tela**, desligado por padrão, permite arrastar um dedo em
+qualquer direção, com coordenadas absolutas e sem transformar o gesto em clique.
+TOUCH continua pressionando as duas pontas para levantar o carro. O editor permite
+mover/redimensionar também o swipepad e o seletor de modo; o layout persiste.
 
 ## Idioma, FPS e drivers
 

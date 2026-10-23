@@ -52,7 +52,7 @@ English is the default language. Select Portuguese in **Settings → Language**.
 - 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
 - Bundled Turnip Gen8 V38 Patched for Adreno 8xx and Turnip v27.0.0-R1 for Adreno 6xx/7xx; custom driver ZIP import.
 - Bloodframe frame generation, configured separately from the game's source FPS. Import your own `Lossless.dll` to use it.
-- Configurable HUD, touch controls and physical controllers; incremental D-pad swipes with held-direction continuation and a two-finger TOUCH action.
+- Configurable HUD and inFAMOUS-themed touch controls; optional draggable swipepad, physical controllers, incremental D-pad swipes and a two-finger TOUCH action. Automatic input routing reads the game menu lifecycle on matching executables; AUTO/MENU/GAME and L1+R1+Start provide an override.
 - Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
 - Direct PKG installation, save import/export and log export.
 

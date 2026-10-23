@@ -15,6 +15,7 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "view_hook.h"
+#include "iss_menu_state.h"
 #include "gpu/tlggpu.h"
 #if !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -630,6 +631,19 @@ static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t 
         if (address >= segments[i].address && bytes <= segments[i].size &&
             address - segments[i].address <= segments[i].size - bytes) return 1;
     return 0;
+}
+static void install_infamous_menu_watch(const char *app0,Segment *segments,uint64_t count,uint64_t size){
+    char path[4096],serial[32]="";
+    snprintf(path,sizeof(path),"%s/sce_sys/param.sfo",app0?app0:".");
+    sfo_value(path,"TITLE_ID",serial,sizeof(serial),NULL);
+    if(strcmp(serial,"CUSA00004")&&strcmp(serial,"CUSA00223"))return;
+    if(!mapped(segments,count,ISS_MENU_OPEN_SITE,sizeof(iss_menu_open_signature)) ||
+       !mapped(segments,count,ISS_MENU_CLOSE_SITE,sizeof(iss_menu_close_signature)) ||
+       !mapped(segments,count,ISS_MENU_COUNT_OFFSET,4) || !iss_menu_signatures_match(image,size)){
+        puts("Input: game menu state unavailable (executable signature mismatch); Start/manual fallback");return;
+    }
+    runtime_pad_menu_counter((const uint32_t *)(image+ISS_MENU_COUNT_OFFSET));
+    puts("Input: real inFAMOUS menu lifecycle enabled (read-only counter)");
 }
 extern ABI float tlg_orbs_gain(void *player, float requested);
 extern void tlg_orbs_status(int supported);
@@ -1435,6 +1449,7 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+    install_infamous_menu_watch(app0,segments,ns,size);
     if (gpu_enabled) install_orb_multiplier(app0, segments, ns, size);
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
