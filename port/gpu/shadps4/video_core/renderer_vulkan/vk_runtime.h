@@ -107,9 +107,11 @@ public:
 
     // Native mapped readback observes actual recorded arena writes, not just shader
     // declarations. Copy/upload/clear/image tiling and draw/dispatch all reach AccessBuffer.
-    void SetBufferWriteHook(void (*hook)(void*, VAddr, u64, u64), void* context) {
+    void SetBufferWriteHook(void (*hook)(void*, VAddr, u64, u64), void* context,
+                            bool needs_host_read_barrier = true) {
         buffer_write_hook = hook;
         buffer_write_context = context;
+        buffer_write_needs_host_barrier = needs_host_read_barrier;
     }
 
     /// tlg: runs before this thread changes image state (layouts, pending image
@@ -132,6 +134,7 @@ private:
                           bool notify_write);
     void (*buffer_write_hook)(void*, VAddr, u64, u64) = nullptr;
     void* buffer_write_context = nullptr;
+    bool buffer_write_needs_host_barrier = true;
     void (*image_access_hook)(void*) = nullptr;
     void* image_access_context = nullptr;
     const Instance& instance;

@@ -44,6 +44,17 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
         self.assertIn('ISS hybrid V6 (V2 baseline):',cache)
 
+    def test_staged_gpu_writes_must_invalidate_old_copies(self):
+        cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        header = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_runtime.h").read_text()
+        runtime = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_runtime.cpp").read_text()
+        self.assertIn('if (mapped_readbacks_enabled || hybrid_stage_tracking)',cache)
+        self.assertIn('if (RegionManager::HybridReadProtectionEnabled() && tick > readback->tick)',cache)
+        self.assertIn('readback->stale.store(true, std::memory_order_release);',cache)
+        self.assertIn('this, mapped_readbacks_enabled);',cache)
+        self.assertIn('bool buffer_write_needs_host_barrier = true;',header)
+        self.assertIn('if (buffer_write_needs_host_barrier)',runtime)
+
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)

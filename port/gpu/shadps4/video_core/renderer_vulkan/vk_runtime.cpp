@@ -951,7 +951,11 @@ void Runtime::NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 s
     if (buffer_write_hook && size && handle->mem_type == VideoCore::MemoryType::Sparse) {
         buffer_write_hook(buffer_write_context, handle->cpu_addr + offset, size,
                           scheduler.CurrentTick());
-        scheduler.RequireHostReadBarrier(stage, access);
+        // Direct mapped GPU memory requires HOST_READ visibility. Hybrid staging
+        // validates copy completion using its own GPU transfer fence instead.
+        if (buffer_write_needs_host_barrier) {
+            scheduler.RequireHostReadBarrier(stage, access);
+        }
     }
 }
 

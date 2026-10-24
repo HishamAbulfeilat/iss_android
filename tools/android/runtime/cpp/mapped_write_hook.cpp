@@ -30,6 +30,10 @@ enum {CoarseReadTracking,AccessMemo};
 bool Disabled(int){return false;}
 }
 namespace VideoCore {
+struct RegionManager {
+    static inline bool hybrid_enabled=false;
+    static bool HybridReadProtectionEnabled() { return hybrid_enabled; }
+};
 enum class MemoryType {Sparse,DeviceLocal};
 struct Buffer {
     MemoryType mem_type=MemoryType::Sparse;VAddr cpu_addr=0x10000000;
@@ -57,6 +61,7 @@ struct Runtime {
     Scheduler scheduler;
     void (*buffer_write_hook)(void*,VAddr,u64,u64)=nullptr;
     void* buffer_write_context=nullptr;
+    bool buffer_write_needs_host_barrier=true;
     BarrierTracker barrier_tracker;
     vk::MemoryBarrier2 memory_barrier;
     struct AccessMemo {u64 resource,start,end;u32 epoch,access;};
@@ -144,6 +149,33 @@ int main() {
         r.CopyBuffer(&staging,&arena,copies);assert(calls==1);
         assert(r.scheduler.host_read_src_stages==vk::PipelineStageFlagBits2::eCopy);
         assert(r.scheduler.host_read_src_access==vk::AccessFlagBits2::eTransferWrite);
+    }
+    // Hybrid staging: a newer actual Vulkan write must invalidate the old
+    // snapshot while leaving a disjoint snapshot intact. Avoid HOST_READ
+    // barriers on staging-only copies; they already wait on the transfer fence.
+    {
+        VideoCore::RegionManager::hybrid_enabled=true;
+        Vulkan::Runtime r;
+        VideoCore::BufferCache cache;
+        auto staged=std::make_shared<VideoCore::BufferCache::DeferredReadback>();
+        staged->mapped=false;staged->arena_base=arena.cpu_addr;
+        staged->copies.emplace_back(4096,0,4096);staged->tick=5;
+        auto unrelated=std::make_shared<VideoCore::BufferCache::DeferredReadback>();
+        unrelated->mapped=false;unrelated->arena_base=arena.cpu_addr;
+        unrelated->copies.emplace_back(16384,0,4096);unrelated->tick=5;
+        cache.deferred_readbacks={staged,unrelated};cache.deferred_count=2;
+        cache.write_ticks.Write(arena.cpu_addr,65536,5);
+        r.SetBufferWriteHook([](void* c,VAddr a,u64 n,u64 tick){
+            static_cast<VideoCore::BufferCache*>(c)->NoteDeviceWrite(a,n,tick);
+        },&cache,false);
+        r.scheduler.tick=6;
+        r.AccessBuffer(&arena,4096+128,32,vk::PipelineStageFlagBits2::eComputeShader,
+                       vk::AccessFlagBits2::eShaderWrite);
+        assert(staged->stale && !unrelated->stale);
+        assert(!r.scheduler.host_read_barrier);
+        assert(cache.write_ticks.Latest(arena.cpu_addr+4096,4096)==6);
+        assert(cache.write_ticks.Latest(arena.cpu_addr+16384,4096)==5);
+        VideoCore::RegionManager::hybrid_enabled=false;
     }
     // Exercise the actual recorded CopyBuffer, AccessBuffer and cache notification.
     for(unsigned count:{1u,4u,5u,9u})for(bool precise:{false,true}) {

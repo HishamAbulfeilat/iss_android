@@ -136,10 +136,14 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 mapped_readbacks_enabled ? "on" : "off",
                 bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible),
                 residency_coherent, static_cast<unsigned long long>(instance.NonCoherentAtomSize()));
-    if (mapped_readbacks_enabled) {
+    // Mapped Relaxed needs a HOST_READ barrier for direct arena mapping.
+    // Hybrid staging needs the write notification for snapshot invalidation,
+    // but GPU->staging transfers already provide host visibility at their own fence.
+    const bool hybrid_stage_tracking = RegionManager::HybridReadProtectionEnabled();
+    if (mapped_readbacks_enabled || hybrid_stage_tracking) {
         runtime.SetBufferWriteHook([](void* context, VAddr address, u64 size, u64 tick) {
             static_cast<BufferCache*>(context)->NoteDeviceWrite(address, size, tick);
-        }, this);
+        }, this, mapped_readbacks_enabled);
     }
 
     const u64 bda_pagetable_size =
@@ -1227,9 +1231,18 @@ void BufferCache::NoteDeviceWrite(VAddr address, u64 size, u64 tick) {
     if (!deferred_count.load(std::memory_order_acquire)) return;
     std::scoped_lock lock{deferred_mutex};
     for (const auto& readback : deferred_readbacks) {
-        if (readback->mapped && !readback->Done() &&
+        if (!readback->Done() &&
             readback->CopiesTouchPages(address, address + size)) {
-            if (readback->page_scoped &&
+            if (!readback->mapped) {
+                // A staging copy was captured at readback->tick. If a later GPU
+                // submission overwrites a copied page, its old contents must not
+                // reach guest memory or unprotect that page. The existing
+                // recovery/retry path will fetch the newer GPU contents.
+                // Only enabled on hybrid, not for the ordinary Relaxed policy.
+                if (RegionManager::HybridReadProtectionEnabled() && tick > readback->tick) {
+                    readback->stale.store(true, std::memory_order_release);
+                }
+            } else if (readback->page_scoped &&
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
                 !EmulatorSettings.IsDirectMemoryAccessEnabled()) {
                 readback->invalid_pages.Add({Common::AlignDown(address, u64{4096}),
