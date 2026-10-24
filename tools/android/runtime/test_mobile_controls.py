@@ -77,6 +77,7 @@ class MobileTest{
   down(v,"swipepad");v.release();v.runDelayed();assert !p.finger&&p.buttons.isEmpty();
   // Closing auxiliary controls must release a held D-pad, not latch it invisibly.
   down(v,"utilities");up(v,"utilities");
+  PointF sensorTarget=layout.get("graffiti");assert "graffiti".equals(hit(v,sensorTarget.x,sensorTarget.y));
   event(v,0,0,new int[]{1},185,390);assert p.buttons.contains("right");
   PointF utility=layout.get("utilities");event(v,5,1,new int[]{1,2},185,390,utility.x,utility.y);assert p.buttons.isEmpty();v.release();
   // Classic positions and mobile positions remain independent, including reset.

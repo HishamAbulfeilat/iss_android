@@ -33,7 +33,7 @@ final class TouchControllerOverlay extends View {
         {135,340},{85,390},{185,390},{135,440},
         {845,482},{922,619},{1126,619},{1190,490},
         {230,585},{280,350},{280,430},{810,460},{330,60},{640,200},
-        {90,72},{115,353},{358,137},{986,151}
+        {90,72},{358,430},{358,137},{986,151}
     };
     private static final float PAD_HALF_W=140,PAD_HALF_H=102,PAD_CORNER=54;
     private boolean mobile,utilitiesOpen;
