@@ -15,16 +15,12 @@ final class BionicRendererSettings {
   env.put("TLG_READBACKS", precise ? "2" : "1");
   final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
-  // V2: use staged GPU->CPU copies for visibility instead of reading sparse
-  // residency directly; prefetch recurring fault pages at fences to overlap waits.
-  // Never apply this experiment to the proven Precise mode or plain Relaxed.
-  if (hybrid) {
-   env.put("TLG_MAPPED_READBACK","0");
-   env.put("TLG_EAGER_READBACK","1");
-  } else {
-   env.put("TLG_MAPPED_READBACK","1");
-   env.put("TLG_EAGER_READBACK","0");
-  }
+  // Hybrid V3: preserve staged copies (V2 visual fix). Isolate expensive
+  // fence prefetch with an independent, off-by-default experiment.
+  // Keep plain Relaxed and the known-good Precise unaffected.
+  env.put("TLG_MAPPED_READBACK",hybrid ? "0" : "1");
+  final boolean eager = hybrid && p.getBoolean("renderer_hybrid_eager_prefetch",false);
+  env.put("TLG_EAGER_READBACK",eager ? "1" : "0");
   // The PC deferred readback path moves the Precise GPU wait to guest fault handling.
   // Do not force eager downloads: they can increase synchronization cost.
   if (precise) env.put("TLG_DEFERRED_READBACK", "1");
