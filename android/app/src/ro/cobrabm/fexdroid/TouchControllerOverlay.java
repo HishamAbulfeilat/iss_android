@@ -103,8 +103,12 @@ final class TouchControllerOverlay extends View {
         for(int i=0;i<NAMES.length;i++){
             String name=NAMES[i];
             sizes.put(name,Math.max(0.6f,Math.min(1.6f,preferences.getFloat(layoutKey("size",name),1f))));
-            centers.put(name,new PointF(preferences.getFloat(layoutKey("x",name),defaults[i][0]),
-                preferences.getFloat(layoutKey("y",name),defaults[i][1])));
+            float x=preferences.getFloat(layoutKey("x",name),defaults[i][0]);
+            float y=preferences.getFloat(layoutKey("y",name),defaults[i][1]);
+            // Migrate the original mobile Options default away from the FPS HUD.
+            // Preserve custom layouts rather than moving intentionally placed controls.
+            if(mobile && "options".equals(name) && Math.abs(x-1190f)<0.1f && Math.abs(y-72f)<0.1f) x=995f;
+            centers.put(name,new PointF(x,y));
         }
     }
     private final PadBridge pad;
