@@ -49,7 +49,10 @@ final class AppLanguage {
    .setSingleChoiceItems(labels,current,(dialog,index)->{
     if(index==current){dialog.dismiss();return;}
     if(a.getSharedPreferences("iss",0).edit().putString("app_language",CODES[index]).commit()){
-     dialog.dismiss();a.recreate();
+     dialog.dismiss();
+     a.getWindow().getDecorView().post(() -> {
+      if (!a.isFinishing() && !a.isDestroyed()) a.recreate();
+     });
     }
    }).setNegativeButton(text("Cancel","Cancelar"),null).show();
  }
