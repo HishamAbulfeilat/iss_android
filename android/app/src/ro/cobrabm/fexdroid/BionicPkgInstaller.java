@@ -29,7 +29,7 @@ final class BionicPkgInstaller {
   try{
    if(request==BASE||request==UPDATE){selected=data.getData();update=request==UPDATE;
     if(update){new AlertDialog.Builder(activity).setTitle(AppLanguage.text("Install update?", "Instalar atualização?")).setMessage(AppLanguage.text("Matching files will be replaced directly in the game folder. TITLE_ID will be validated before extraction.", "Os arquivos correspondentes serão substituídos diretamente na pasta do jogo. TITLE_ID será validado antes da extração.")).setNegativeButton(AppLanguage.text("Cancel", "Cancelar"),(d,w)->{selected=null;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));}).setPositiveButton(AppLanguage.text("Install", "Instalar"),(d,w)->install(Uri.fromFile(game()))).setOnCancelListener(d->{selected=null;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));}).show();}
-    else activity.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),DESTINATION);
+    else install(Uri.fromFile(new File(Environment.getExternalStorageDirectory(), "inFamous Second Son")));
    }else{
     Uri dest=data.getData();try{activity.getContentResolver().takePersistableUriPermission(dest,data.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION));}catch(SecurityException ignored){}
     install(dest);
@@ -42,6 +42,7 @@ final class BionicPkgInstaller {
    try(BionicSession.Guard guard=BionicSession.acquire(activity.getFilesDir())){
     BionicRuntimeInstaller.install(activity);
     File pkg=local(source,false),dest=local(destination,true);
+    if(!update&&!dest.exists()&&!dest.mkdirs())throw new IOException(AppLanguage.text("Could not create inFamous Second Son directory.", "Não foi possível criar a pasta inFamous Second Son."));
     if(!pkg.isFile()||!pkg.canRead())throw new IOException(AppLanguage.text("Local PKG unavailable. Choose a file from device storage.", "PKG local indisponível. Escolha um arquivo no armazenamento do aparelho."));
     if(!dest.isDirectory()||!dest.canWrite())throw new IOException(AppLanguage.text("No write permission for the selected folder.", "Sem permissão de escrita na pasta escolhida."));
     File[] entries=dest.listFiles();if(entries==null)throw new IOException(AppLanguage.text("Could not list the destination folder.", "Não foi possível listar a pasta de destino."));
@@ -72,7 +73,7 @@ final class BionicPkgInstaller {
   int exit=process.waitFor();if(exit!=0)throw new IOException(AppLanguage.text("PKG extractor (", "Extrator PKG (")+exit+"): "+text.substring(Math.max(0,text.length()-1600)));return text.toString();
  }
  private File local(Uri uri,boolean directory)throws Exception{
-  if(directory&&"file".equals(uri.getScheme())){File file=new File(uri.getPath()).getCanonicalFile();if(file.equals(game().getCanonicalFile()))return file;throw new IOException(AppLanguage.text("Invalid destination.", "Destino inválido."));}
+  if(directory&&"file".equals(uri.getScheme())){File file=new File(uri.getPath()).getCanonicalFile();if(file.equals(game().getCanonicalFile())||file.equals(new File(Environment.getExternalStorageDirectory(),"inFamous Second Son").getCanonicalFile()))return file;throw new IOException(AppLanguage.text("Invalid destination.", "Destino inválido."));}
   String path=null;
   if("com.android.externalstorage.documents".equals(uri.getAuthority())){
    String id=directory?DocumentsContract.getTreeDocumentId(uri):DocumentsContract.getDocumentId(uri);int at=id.indexOf(':');if(at<1)throw new IOException(AppLanguage.text("Select local storage.", "Selecione armazenamento local."));
