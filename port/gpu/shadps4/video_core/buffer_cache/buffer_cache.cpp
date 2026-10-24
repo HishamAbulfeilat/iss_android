@@ -74,7 +74,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
     const char* hybrid_window = std::getenv("TLG_DOWNLOAD_WINDOW_KB");
-    std::printf("ISS hybrid: read protection=%s, staged buffer copies=%s, eager fence copies=%s, download window=%s KiB\n",
+    std::printf("ISS hybrid V5: read protection=%s, staged buffer copies=%s, eager fence copies=%s, download window=%s KiB\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 std::getenv("TLG_MAPPED_READBACK") && std::getenv("TLG_MAPPED_READBACK")[0] == '0' ? "on" : "off",
                 std::getenv("TLG_EAGER_READBACK") && std::getenv("TLG_EAGER_READBACK")[0] == '1' ? "on" : "off",
@@ -1647,6 +1647,28 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_
 void BufferCache::PruneDeferredReadbacks() {
     if (!deferred_count.load(std::memory_order_acquire)) {
         return;
+    }
+    // Hybrid Relaxed: opportunistically publish completed staged snapshots from the
+    // cache owner before the guest faults. Unlike eager fence copies, these are ONLY
+    // downloads requested earlier by a real guest fault; no speculative GPU copies.
+    // A pending GPU write must have completed its original tick, and the snapshot
+    // must still pass FinishDeferredReadback's stale and page-locked validation.
+    // Do not change normal Relaxed or Precise behavior.
+    if (RegionManager::HybridReadProtectionEnabled()) {
+        boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> ready_candidates;
+        {
+            std::scoped_lock lock{deferred_mutex};
+            for (const auto& rb : deferred_readbacks) {
+                if (!rb->Done() && !rb->mapped &&
+                    !rb->stale.load(std::memory_order_acquire) &&
+                    scheduler.IsFree(rb->tick)) {
+                    ready_candidates.push_back(rb);
+                }
+            }
+        }
+        for (const auto& rb : ready_candidates) {
+            FinishDeferredReadback(*rb, false);
+        }
     }
     boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> stale;
     {

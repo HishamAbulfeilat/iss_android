@@ -24,7 +24,7 @@ final class BionicReadbackSettings {
  }
  static String summary(Activity activity) {
   switch (mode(activity.getSharedPreferences("iss",0))) {
-   case 1: return AppLanguage.text("Hybrid V4", "Híbrido V4");
+   case 1: return AppLanguage.text("Hybrid V5", "Híbrido V5");
    case 2: return "Precise 2";
    default: return "Relaxed 1";
   }
@@ -61,8 +61,8 @@ final class BionicReadbackSettings {
 
   TextView help = new TextView(activity);
   help.setText(AppLanguage.text(
-   "Hybrid V4 retains read protection and staged copies, disables the flickering fence prefetch and narrows the readback window to 128 KiB. Compare visuals and FPS; restart the game to apply.",
-   "O híbrido V4 mantém proteção de leitura e staging, remove a antecipação que causou glitches e reduz a janela de readback para 128 KiB. Compare imagem e FPS; reinicie o jogo para aplicar."));
+   "Hybrid V5 restores the 512 KiB staging window and publishes previously requested GPU copies as soon as they finish. No speculative fence copies. Restart to apply.",
+   "O híbrido V5 restaura a janela de staging de 512 KiB e publica cópias já solicitadas assim que terminam na GPU, sem cópias antecipadas. Reinicie para aplicar."));
   help.setPadding(0,pad,0,0);
   body.addView(help);
 

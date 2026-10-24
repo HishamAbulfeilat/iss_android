@@ -24,17 +24,20 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn("BionicReadbackSettings.show(", main)
         self.assertIn("BionicReadbackSettings.show(", player)
 
-    def test_hybrid_v4_staged_small_window_without_unsafe_eager_prefetch(self):
+    def test_hybrid_v5_original_visual_window_and_completed_snapshot_reuse(self):
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         dialog = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
         cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
         self.assertIn('env.put("TLG_MAPPED_READBACK",hybrid ? "0" : "1");',settings)
         self.assertIn('env.put("TLG_EAGER_READBACK","0");',settings)
-        self.assertIn('if (hybrid) env.put("TLG_DOWNLOAD_WINDOW_KB","128");',settings)
+        self.assertIn('if (hybrid) env.put("TLG_DOWNLOAD_WINDOW_KB","512");',settings)
         self.assertNotIn('renderer_hybrid_eager_prefetch', settings)
         self.assertNotIn('HYBRID_EAGER_KEY', dialog)
-        self.assertIn('Híbrido V4',dialog)
-        self.assertIn('download window=%s KiB',cache)
+        self.assertIn('Híbrido V5',dialog)
+        self.assertIn('ISS hybrid V5:',cache)
+        self.assertIn('if (RegionManager::HybridReadProtectionEnabled()) {',cache)
+        self.assertIn('scheduler.IsFree(rb->tick)',cache)
+        self.assertIn('FinishDeferredReadback(*rb, false);',cache)
         self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
 
     def test_explicit_toggle_and_precise_override(self):
