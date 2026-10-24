@@ -24,6 +24,15 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn("BionicReadbackSettings.show(", main)
         self.assertIn("BionicReadbackSettings.show(", player)
 
+    def test_hybrid_v2_staging_and_eager_are_opt_in(self):
+        settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
+        cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        self.assertIn('env.put("TLG_MAPPED_READBACK","0");',settings)
+        self.assertIn('env.put("TLG_EAGER_READBACK","1");',settings)
+        self.assertIn('env.put("TLG_MAPPED_READBACK","1");',settings)
+        self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
+        self.assertIn('ISS hybrid V2:',cache)
+
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)

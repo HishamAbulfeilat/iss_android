@@ -41,8 +41,8 @@ final class BionicReadbackSettings {
   String[] labels = {
    AppLanguage.text("Relaxed 1 — faster; smoke/powers may be incorrect",
                     "Relaxed 1 — mais rápido; fumaça/poderes podem falhar"),
-   AppLanguage.text("Hybrid experimental — Relaxed with Precise read protection",
-                    "Híbrido experimental — Relaxed com proteção de leitura Precise"),
+   AppLanguage.text("Hybrid experimental V2 — staged copies and fence prefetch",
+                    "Híbrido experimental V2 — cópias staging e antecipação nos fences"),
    AppLanguage.text("Precise 2 — correct smoke/powers; major FPS impact",
                     "Precise 2 — corrige fumaça/poderes; grande queda de FPS")
   };
@@ -61,8 +61,8 @@ final class BionicReadbackSettings {
 
   TextView help = new TextView(activity);
   help.setText(AppLanguage.text(
-   "Hybrid is experimental: compare smoke, powers and FPS. Only one mode is active. Changes apply after restarting the game.",
-   "O híbrido é experimental: compare fumaça, poderes e FPS. Só um modo fica ativo. Reinicie o jogo para aplicar."));
+   "Hybrid V2 is experimental: uses staging against flickering and fence prefetch to reduce waits. Compare visuals and FPS. Restart the game to apply.",
+   "O híbrido V2 é experimental: tenta eliminar o piscar de luzes com staging e antecipar leituras nos fences. Compare imagem e FPS. Reinicie o jogo para aplicar."));
   help.setPadding(0,pad,0,0);
   body.addView(help);
 

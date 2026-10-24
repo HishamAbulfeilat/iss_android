@@ -73,6 +73,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    std::printf("ISS hybrid V2: read protection=%s, staged buffer copies=%s, eager fence copies=%s\\n",
+                RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
+                std::getenv("TLG_MAPPED_READBACK") && std::getenv("TLG_MAPPED_READBACK")[0] == '0' ? "on" : "off",
+                std::getenv("TLG_EAGER_READBACK") && std::getenv("TLG_EAGER_READBACK")[0] == '1' ? "on" : "off");
     std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
@@ -970,7 +974,9 @@ constexpr u8 EagerMaxBackoff = 7;
 bool BufferCache::EagerEnabled() {
     static const bool enabled = [] {
         const char* e = std::getenv("TLG_EAGER_READBACK");
-        return e && *e == '1' && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise;
+        return e && *e == '1' &&
+               (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise ||
+                RegionManager::HybridReadProtectionEnabled());
     }();
     return enabled;
 }
