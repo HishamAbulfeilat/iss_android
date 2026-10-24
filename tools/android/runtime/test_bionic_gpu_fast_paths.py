@@ -44,6 +44,8 @@ struct RegionManager {
     template<Type t> auto& GetRegionBits(){if constexpr(t==Type::GPU)return gpu;else return cpu;}
     template<Type t> const auto& GetRegionBits()const{if constexpr(t==Type::GPU)return gpu;else return cpu;}
     void CountWriteFaults(size_t,size_t){}void NoteCpuBitsSet(){}void NoteCpuBitsCleared(){}
+    static inline bool hybrid_read_protection=false;
+    static bool HybridReadProtectionEnabled(){return hybrid_read_protection && EmulatorSettings.GetReadbacksMode()==GpuReadbacksMode::Relaxed;}
     template<bool,bool> void UpdateProtection(){++protections;}
 ''' + bodies + r'''
 };
@@ -66,6 +68,15 @@ int main(){
         assert(!r.gpu_any.load());
         assert(r.protections==(mode==GpuReadbacksMode::Precise?5u:0u));
     }
+    // The experimental hybrid protects GPU-dirty reads without switching the mode
+    // or disabling Relaxed's asynchronous readback publication.
+    EmulatorSettings.mode=GpuReadbacksMode::Relaxed;
+    RegionManager::hybrid_read_protection=true;
+    RegionManager hybrid;
+    hybrid.ChangeRegionState<Type::GPU,true>(4096,8192);
+    hybrid.ChangeRegionState<Type::GPU,false>(4096,8192);
+    assert(hybrid.protections==2u);
+    RegionManager::hybrid_read_protection=false;
 }
 ''')
 
