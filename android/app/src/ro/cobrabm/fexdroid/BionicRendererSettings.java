@@ -15,12 +15,14 @@ final class BionicRendererSettings {
   env.put("TLG_READBACKS", precise ? "2" : "1");
   final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
-  // Hybrid V3: preserve staged copies (V2 visual fix). Isolate expensive
-  // fence prefetch with an independent, off-by-default experiment.
-  // Keep plain Relaxed and the known-good Precise unaffected.
+  // Hybrid V4: preserve the visually correct staging and read protection.
+  // Fence prefetch caused GPU synchronization storms and intermittent visual glitches.
+  // Narrow only the prefetch/download neighborhood from 512 to 128 KiB to avoid
+  // copying unrelated GPU-dirty records on each guest read. Full range correctness
+  // and per-page validation are still enforced by the unchanged native cache.
   env.put("TLG_MAPPED_READBACK",hybrid ? "0" : "1");
-  final boolean eager = hybrid && p.getBoolean("renderer_hybrid_eager_prefetch",false);
-  env.put("TLG_EAGER_READBACK",eager ? "1" : "0");
+  env.put("TLG_EAGER_READBACK","0");
+  if (hybrid) env.put("TLG_DOWNLOAD_WINDOW_KB","128");
   // The PC deferred readback path moves the Precise GPU wait to guest fault handling.
   // Do not force eager downloads: they can increase synchronization cost.
   if (precise) env.put("TLG_DEFERRED_READBACK", "1");
