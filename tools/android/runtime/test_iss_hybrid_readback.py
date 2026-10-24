@@ -24,21 +24,25 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn("BionicReadbackSettings.show(", main)
         self.assertIn("BionicReadbackSettings.show(", player)
 
-    def test_hybrid_v5_original_visual_window_and_completed_snapshot_reuse(self):
+    def test_hybrid_v6_optimized_eager_backoff_is_optional(self):
         settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         dialog = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
+        core = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        self.assertIn('env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");', settings)
+        self.assertIn('static final String BACKOFF_KEY = "renderer_hybrid_eager_backoff";', dialog)
+        self.assertIn('.putBoolean(BACKOFF_KEY,optimized.isChecked()).apply();',dialog)
+        self.assertIn('constexpr u8 EagerHybridMaxBackoff = 63;', core)
+        self.assertIn('RegionManager::HybridReadProtectionEnabled() && opt && opt[0] == \'1\'', core)
+        self.assertNotIn('FinishDeferredReadback(*rb, false);', core)
+
+    def test_hybrid_v2_staging_and_eager_are_opt_in(self):
+        settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         cache = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
-        self.assertIn('env.put("TLG_MAPPED_READBACK",hybrid ? "0" : "1");',settings)
-        self.assertIn('env.put("TLG_EAGER_READBACK","0");',settings)
-        self.assertIn('if (hybrid) env.put("TLG_DOWNLOAD_WINDOW_KB","512");',settings)
-        self.assertNotIn('renderer_hybrid_eager_prefetch', settings)
-        self.assertNotIn('HYBRID_EAGER_KEY', dialog)
-        self.assertIn('Híbrido V5',dialog)
-        self.assertIn('ISS hybrid V5:',cache)
-        self.assertIn('if (RegionManager::HybridReadProtectionEnabled()) {',cache)
-        self.assertIn('scheduler.IsFree(rb->tick)',cache)
-        self.assertIn('FinishDeferredReadback(*rb, false);',cache)
+        self.assertIn('env.put("TLG_MAPPED_READBACK","0");',settings)
+        self.assertIn('env.put("TLG_EAGER_READBACK","1");',settings)
+        self.assertIn('env.put("TLG_MAPPED_READBACK","1");',settings)
         self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
+        self.assertIn('ISS hybrid V2:',cache)
 
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()

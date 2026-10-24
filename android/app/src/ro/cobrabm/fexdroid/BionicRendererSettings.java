@@ -15,14 +15,18 @@ final class BionicRendererSettings {
   env.put("TLG_READBACKS", precise ? "2" : "1");
   final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
-  // Hybrid V5: restore the 512 KiB staged readback window from V2/V3.
-  // V4's smaller window multiplied GPU waits and regressed graphics.
-  // No fence prefetch: V3's extra eager path caused intermittent glitches.
-  // The core opportunistically retires already-completed staged snapshots on the
-  // Relaxed cache owner, without adding copies or widening protection.
-  env.put("TLG_MAPPED_READBACK",hybrid ? "0" : "1");
-  env.put("TLG_EAGER_READBACK","0");
-  if (hybrid) env.put("TLG_DOWNLOAD_WINDOW_KB","512");
+  // Opt-in V6 experiment; when disabled this is exactly the confirmed V2 path.
+  env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
+  // V2: use staged GPU->CPU copies for visibility instead of reading sparse
+  // residency directly; prefetch recurring fault pages at fences to overlap waits.
+  // Never apply this experiment to the proven Precise mode or plain Relaxed.
+  if (hybrid) {
+   env.put("TLG_MAPPED_READBACK","0");
+   env.put("TLG_EAGER_READBACK","1");
+  } else {
+   env.put("TLG_MAPPED_READBACK","1");
+   env.put("TLG_EAGER_READBACK","0");
+  }
   // The PC deferred readback path moves the Precise GPU wait to guest fault handling.
   // Do not force eager downloads: they can increase synchronization cost.
   if (precise) env.put("TLG_DEFERRED_READBACK", "1");

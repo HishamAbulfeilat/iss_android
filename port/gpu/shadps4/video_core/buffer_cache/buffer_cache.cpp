@@ -73,12 +73,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
-    const char* hybrid_window = std::getenv("TLG_DOWNLOAD_WINDOW_KB");
-    std::printf("ISS hybrid V5: read protection=%s, staged buffer copies=%s, eager fence copies=%s, download window=%s KiB\n",
+    std::printf("ISS hybrid V6 (V2 baseline): read protection=%s, staged buffer copies=%s, eager fence copies=%s, selective backoff=%s\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 std::getenv("TLG_MAPPED_READBACK") && std::getenv("TLG_MAPPED_READBACK")[0] == '0' ? "on" : "off",
                 std::getenv("TLG_EAGER_READBACK") && std::getenv("TLG_EAGER_READBACK")[0] == '1' ? "on" : "off",
-                hybrid_window && *hybrid_window ? hybrid_window : "512");
+                std::getenv("TLG_ISS_EAGER_BACKOFF_63") && std::getenv("TLG_ISS_EAGER_BACKOFF_63")[0] == '1' ? "on" : "off");
     std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()));
@@ -971,6 +970,8 @@ constexpr u32 EagerIdleFences = 2400;        // ~40 s at 60 fences/s: forgotten
 // reads it) is copied at fewer fences, twice as few each time, up to 1 in 8, until a copy of it
 // is read again. In the fork three quarters of such copies were wasted (9a5224bf).
 constexpr u8 EagerMaxBackoff = 7;
+// Hybrid opt-in: spend fewer speculative copies on repeatedly stale, unread pages.
+constexpr u8 EagerHybridMaxBackoff = 63;
 } // namespace
 
 bool BufferCache::EagerEnabled() {
@@ -1043,7 +1044,12 @@ void BufferCache::NoteGpuWriteForEager(VAddr addr, u64 size) {
         auto& page = it->second;
         if (page.valid) {
             // Copied at a fence and never read before the GPU wrote it again.
-            page.backoff = std::min<u8>(static_cast<u8>(page.backoff * 2 + 1), EagerMaxBackoff);
+            static const u8 backoff_cap = [] {
+                const char* opt = std::getenv("TLG_ISS_EAGER_BACKOFF_63");
+                return RegionManager::HybridReadProtectionEnabled() && opt && opt[0] == '1'
+                           ? EagerHybridMaxBackoff : EagerMaxBackoff;
+            }();
+            page.backoff = std::min<u8>(static_cast<u8>(page.backoff * 2 + 1), backoff_cap);
             page.skip = page.backoff;
             if (ReadbackStatsEnabled()) {
                 Readbacks().eager_stale.fetch_add(1);
@@ -1647,28 +1653,6 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_
 void BufferCache::PruneDeferredReadbacks() {
     if (!deferred_count.load(std::memory_order_acquire)) {
         return;
-    }
-    // Hybrid Relaxed: opportunistically publish completed staged snapshots from the
-    // cache owner before the guest faults. Unlike eager fence copies, these are ONLY
-    // downloads requested earlier by a real guest fault; no speculative GPU copies.
-    // A pending GPU write must have completed its original tick, and the snapshot
-    // must still pass FinishDeferredReadback's stale and page-locked validation.
-    // Do not change normal Relaxed or Precise behavior.
-    if (RegionManager::HybridReadProtectionEnabled()) {
-        boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> ready_candidates;
-        {
-            std::scoped_lock lock{deferred_mutex};
-            for (const auto& rb : deferred_readbacks) {
-                if (!rb->Done() && !rb->mapped &&
-                    !rb->stale.load(std::memory_order_acquire) &&
-                    scheduler.IsFree(rb->tick)) {
-                    ready_candidates.push_back(rb);
-                }
-            }
-        }
-        for (const auto& rb : ready_candidates) {
-            FinishDeferredReadback(*rb, false);
-        }
     }
     boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> stale;
     {
