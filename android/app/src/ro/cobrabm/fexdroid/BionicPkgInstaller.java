@@ -45,14 +45,29 @@ final class BionicPkgInstaller {
     if(!update&&!dest.exists()&&!dest.mkdirs())throw new IOException(AppLanguage.text("Could not create inFamous Second Son directory.", "Não foi possível criar a pasta inFamous Second Son."));
     if(!pkg.isFile()||!pkg.canRead())throw new IOException(AppLanguage.text("Local PKG unavailable. Choose a file from device storage.", "PKG local indisponível. Escolha um arquivo no armazenamento do aparelho."));
     if(!dest.isDirectory()||!dest.canWrite())throw new IOException(AppLanguage.text("No write permission for the selected folder.", "Sem permissão de escrita na pasta escolhida."));
-    // Verify actual file creation: canWrite() alone is unreliable on emulated storage.
+    File[] entries=dest.listFiles();
+    if(entries==null)throw new IOException(AppLanguage.text("Could not list the destination folder.", "Não foi possível listar a pasta de destino."));
+    if(!update&&entries.length!=0){
+     // Never extract a base package over previous files, including incomplete installs.
+     File parent=dest.getParentFile();String name=dest.getName();
+     File free=null;
+     for(int index=2;index<1000;index++){
+      File candidate=new File(parent,name+" ("+index+")");
+      if(!candidate.exists()){
+       if(!candidate.mkdir())throw new IOException(AppLanguage.text("Could not create a fresh game folder: ","Não foi possível criar uma nova pasta do jogo: ")+candidate);
+       free=candidate.getCanonicalFile();break;
+      }
+     }
+     if(free==null)throw new IOException(AppLanguage.text("No free installation folder name.", "Não há nome de pasta livre para instalação."));
+     dest=free;
+    }
+    if(!dest.isDirectory()||!dest.canWrite())throw new IOException(AppLanguage.text("No write permission for the selected folder.", "Sem permissão de escrita na pasta escolhida."));
+    // Test real file creation AFTER deciding the destination; do not mistake the probe for game content.
     File probe=new File(dest,".iss-pkg-write-test");
     try(FileOutputStream stream=new FileOutputStream(probe)){stream.write(1);stream.getFD().sync();}
     catch(IOException e){throw new IOException(AppLanguage.text("Cannot create files in destination: ","Não é possível criar arquivos no destino: ")+dest.getPath(),e);}
     finally{if(probe.exists()&&!probe.delete())throw new IOException("Cannot remove destination write test: "+probe.getPath());}
     stateOnUi(true,AppLanguage.text("Destination ready: ","Pasta de instalação pronta: ")+dest.getPath());
-    File[] entries=dest.listFiles();if(entries==null)throw new IOException(AppLanguage.text("Could not list the destination folder.", "Não foi possível listar a pasta de destino."));
-    if(!update&&entries.length!=0)throw new IOException(AppLanguage.text("Select an empty folder to install the base game.", "Selecione uma pasta vazia para instalar o jogo base."));
     if(!update&&pkg.toPath().startsWith(dest.toPath()))throw new IOException(AppLanguage.text("The PKG must be outside the destination folder.", "O PKG deve ficar fora da pasta de destino."));
     try(DataInputStream in=new DataInputStream(new FileInputStream(pkg))){if(in.readInt()!=0x7f434e54)throw new IOException(AppLanguage.text("File is not a PS4 PKG.", "Arquivo não é um PKG de PS4."));}
     File helper=new File(activity.getFilesDir(),"issport/arm64/bin/orbis-pkg-util");
