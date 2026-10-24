@@ -58,7 +58,7 @@ public final class BionicMainActivity extends Activity {
    LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  PLAY", "▶  JOGAR"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));
    directStart=BionicStartupSettings.toggle(this);game.addView(directStart);actions.add(directStart);
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
-   button(video,AppLanguage.text("Renderer corrections", "Correções do renderer"),()->BionicRendererSettings.show(this));
+   button(video,AppLanguage.text("Smoke and powers fix (Readback Precise) — performance cost", "Correção para fumaça e poderes (Readback Precise) — custo de desempenho"),()->BionicReadbackSettings.show(this,()->showPage(0)));
    button(video,AppLanguage.text("Frame generation — Bloodframe", "Geração de quadros — Bloodframe"),()->FramegenSettings.show(this,null));
   }else if(page==1){LinearLayout patches=card(content,"PATCHES — inFAMOUS SECOND SON");patches.addView(BionicVideoSettings.content(this,2));
   }else if(page==2){
