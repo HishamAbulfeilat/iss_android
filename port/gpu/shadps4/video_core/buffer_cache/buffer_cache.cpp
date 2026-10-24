@@ -72,6 +72,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 static_cast<int>(EmulatorSettings.GetReadbacksMode()),
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    std::printf("ISS experimental hybrid read protection: %s (readbacks=%d)\n",
+                RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
+                static_cast<int>(EmulatorSettings.GetReadbacksMode()));
+#endif
     // tlg: TLG_MAX_BUFFER_MB lowers the driver's buffer size limit as the arenas see it
     // (diagnostics: reproduces AMD on Windows 2048, RADV 4095 on any GPU).
     u64 max_buffer = instance.GetMaxBufferSize();
