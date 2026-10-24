@@ -55,8 +55,8 @@ final class BionicPkgInstaller {
     if(!title.find())throw new IOException(AppLanguage.text("TITLE_ID missing from PKG header.", "TITLE_ID ausente no cabeçalho PKG."));String id=title.group(1).toUpperCase(java.util.Locale.US);
     if(update&&(!dest.equals(game().getCanonicalFile())||!id.equals(BionicSaveArchive.readTitle(dest))))throw new IOException(AppLanguage.text("The update does not match the selected game.", "A atualização não corresponde ao jogo selecionado."));
     stateOnUi(true,AppLanguage.text("Extracting PKG directly into the selected folder…", "Extraindo PKG diretamente na pasta escolhida…"));
-    if(update)execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath(),"--quiet","--force");
-    else execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath(),"--quiet");
+    if(update)execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath(),"--force");
+    else execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath());
     if(!new File(dest,"eboot.bin").isFile()||!new File(dest,"art").isDirectory()||!id.equals(BionicSaveArchive.readTitle(dest)))throw new IOException(AppLanguage.text("Extraction does not contain a complete inFAMOUS Second Son dump. Check eboot.bin, art/ and sce_sys/param.sfo.", "Extração não contém um dump completo de inFAMOUS Second Son. Confira eboot.bin, art/ e sce_sys/param.sfo."));
     if(!activity.getSharedPreferences("iss",0).edit().putString("game_dir",dest.getPath()).commit())throw new IOException(AppLanguage.text("Content extracted, but the folder could not be selected.", "Conteúdo extraído, mas não foi possível selecionar a pasta."));
     message=(update?AppLanguage.text("Update", "Atualização"):AppLanguage.text("Game", "Jogo"))+" "+id+AppLanguage.text(" installed at ", " instalado em ")+dest.getPath();
@@ -67,10 +67,50 @@ final class BionicPkgInstaller {
  private void stateOnUi(boolean busy,String message){activity.runOnUiThread(()->{if(!activity.isFinishing()&&!activity.isDestroyed())state.set(busy,message);});}
  private String execute(File helper,File dest,String... args)throws Exception{
   java.util.ArrayList<String> command=new java.util.ArrayList<>();command.add("/system/bin/linker64");command.add(helper.getPath());java.util.Collections.addAll(command,args);
-  ProcessBuilder builder=new ProcessBuilder(command).directory(dest).redirectErrorStream(true);builder.environment().put("LD_LIBRARY_PATH",new File(activity.getFilesDir(),"issport/arm64/lib").getPath());
-  Process process=builder.start();StringBuilder text=new StringBuilder();
-  try(BufferedReader reader=new BufferedReader(new InputStreamReader(process.getInputStream()))){String line;while((line=reader.readLine())!=null){if(text.length()<24000)text.append(line).append('\n');}}
-  int exit=process.waitFor();if(exit!=0)throw new IOException(AppLanguage.text("PKG extractor (", "Extrator PKG (")+exit+"): "+text.substring(Math.max(0,text.length()-1600)));return text.toString();
+  ProcessBuilder builder=new ProcessBuilder(command).directory(dest).redirectErrorStream(true);
+  builder.environment().put("LD_LIBRARY_PATH",new File(activity.getFilesDir(),"issport/arm64/lib").getPath());
+  Process process=builder.start();
+  final StringBuilder log=new StringBuilder();
+  final java.util.concurrent.atomic.AtomicReference<String> progress=new java.util.concurrent.atomic.AtomicReference<>("");
+  final java.util.concurrent.atomic.AtomicReference<IOException> readFailure=new java.util.concurrent.atomic.AtomicReference<>();
+  Thread drain=new Thread(()->{
+   try(Reader reader=new InputStreamReader(process.getInputStream())){
+    char[] buffer=new char[4096];StringBuilder line=new StringBuilder();int n;
+    while((n=reader.read(buffer))!=-1){
+     for(int i=0;i<n;i++){
+      char c=buffer[i];
+      if(c=='\r'||c=='\n'){
+       if(line.length()>0){
+        String value=line.toString();progress.set(value);
+        synchronized(log){if(log.length()>32000)log.delete(0,log.length()-16000);log.append(value).append('\n');}
+        line.setLength(0);
+       }
+      }else if(line.length()<4096)line.append(c);
+     }
+    }
+    if(line.length()>0){String value=line.toString();progress.set(value);synchronized(log){log.append(value).append('\n');}}
+   }catch(IOException e){readFailure.set(e);}
+  },"iss-pkg-output");
+  drain.setDaemon(true);drain.start();
+  long start=android.os.SystemClock.elapsedRealtime();
+  boolean extracting=args.length>0&&"extract".equals(args[0]);
+  try{
+   while(!process.waitFor(3,java.util.concurrent.TimeUnit.SECONDS)){
+    if(extracting){
+     long elapsed=(android.os.SystemClock.elapsedRealtime()-start)/1000;
+     String line=progress.get();if(line.length()>140)line=line.substring(line.length()-140);
+     String msg=AppLanguage.text("Extracting PKG", "Extraindo PKG")+" ("+(elapsed/60)+"m "+(elapsed%60)+"s)";
+     if(!line.isEmpty())msg+="\n"+line;
+     stateOnUi(true,msg);
+    }
+   }
+   drain.join(5000);
+   int exit=process.exitValue();
+   String output; synchronized(log){output=log.toString();}
+   if(exit!=0)throw new IOException(AppLanguage.text("PKG extractor (","Extrator PKG (")+exit+"): "+output.substring(Math.max(0,output.length()-1800)));
+   if(readFailure.get()!=null)throw readFailure.get();
+   return output;
+  }catch(InterruptedException e){process.destroyForcibly();Thread.currentThread().interrupt();throw new IOException("PKG extraction interrupted",e);}
  }
  private File local(Uri uri,boolean directory)throws Exception{
   if(directory&&"file".equals(uri.getScheme())){File file=new File(uri.getPath()).getCanonicalFile();if(file.equals(game().getCanonicalFile())||file.equals(new File(Environment.getExternalStorageDirectory(),"inFamous Second Son").getCanonicalFile()))return file;throw new IOException(AppLanguage.text("Invalid destination.", "Destino inválido."));}
