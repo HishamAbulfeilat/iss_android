@@ -11,7 +11,11 @@ import java.util.Map;
 /** Reversible renderer changes, read only when a fresh game process starts. */
 final class BionicRendererSettings {
  static void environment(SharedPreferences p,Map<String,String> env){
-  env.put("TLG_READBACKS", p.getBoolean("fix_smoke_powers_precise_readback", false) ? "2" : "1");
+  final boolean precise = p.getBoolean("fix_smoke_powers_precise_readback", false);
+  env.put("TLG_READBACKS", precise ? "2" : "1");
+  // The PC deferred readback path moves the Precise GPU wait to guest fault handling.
+  // Do not force eager downloads: they can increase synchronization cost.
+  if (precise) env.put("TLG_DEFERRED_READBACK", "1");
   env.put("TLG_DYNAMIC_STRIDE",p.getBoolean("renderer_dynamic_stride",true)?"1":"0");
   env.put("TLG_OCCLUSION_MODE",p.getBoolean("renderer_real_occlusion",true)?"4":"3");
   env.put("TLG_GC_BATCH_DOWNLOAD",p.getBoolean("renderer_batch_gc",true)?"1":"0");
