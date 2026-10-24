@@ -45,7 +45,7 @@ final class BionicPlayerMenu {
   int m=activity.getSharedPreferences("iss",0).getInt("fg_multiplier",0);
   row("◉",AppLanguage.text("Frame generation (BloodFrame)", "Geração de quadros (BloodFrame)"),m>=2?m+"×":AppLanguage.text("Off", "Desligado"),()->FramegenSettings.show(activity,()->{apply();contents();}));
   HudConfig config=HudConfig.load(hudFile);row("☷","HUD — FPS / GPU / CPU",config.enabled?AppLanguage.text("On", "Ligado"):AppLanguage.text("Off", "Desligado"),()->HudControls.show(activity,hudFile,()->{apply();contents();}));
-  row("◈",AppLanguage.text("Renderer corrections", "Correções do renderer"),AppLanguage.text("Applied on next game start", "Aplicadas no próximo início"),()->BionicRendererSettings.show(activity));
+  row("◈",AppLanguage.text("Smoke and powers fix (Readback Precise)", "Correção para fumaça e poderes (Readback Precise)"),BionicReadbackSettings.summary(activity),()->BionicReadbackSettings.show(activity,this::contents));
   section(AppLanguage.text("CONTROLS", "CONTROLES"));boolean visible=activity.getSharedPreferences("iss",0).getBoolean("controller_overlay",true);
   row("✚",AppLanguage.text("On-screen controller", "Controle na tela"),visible?AppLanguage.text("On", "Ligado"):AppLanguage.text("Off", "Desligado"),()->{activity.getSharedPreferences("iss",0).edit().putBoolean("controller_overlay",!visible).apply();apply();contents();});
   Switch labels=new Switch(activity);labels.setText(AppLanguage.text("Button labels", "Legendas dos botões"));labels.setTextColor(0xfffff1e9);labels.setChecked(activity.getSharedPreferences("iss",0).getBoolean("controller_labels",true));items.addView(labels);
