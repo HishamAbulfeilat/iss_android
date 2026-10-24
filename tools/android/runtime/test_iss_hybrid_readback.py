@@ -42,7 +42,7 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('env.put("TLG_EAGER_READBACK","1");',settings)
         self.assertIn('env.put("TLG_MAPPED_READBACK","1");',settings)
         self.assertIn('RegionManager::HybridReadProtectionEnabled());',cache)
-        self.assertIn('ISS hybrid V2:',cache)
+        self.assertIn('ISS hybrid V6 (V2 baseline):',cache)
 
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
