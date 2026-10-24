@@ -3828,7 +3828,6 @@ void Rasterizer::WriteHiddenOcclusion(VAddr address, u32 num_pairs) {
     if (IsMapped(address, size) && buffer_cache.IsRegionGpuModified(address, size)) {
         // Results the GPU wrote before (a counted query at this address): written there too.
         texture_cache.InvalidateMemoryFromGPU(address, size);
-        VideoCore::written_binding_source = {"occlusion", 0};
         const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, size, true);
         runtime.WriteOcclusionResults(buffer, offset, num_pairs,
                                       occlusion ? occlusion->Pool() : vk::QueryPool{}, {});
@@ -3891,7 +3890,6 @@ void Rasterizer::OcclusionDump(VAddr address, u32 num_pairs) {
         ++hidden;
     } else {
         texture_cache.InvalidateMemoryFromGPU(results, size);
-        VideoCore::written_binding_source = {"occlusion", 0};
         const auto [buffer, offset] = buffer_cache.ObtainBuffer(results, size, true);
         const std::span<const u32> used{queries.data(), queries.size()};
         runtime.WriteOcclusionResults(buffer, offset, num_pairs, occlusion->Pool(), used);
