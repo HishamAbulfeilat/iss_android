@@ -13,6 +13,17 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('GpuReadbacksMode::Precise ||\n                HybridReadProtectionEnabled()', src)
         self.assertIn('UpdateProtection<enable, true>();', src)
 
+    def test_readback_modes_are_accessible_in_one_dialog(self):
+        src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
+        self.assertIn("RadioGroup choices = new RadioGroup(activity);", src)
+        self.assertIn("choices.check(ids[mode(preferences)]);", src)
+        self.assertIn("putBoolean(KEY,choice==2)", src)
+        self.assertIn("putBoolean(HYBRID_KEY,choice==1)", src)
+        main = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicMainActivity.java").read_text()
+        player = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicPlayerMenu.java").read_text()
+        self.assertIn("BionicReadbackSettings.show(", main)
+        self.assertIn("BionicReadbackSettings.show(", player)
+
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)
