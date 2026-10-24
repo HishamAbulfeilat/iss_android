@@ -45,6 +45,19 @@ public:
     }
     explicit RegionManager() = default;
 
+    // Experimental ISS: retain Relaxed publication, but trap guest reads of GPU-dirty pages.
+    // Off by default; requires explicit TLG_ISS_HYBRID_READ_PROTECT=1.
+    static bool HybridReadProtectionEnabled() {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        static const bool enabled = [] {
+            const char* value = std::getenv("TLG_ISS_HYBRID_READ_PROTECT");
+            return value && value[0] == '1';
+        }();
+        return enabled && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed;
+#else
+        return false;
+#endif
+    }
     void SetCpuAddress(VAddr new_cpu_addr) {
         cpu_addr = new_cpu_addr;
     }
@@ -114,7 +127,8 @@ public:
             if constexpr (!enable) {
                 NoteGpuBitsCleared();
             }
-            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise) {
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise ||
+                HybridReadProtectionEnabled()) {
                 UpdateProtection<enable, true>();
             }
         }
