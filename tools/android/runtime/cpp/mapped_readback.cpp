@@ -105,6 +105,12 @@ struct StagingBufferRef {
 // PRODUCTION_SCHEDULER
 }
 namespace VideoCore {
+// The extracted core uses the real RegionManager; the standalone lifecycle
+// harness models its hybrid-mode policy without importing Android page tracking.
+struct RegionManager {
+    static inline bool hybrid_read_protection = false;
+    static bool HybridReadProtectionEnabled() { return hybrid_read_protection; }
+};
 constexpr u64 RESIDENCY_CHUNK_SIZE=256ull<<20;
 enum class MemoryType {Sparse,HostCached};
 struct Buffer {VAddr cpu_addr=0x10000000;u64 size_bytes=0x80000;};
@@ -212,6 +218,8 @@ struct BufferCache {
 
 int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
+    const bool hybrid_stage = mode=="hybrid_stage_ready" || mode=="hybrid_stage_pending";
+    VideoCore::RegionManager::hybrid_read_protection = hybrid_stage;
     const bool partial=mode.starts_with("partial_");
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
@@ -343,9 +351,10 @@ int main(int argc,char** argv) {
     if(mode=="invalidatefail" || mode=="readyinvalidatefail")fail_invalidate=true;
     if(mode=="ready" || mode=="readyinvalidatefail")c.scheduler.sem.completed=7;
     if(mode=="currentready")c.scheduler.complete_on_flush=true;
+    if (hybrid_stage) c.mapped_readbacks_enabled=false; // V5 staging snapshot.
     const u64 required_size=(mode=="inside64current" || mode=="hole" || mode=="mapfail")?32:4;
     auto r=c.StartDeferredReadback(base+0x3ff0,required_size);assert(r);
-    const bool mapped=mode!="currentoff" && mode!="currentmapfail" && mode!="unknown" && mode!="hole" && mode!="mapfail";
+    const bool mapped=!hybrid_stage && mode!="currentoff" && mode!="currentmapfail" && mode!="unknown" && mode!="hole" && mode!="mapfail";
     assert(r->mapped==mapped);
     if(mode=="outsidecurrent") {
         assert(r->start==base && r->end==base+65536);
@@ -363,6 +372,24 @@ int main(int argc,char** argv) {
     if(current && mapped)assert(c.scheduler.CurrentTick()==11 && Readbacks().mapped_submitted==1);
     if(current)assert(barriers==2 && !c.scheduler.host_read_barrier);
     assert(c.staging_pool.allocations==(mapped?0u:1u));
+    if (hybrid_stage) {
+        // The real V5 prune must only publish GPU-complete staging readbacks,
+        // never stall the cache owner or publish a still-in-flight copy.
+        assert(!r->mapped && !r->applied && c.deferred_count==1);
+        if (mode=="hybrid_stage_pending") {
+            c.PruneDeferredReadbacks();
+            assert(!r->applied && c.deferred_count==1);
+            assert(c.mem.published.empty() && c.scheduler.sem.waited==0);
+        }
+        c.scheduler.sem.completed=r->tick;
+        c.PruneDeferredReadbacks();
+        assert(r->applied && c.deferred_readbacks.empty() && c.deferred_count==0);
+        assert(c.scheduler.sem.waited==0 && c.staging_pool.freed==1);
+        assert(c.mem.published.size()==48);
+        for (u64 j=0;j<32;++j) assert(c.mem.published.at(base+0x3ff0+j)==77);
+        for (u64 j=0;j<16;++j) assert(c.mem.published.at(base+0x4100+j)==77);
+        return 0;
+    }
     if(mode=="ready" || mode=="currentready") {
         // Actual Start -> Finish -> Capture publishes both sparse allocations on the
         // first owner request, with neither a wait nor an outstanding deferred object.
