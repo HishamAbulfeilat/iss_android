@@ -19,13 +19,13 @@ final class TouchControllerOverlay extends View {
     private static final String[] NAMES={
         "l2","l1","touchpad","options","r1","r2",
         "up","left","right","down","triangle","circle","cross","square",
-        "leftstick","l3","r3","rightstick","inputmode","swipepad","utilities","graffiti","spray"
+        "leftstick","l3","r3","rightstick","inputmode","swipepad","utilities","graffiti","spray","shake"
     };
     private static final float[][] DEFAULT={
         {87,105},{213,105},{640,105},{830,40},{1067,105},{1193,105},
         {160,395},{90,465},{230,465},{160,535},
         {1120,405},{1190,475},{1120,545},{1050,475},
-        {320,612},{420,614},{860,614},{960,612},{450,40},{640,200},{75,60},{400,430},{358,137}
+        {320,612},{420,614},{860,614},{960,612},{450,40},{640,200},{75,60},{400,430},{358,137},{986,151}
     };
     // Approved Direto: aim, spray and power left; camera drag and combat right.
     private static final float[][] MOBILE={
@@ -33,10 +33,11 @@ final class TouchControllerOverlay extends View {
         {135,340},{85,390},{185,390},{135,440},
         {845,482},{922,619},{1126,619},{1190,490},
         {230,585},{280,350},{280,430},{810,460},{330,60},{640,200},
-        {90,72},{400,430},{358,137}
+        {90,72},{115,353},{358,137},{986,151}
     };
     private static final float PAD_HALF_W=140,PAD_HALF_H=102,PAD_CORNER=54;
     private boolean mobile,utilitiesOpen;
+    private long cameraMotionAt;
     private PointF moveOrigin,swipeOrigin;
     private int swipePointer=-1;
     private boolean swipeMoved,swipeClick,swipePulse;
@@ -45,10 +46,12 @@ final class TouchControllerOverlay extends View {
     private boolean visible(String name){
         if(name.equals("touchpad")&&swipepadEnabled)return false;
         if(name.equals("swipepad"))return swipepadEnabled;
-        boolean extra=name.equals("utilities")||name.equals("graffiti")||name.equals("spray");
+        boolean extra=name.equals("utilities")||name.equals("graffiti")||name.equals("spray")||name.equals("shake");
         if(!mobile)return !extra;
-        if(name.equals("rightstick"))return false;
-        if(direction(name)||name.equals("l3")||name.equals("r3")||name.equals("inputmode")||name.equals("graffiti"))return editing||utilitiesOpen;
+        if(name.equals("rightstick")||name.equals("l3")||name.equals("r3"))return false;
+        if(name.equals("shake"))return editing||(pad.isSensorMode()&&!pad.isMenuMode());
+        if(name.equals("cross")&&pad.isSensorMode()&&!pad.isMenuMode()&&!editing)return false;
+        if(direction(name)||name.equals("l3")||name.equals("r3")||name.equals("inputmode"))return editing||utilitiesOpen;
         return true;
     }
     private float radius(String name){
@@ -81,8 +84,14 @@ final class TouchControllerOverlay extends View {
     private int cameraX=128,cameraY=128;
     private long cameraEpoch;
     private void cameraMotion(float dx,float dy){
-        cameraX=axis(Math.max(-1f,Math.min(1f,dx/35f)));
-        cameraY=axis(Math.max(-1f,Math.min(1f,dy/35f)));
+        long now=System.nanoTime();
+        float dt=cameraMotionAt==0?1f/60f:Math.max(1f/240f,Math.min(1f/20f,(now-cameraMotionAt)/1e9f));
+        cameraMotionAt=now;
+        // Velocity in reference pixels/second, independent of touch report frequency.
+        float sensitivity=Math.max(.25f,Math.min(3f,preferences.getFloat(pad.isSensorMode()?"spray_sensitivity":"camera_sensitivity",1f)));
+        float divisor=(pad.isSensorMode()?650f:850f)*dt/sensitivity;
+        cameraX=axis(Math.max(-1f,Math.min(1f,dx/divisor)));
+        cameraY=axis(Math.max(-1f,Math.min(1f,dy/divisor)));
         final long epoch=++cameraEpoch;
         // A drag supplies camera motion, not a latched right stick. Stop after
         // the last motion event even while the finger remains on the screen.
@@ -114,10 +123,12 @@ final class TouchControllerOverlay extends View {
     private final Map<String,Float> sizes=new LinkedHashMap<>();
     private float size(String name){Float value=sizes.get(name);return value==null?1f:value;}
     private Runnable onEditDone;
-    private boolean swipepadEnabled;
+    private boolean swipepadEnabled,showLabels=true;
     void applyPreferences(){
         release();swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
+        showLabels=preferences.getBoolean("controller_labels",true);
         boolean next=preferences.getBoolean("mobile_controls",true);
+        swipepadEnabled=next||swipepadEnabled;
         if(mobile!=next){mobile=next;loadLayout();}invalidate();
     }
 
@@ -127,7 +138,7 @@ final class TouchControllerOverlay extends View {
         preferences=context.getSharedPreferences("iss",Context.MODE_PRIVATE);
         guideMarker=new java.io.File(context.getFilesDir(),"issport/android-pad.state.guide");
         swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
-        mobile=preferences.getBoolean("mobile_controls",true);loadLayout();
+        mobile=preferences.getBoolean("mobile_controls",true);swipepadEnabled=mobile||swipepadEnabled;showLabels=preferences.getBoolean("controller_labels",true);loadLayout();
         setContentDescription(AppLanguage.text("On-screen controller", "Controle na tela"));
     }
     private PointF center(String name) { return mobile&&name.equals("leftstick")&&moveOrigin!=null?moveOrigin:centers.get(name); }
@@ -209,7 +220,7 @@ final class TouchControllerOverlay extends View {
             } else if (control.equals("l2")) { l2=255; pressed.add(control); }
             else if (control.equals("r2")) { r2=255; pressed.add(control);if(mobile&&!right){rx=cameraX;ry=cameraY;right=true;} }
             else if(control.equals("spray")){r2=255;pressed.add("spray");}
-            else if(control.equals("graffiti")){pressed.add("l3");pressed.add("r3");}
+            else if(control.equals("shake")){pressed.add("cross");}
             else if (control.equals("touchpad")) { pressed.add("touchpad_left"); pressed.add("touchpad_right"); } /* Both ends: lift Reggie's car. */
             else if (control.equals("mouse")) {
                 if (!mouse) XInput.moveTo(Math.max(0,Math.min(1279,Math.round(p.x))),
@@ -227,7 +238,7 @@ final class TouchControllerOverlay extends View {
         invalidate();
     }
     void release() {
-        controls.clear();positions.clear();moveOrigin=null;cameraEpoch++;cameraX=cameraY=128;
+        controls.clear();positions.clear();moveOrigin=null;cameraMotionAt=0;cameraEpoch++;cameraX=cameraY=128;
         endSwipe(true);utilitiesOpen=false;publish();
     }
     void edit(Runnable done) { release(); editing=true; onEditDone=done; invalidate(); }
@@ -282,6 +293,7 @@ final class TouchControllerOverlay extends View {
         if (action==MotionEvent.ACTION_DOWN || action==MotionEvent.ACTION_POINTER_DOWN) {
             float x=layoutX(e,at),y=layoutY(e,at);
             String name=hit(x,y);
+            if("graffiti".equals(name)){release();pad.toggleSensorMode();invalidate();return true;}
             if("utilities".equals(name)){utilitiesOpen=!utilitiesOpen;if(!utilitiesOpen)hideAuxiliary();publish();return true;}
             if(("swipepad".equals(name)||stick(name==null?"":name)))for(int i=0;i<controls.size();i++)if(name.equals(controls.valueAt(i)))return true;
             if("inputmode".equals(name)){release();pad.cycleInputMode();invalidate();return true;}
@@ -294,7 +306,7 @@ final class TouchControllerOverlay extends View {
             positions.put(id,new PointF(x,y));
             if("swipepad".equals(name))startSwipe(id,x,y);
             if(mobile&&"leftstick".equals(name))moveOrigin=new PointF(x,y);
-            if(mobile&&"rightstick".equals(name)){cameraEpoch++;cameraX=cameraY=128;}
+            if(mobile&&"rightstick".equals(name)){cameraMotionAt=0;cameraEpoch++;cameraX=cameraY=128;}
         } else if (action==MotionEvent.ACTION_UP || action==MotionEvent.ACTION_POINTER_UP) {
             String old=controls.get(id);
             if(mobile&&("rightstick".equals(old)||"r2".equals(old))){cameraEpoch++;cameraX=cameraY=128;}
@@ -387,14 +399,15 @@ final class TouchControllerOverlay extends View {
             action(c,"square","✊",AppLanguage.text("Melee","Corpo a corpo"));
             action(c,"utilities","☰",AppLanguage.text("Controls","Controles"));
             action(c,"spray","▥","Spray");
-            rectangle(c,"options",78,"Ⅱ");
+            action(c,"graffiti","↻",pad.isSensorMode()?"ON":"OFF");
+            action(c,"shake","↔","×");
+            action(c,"options","Ⅱ","OPTIONS");
             if(!swipepadEnabled)rectangle(c,"touchpad",110,AppLanguage.text("Touch","Toque"));
             if(utilitiesOpen||editing){
                 rectangle(c,"inputmode",100,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
                 circle(c,"up",26,"▲",0xaaffb59b);circle(c,"left",26,"◀",0xaaffb59b);
                 circle(c,"right",26,"▶",0xaaffb59b);circle(c,"down",26,"▼",0xaaffb59b);
-                circle(c,"l3",29,"L3",0xaaffb59b);circle(c,"r3",29,"R3",0xaaffb59b);
-                action(c,"graffiti","▥",AppLanguage.text("Sensor mode","Modo sensor"));
+
             }
             if(moveOrigin!=null||editing)drawStick(c,"leftstick");
             else drawMovementHint(c);
@@ -429,7 +442,7 @@ final class TouchControllerOverlay extends View {
     }
     private void action(Canvas c,String name,String icon,String label){
         PointF p=center(name);float r=radius(name);c.save();c.scale(size(name),size(name),p.x,p.y);
-        boolean down=pressed.contains(name)||name.equals("utilities")&&utilitiesOpen;
+        boolean down=pressed.contains(name)||name.equals("utilities")&&utilitiesOpen||name.equals("graffiti")&&pad.isSensorMode();
         paint.setStyle(Paint.Style.FILL);paint.setColor(down?0xaab93526:0x44150d10);c.drawCircle(p.x,p.y,r,paint);
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(name.equals("r2")?3:1.5f);paint.setColor(down?0xffffc18a:0xaaffb08a);
         c.drawCircle(p.x,p.y,r,paint);
@@ -465,7 +478,15 @@ final class TouchControllerOverlay extends View {
             }
         }else if(name.equals("utilities")){
             for(int y=-10;y<=10;y+=10)c.drawLine(-12,y,12,y,paint);
-        }else if(name.equals("graffiti")||name.equals("spray")){
+        }else if(name.equals("shake")){
+            c.drawRoundRect(-6,-11,6,12,2,2,paint);
+            c.drawLine(-3,-11,-3,-16,paint);c.drawLine(-3,-16,4,-16,paint);
+            c.drawLine(-13,-8,-18,-3,paint);c.drawLine(-18,-3,-13,2,paint);
+            c.drawLine(13,-2,18,3,paint);c.drawLine(18,3,13,8,paint);
+        }else if(name.equals("graffiti")){
+            c.drawCircle(0,0,12,paint);c.drawLine(-17,-6,-12,-13,paint);c.drawLine(-12,-13,-5,-9,paint);
+            c.drawLine(17,6,12,13,paint);c.drawLine(12,13,5,9,paint);
+        }else if(name.equals("spray")){
             c.drawRoundRect(-8,-7,8,15,3,3,paint);c.drawLine(-4,-7,-4,-13,paint);c.drawLine(-4,-13,5,-13,paint);
             c.drawLine(10,-13,18,-17,paint);c.drawLine(11,-9,21,-9,paint);
         }else{
@@ -473,7 +494,13 @@ final class TouchControllerOverlay extends View {
             c.drawText(icon,0,10,paint);
         }
         c.restore();
-        if(editing||down||name.equals("l1")||name.equals("r1")||name.equals("triangle")||name.equals("cross")||name.equals("circle")){
+        if(showLabels){
+            switch(name){
+                case "l1":label="L1";break;case "l2":label="L2";break;
+                case "r1":label="R1";break;case "r2":case "spray":label="R2";break;
+                case "triangle":label="△";break;case "square":label="□";break;
+                case "cross":case "shake":label="×";break;case "circle":label="○";break;
+            }
             paint.setStyle(Paint.Style.FILL);paint.setColor(0xccf6d9c7);paint.setTextAlign(Paint.Align.CENTER);paint.setTextSize(14);
             if(paint.measureText(label)>100)paint.setTextSize(14*100/paint.measureText(label));
             c.drawText(label,p.x,p.y+r+17,paint);

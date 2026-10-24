@@ -16,6 +16,13 @@ final class PadBridge {
     private final File state;
     private boolean swapFaceButtons;
     private boolean dpadSwipe;
+    private boolean sensorMode,virtualSensorHeld,physicalSensorHeld;
+    boolean isSensorMode(){return sensorMode;}
+    void toggleSensorMode(){sensorMode=!sensorMode;write();}
+    private void sensorChord(boolean held,boolean virtual){
+        if(held&&!(virtual?virtualSensorHeld:physicalSensorHeld))sensorMode=!sensorMode;
+        if(virtual)virtualSensorHeld=held;else physicalSensorHeld=held;
+    }
     // Start/Options opens/closes the game menu; the explicit override handles other exits.
     private boolean menuMode;
     private boolean automaticMode=true;
@@ -93,6 +100,7 @@ final class PadBridge {
         }
         if (e.getAction()==KeyEvent.ACTION_DOWN) keys.add(name);
         else if (e.getAction()==KeyEvent.ACTION_UP) keys.remove(name);
+        sensorChord(keys.contains("l3")&&keys.contains("r3"),false);
         // Publish button transitions immediately; the runtime samples at 20 ms intervals.
         write();
         return true;
@@ -118,6 +126,7 @@ final class PadBridge {
     void virtual(Set<String> buttons, int leftX, int leftY, int rightX, int rightY,
                  boolean leftActive, boolean rightActive, int leftTrigger, int rightTrigger) {
         virtualKeys.clear(); for(String key:buttons)virtualKeys.add(swapFaceButtons && key.equals("square")?"triangle":swapFaceButtons && key.equals("triangle")?"square":key);
+        sensorChord(buttons.contains("l3")&&buttons.contains("r3"),true);
         virtualLx=leftX; virtualLy=leftY; virtualRx=rightX; virtualRy=rightY;
         virtualLeftActive=leftActive; virtualRightActive=rightActive;
         virtualL2=leftTrigger; virtualR2=rightTrigger;
@@ -125,7 +134,7 @@ final class PadBridge {
     }
 
     void reset() {
-        touchDown=false;
+        touchDown=false;virtualSensorHeld=physicalSensorHeld=false;
         keys.clear(); lx=ly=rx=ry=128; l2=r2=hatX=hatY=0;
         virtualKeys.clear(); virtualLx=virtualLy=virtualRx=virtualRy=128;
         virtualL2=virtualR2=0; virtualLeftActive=virtualRightActive=false;
@@ -134,6 +143,7 @@ final class PadBridge {
 
     private void write() {
         StringBuilder text=new StringBuilder();
+        text.append("sensor_mode=").append(sensorMode?1:0).append(' ');
         text.append("dpad_swipe=").append(dpadSwipe?1:0).append(' ');
         text.append("input_menu=").append(menuMode?1:0).append(' ');
         text.append("input_auto=").append(automaticMode?1:0).append(' ');

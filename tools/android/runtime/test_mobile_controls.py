@@ -19,11 +19,11 @@ class MobileControlsTest(unittest.TestCase):
    'android/graphics/PointF.java':'''package android.graphics;public class PointF{public float x,y;public PointF(float a,float b){set(a,b);}public void set(float a,float b){x=a;y=b;}}''',
    'android/graphics/Typeface.java':'package android.graphics;public class Typeface{public static Typeface DEFAULT_BOLD=new Typeface();}',
    'android/graphics/Paint.java':'''package android.graphics;public class Paint{public static int ANTI_ALIAS_FLAG=1;public enum Style{FILL,STROKE}public enum Align{CENTER}public Paint(int a){}public void setStyle(Style s){}public void setColor(int c){}public void setStrokeWidth(float n){}public void setTextSize(float n){}public void setTypeface(Typeface t){}public void setTextAlign(Align a){}public float ascent(){return -10;}public float descent(){return 2;}public float measureText(String s){return s.length()*8;}}''',
-   'android/graphics/Canvas.java':'''package android.graphics;public class Canvas{public void save(){}public void restore(){}public void scale(float a,float b){}public void scale(float a,float b,float x,float y){}public void translate(float x,float y){}public void drawCircle(float a,float b,float r,Paint p){}public void drawText(String s,float a,float b,Paint p){}public void drawRoundRect(float a,float b,float c,float d,float e,float f,Paint p){}public void drawLine(float a,float b,float c,float d,Paint p){}}''',
+   'android/graphics/Canvas.java':'''package android.graphics;public class Canvas{public static java.util.List<String> text=new java.util.ArrayList<>();public void save(){}public void restore(){}public void scale(float a,float b){}public void scale(float a,float b,float x,float y){}public void translate(float x,float y){}public void drawCircle(float a,float b,float r,Paint p){}public void drawText(String s,float a,float b,Paint p){text.add(s);}public void drawRoundRect(float a,float b,float c,float d,float e,float f,Paint p){}public void drawLine(float a,float b,float c,float d,Paint p){}}''',
    'android/util/SparseArray.java':'''package android.util;import java.util.*;public class SparseArray<T>{private TreeMap<Integer,T> m=new TreeMap<>();public int size(){return m.size();}public T get(int k){return m.get(k);}public void put(int k,T v){m.put(k,v);}public void remove(int k){m.remove(k);}public void clear(){m.clear();}public int keyAt(int i){return new ArrayList<>(m.keySet()).get(i);}public T valueAt(int i){return m.get(keyAt(i));}}''',
    'android/view/View.java':'''package android.view;import android.content.*;import android.graphics.*;public class View{public View(Context c){}static class Task{long at;Runnable r;Task(long a,Runnable b){at=a;r=b;}}long now;public java.util.List<Task> delayed=new java.util.ArrayList<>();public boolean postDelayed(Runnable r,long ms){delayed.add(new Task(now+ms,r));return true;}public void advance(long ms){now+=ms;while(true){Task next=null;for(Task t:delayed)if(t.at<=now&&(next==null||t.at<next.at))next=t;if(next==null)break;delayed.remove(next);next.r.run();}}public void runDelayed(){advance(1000);}public void invalidate(){}public void setContentDescription(String s){}public int getWidth(){return 1280;}public int getHeight(){return 720;}public boolean onTouchEvent(MotionEvent e){return false;}protected void onDraw(Canvas c){}}''',
    'android/view/MotionEvent.java':'''package android.view;public class MotionEvent{public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_MOVE=2,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5,ACTION_POINTER_UP=6;int a,at;int[] ids;float[] xy;public MotionEvent(int a,int at,int[] ids,float... xy){this.a=a;this.at=at;this.ids=ids;this.xy=xy;}public int getActionMasked(){return a;}public int getActionIndex(){return at;}public int getPointerId(int i){return ids[i];}public int getPointerCount(){return ids.length;}public int findPointerIndex(int id){for(int i=0;i<ids.length;i++)if(ids[i]==id)return i;return -1;}public float getX(int i){return xy[2*i];}public float getY(int i){return xy[2*i+1];}}''',
-   'ro/cobrabm/fexdroid/PadBridge.java':'''package ro.cobrabm.fexdroid;import java.util.*;class PadBridge{Set<String> buttons;int lx,ly,rx,ry,l2,r2;boolean finger,menu;Runnable change;void onModeChanged(Runnable r){change=r;}boolean isMenuMode(){return menu;}boolean isAutomaticMode(){return true;}void touch(boolean f,int x,int y){finger=f;}void virtual(Set<String>b,int lx,int ly,int rx,int ry,boolean l,boolean r,int l2,int r2){buttons=new HashSet<>(b);this.lx=lx;this.ly=ly;this.rx=rx;this.ry=ry;this.l2=l2;this.r2=r2;}void cycleInputMode(){change.run();}void gameMenuButton(){menu=!menu;change.run();}}''',
+   'ro/cobrabm/fexdroid/PadBridge.java':'''package ro.cobrabm.fexdroid;import java.util.*;class PadBridge{Set<String> buttons;int lx,ly,rx,ry,l2,r2;boolean finger,menu,sensor;boolean isSensorMode(){return sensor;}void toggleSensorMode(){sensor=!sensor;}Runnable change;void onModeChanged(Runnable r){change=r;}boolean isMenuMode(){return menu;}boolean isAutomaticMode(){return true;}void touch(boolean f,int x,int y){finger=f;}void virtual(Set<String>b,int lx,int ly,int rx,int ry,boolean l,boolean r,int l2,int r2){buttons=new HashSet<>(b);this.lx=lx;this.ly=ly;this.rx=rx;this.ry=ry;this.l2=l2;this.r2=r2;}void cycleInputMode(){change.run();}void gameMenuButton(){menu=!menu;change.run();}}''',
    'ro/cobrabm/fexdroid/AppLanguage.java':'package ro.cobrabm.fexdroid;class AppLanguage{static String text(String e,String p){return e;}}',
    'ro/cobrabm/fexdroid/XInput.java':'package ro.cobrabm.fexdroid;class XInput{static void moveTo(int x,int y){}static void button(int b,boolean d){}}',
    'ro/cobrabm/fexdroid/MobileTest.java':'''package ro.cobrabm.fexdroid;
@@ -36,6 +36,10 @@ class MobileTest{
  static void up(TouchControllerOverlay v,String name)throws Exception{PointF q=centers(v).get(name);event(v,1,0,new int[]{1},q.x,q.y);}
  public static void main(String[] args)throws Exception{
   Context c=new Context();PadBridge p=new PadBridge();TouchControllerOverlay v=new TouchControllerOverlay(c,p,false);
+  Canvas drawing=new Canvas();v.onDraw(drawing);assert Canvas.text.contains("L1")&&Canvas.text.contains("R1")&&Canvas.text.contains("×");
+  c.prefs.edit().putBoolean("controller_labels",false).apply();v.applyPreferences();Canvas.text.clear();v.onDraw(drawing);
+  assert !Canvas.text.contains("L1")&&!Canvas.text.contains("R1")&&!Canvas.text.contains("×");
+  c.prefs.edit().putBoolean("controller_labels",true).apply();v.applyPreferences();Canvas.text.clear();v.onDraw(drawing);assert Canvas.text.contains("L1");
   Map<String,PointF> layout=centers(v);
   assert layout.get("l1").x<640&&layout.get("l2").x<640&&layout.get("spray").x<640;
   assert layout.get("l1").y<360&&layout.get("l2").y<360;
@@ -60,7 +64,7 @@ class MobileTest{
   down(v,"spray");assert p.r2==255&&!p.buttons.contains("l3");
   PointF spray=layout.get("spray");event(v,5,1,new int[]{1,2},spray.x,spray.y,700,400);
   event(v,2,0,new int[]{1,2},spray.x,spray.y,730,380);assert p.r2==255&&p.rx>128;v.release();
-  down(v,"utilities");up(v,"utilities");down(v,"graffiti");assert p.buttons.contains("l3")&&p.buttons.contains("r3");v.release();
+  down(v,"graffiti");assert p.sensor;up(v,"graffiti");assert "shake".equals(hit(v,986,151));assert !"cross".equals(hit(v,1126,619));down(v,"shake");assert p.buttons.contains("cross");v.release();down(v,"graffiti");assert !p.sensor;up(v,"graffiti");
   // A touch inside the top swipepad is a click; motion is a real swipe.
   c.prefs.edit().putBoolean("swipepad_enabled",true).apply();v.applyPreferences();
   assert !"touchpad".equals(hit(v,640,60));
@@ -80,7 +84,7 @@ class MobileTest{
   assert centers(v).get("cross").x==1111;
   c.prefs.edit().putBoolean("mobile_controls",true).apply();v.applyPreferences();assert centers(v).get("cross").x==1126;
   v.resetLayout();assert c.prefs.getFloat("overlay_x_cross",0)==1111;
-  c.prefs.edit().putBoolean("swipepad_enabled",false).apply();v.applyPreferences();assert "touchpad".equals(hit(v,640,60));
+  c.prefs.edit().putBoolean("swipepad_enabled",false).apply();v.applyPreferences();assert !"touchpad".equals(hit(v,640,60));
  }
 }'''
   }

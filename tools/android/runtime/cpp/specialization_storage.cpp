@@ -110,6 +110,9 @@ struct Info {
     std::array<AmdGpu::Buffer,32> vertex{};
     void ReadTessConstantBuffer(TessellationDataConstantBuffer& c)const{c.value=tess;}
 };
+// This fixture compares storage reuse with dynamic stride disabled; its
+// descriptor policy is exercised separately against the production predicate.
+inline bool UsesDynamicStride(const Info&, const Resource<AmdGpu::Buffer>&){return false;}
 namespace Gcn {
 AmdGpu::Buffer VertexAttribute::GetSharp(const Info& i)const{return i.vertex[semantic];}
 const u32* GetFetchShaderCode(const Info& i,u32){return i.code.data();}

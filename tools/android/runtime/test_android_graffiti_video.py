@@ -21,7 +21,7 @@ class GraffitiAndDisplayTests(unittest.TestCase):
         physical = text.split("    if (g) {", 1)[1].split("    /* Android controller/overlay events", 1)[0]
         virtual = text.split("    if (android_pad_enabled()) {", 1)[1].split("    if (real && !simulated) {", 1)[0]
         self.assertIn("const float speed=1.2f*tlggpu_sensor_aim_scale();", physical)
-        self.assertIn("const float speed=0.48f*tlggpu_sensor_aim_scale();", virtual)
+        self.assertIn("const float speed=0.85f*tlggpu_sensor_aim_scale();", virtual)
         self.assertIn("spray_axis_x+=", virtual)
         self.assertIn("spray_axis_y+=", virtual)
         self.assertIn("spray_dt=fminf(dt,0.050f)", virtual)

@@ -23,6 +23,7 @@ public final class BionicMainActivity extends Activity {
  private boolean requestingAccess, waitingForSettings;
 
  private LinearLayout pages, navigation; private int selectedPage;
+ private Switch directStart;
  @Override public void onCreate(Bundle saved){super.onCreate(saved);
   getWindow().setStatusBarColor(0xff150b0e);getWindow().setNavigationBarColor(0xff150b0e);
   android.widget.FrameLayout root=new android.widget.FrameLayout(this);
@@ -37,20 +38,27 @@ public final class BionicMainActivity extends Activity {
   pkg=new BionicPkgInstaller(this,(active,message)->{setBusy(active);status.setText(message);});
   setContentView(root);showPage(saved==null?0:saved.getInt("page",0));refresh();
   if(saved!=null){pendingSetup=saved.getInt("pending_setup",0);requestingAccess=saved.getBoolean("requesting_access",false);waitingForSettings=saved.getBoolean("waiting_settings",false);}
-  if(!requestingAccess&&!waitingForSettings)pages.post(()->beginSetup(false));
+  if(!requestingAccess&&!waitingForSettings)pages.post(()->{
+   // Only a fresh app launch may auto-start. Returning from the game or
+   // recreating the launcher must leave its settings accessible.
+   if(saved==null&&BionicStartupSettings.enabled(this)&&access()&&gameReady())launch();
+   else beginSetup(false);
+  });
  }
  private int dp(float value){return Math.round(value*getResources().getDisplayMetrics().density);}
  private android.graphics.drawable.GradientDrawable background(int fill,int border){android.graphics.drawable.GradientDrawable b=new android.graphics.drawable.GradientDrawable();b.setColor(fill);b.setCornerRadius(dp(22));b.setStroke(dp(1),border);return b;}
  private TextView label(String value,int size,int color){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(color);return t;}
  private LinearLayout card(LinearLayout parent,String title){LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(dp(16),dp(10),dp(16),dp(18));l.setBackground(background(0xf2190d11,0xff70342d));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.topMargin=dp(16);parent.addView(l,lp);section(l,title);return l;}
  private void showPage(int page){
-  selectedPage=page;actions.clear();pages.removeAllViews();navigation.removeAllViews();
+  selectedPage=page;actions.clear();directStart=null;pages.removeAllViews();navigation.removeAllViews();
   String[] tabs={AppLanguage.text("⌂\nHome", "⌂\nInício"),"☷\nPatches",AppLanguage.text("⚙\nSettings", "⚙\nConfig."),AppLanguage.text("ⓘ\nAbout", "ⓘ\nSobre")};
   for(int i=0;i<tabs.length;i++){final int index=i;Button b=new Button(this);b.setText(tabs[i]);b.setAllCaps(false);b.setTextSize(12);b.setTextColor(i==page?0xfffff1e9:0xffc7aba8);b.setBackground(background(i==page?0xffad2532:0x00211015,0x00000000));navigation.addView(b,new LinearLayout.LayoutParams(0,dp(62),1));b.setOnClickListener(v->{if(!busy)showPage(index);});}
   ScrollView sc=new ScrollView(this);sc.setFillViewport(true);LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(0,0,0,dp(18));sc.addView(content);pages.addView(sc,new LinearLayout.LayoutParams(-1,-1));
   if(page==0){
    LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  PLAY", "▶  JOGAR"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));
+   directStart=BionicStartupSettings.toggle(this);game.addView(directStart);actions.add(directStart);
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
+   button(video,AppLanguage.text("Renderer corrections", "Correções do renderer"),()->BionicRendererSettings.show(this));
    button(video,AppLanguage.text("Frame generation — Bloodframe", "Geração de quadros — Bloodframe"),()->FramegenSettings.show(this,null));
   }else if(page==1){LinearLayout patches=card(content,"PATCHES — inFAMOUS SECOND SON");patches.addView(BionicVideoSettings.content(this,2));
   }else if(page==2){
@@ -101,7 +109,7 @@ public final class BionicMainActivity extends Activity {
   ScrollView scroll=new ScrollView(this);scroll.addView(guide);d.setContentView(scroll);d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);setupDialog=d;d.setOnDismissListener(dialog->{if(setupDialog==d)setupDialog=null;});d.show();d.getWindow().setLayout(Math.round(getResources().getDisplayMetrics().widthPixels*.92f),android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
  }
  private void openGameFolderPicker(){try{startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),2);}catch(Exception e){status.setText(AppLanguage.text("Could not open the folder picker: ", "Não foi possível abrir o seletor de pastas: ")+e.getMessage());}}
- @Override protected void onResume(){super.onResume();if(waitingForSettings){waitingForSettings=false;if(access())continueSetup();else{pendingSetup=0;status.setText(AppLanguage.text("File access was not granted. Select the game to try again.", "Acesso aos arquivos não concedido. Você pode tentar novamente ao selecionar o jogo."));}}}
+ @Override protected void onResume(){super.onResume();if(directStart!=null)directStart.setChecked(BionicStartupSettings.enabled(this));if(waitingForSettings){waitingForSettings=false;if(access())continueSetup();else{pendingSetup=0;status.setText(AppLanguage.text("File access was not granted. Select the game to try again.", "Acesso aos arquivos não concedido. Você pode tentar novamente ao selecionar o jogo."));}}}
  @Override protected void onDestroy(){if(setupDialog!=null){setupDialog.dismiss();setupDialog=null;}super.onDestroy();}
 
  private void launch(){if(busy)return;if(!access()||!gameReady()){beginSetup(true);return;}

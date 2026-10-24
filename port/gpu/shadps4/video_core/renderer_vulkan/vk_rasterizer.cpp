@@ -35,6 +35,7 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_occlusion.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
@@ -76,6 +77,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
+    if (Common::Backports::OcclusionMode() == 4) {
+        if (instance.IsHostQueryResetSupported()) {
+            occlusion = std::make_unique<OcclusionQueries>(instance, scheduler);
+        }
+        std::printf("Occlusion: real queries %s (precise %d)\n",
+                    occlusion ? "on" : "off: no host query reset, zero counts as mode 3",
+                    instance.IsOcclusionQueryPreciseSupported() ? 1 : 0);
+    }
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -1226,7 +1235,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             });
         }
     }
-    pipeline->BindResources(set_writes, push_data);
+    pipeline->BindResources(set_writes, set_write_index, push_data);
     // tlg: jitter geometry drawn with the scene depth, not full-screen passes (a shifted
     // full-screen quad leaves an edge column unwritten).
     draw_jitter = {};
@@ -1413,7 +1422,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     push_data.xoffset *= target_scale[0];
     push_data.yscale *= target_scale[1];
     push_data.yoffset *= target_scale[1];
-    pipeline->BindResources(set_writes, push_data);
+    pipeline->BindResources(set_writes, set_write_index, push_data);
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth()) {
         draw_jitter = upscaler->Jitter();
@@ -1576,7 +1585,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
 
     scheduler.EndRendering();
     mark();
-    pipeline->BindResources(set_writes, push_data);
+    pipeline->BindResources(set_writes, set_write_index, push_data);
 
     const auto bind = ComputeBind(pipeline);
     const u32 dim_x = cs_program.dim_x, dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
@@ -1660,7 +1669,7 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
         RecordFrameInputs(pipeline, nullptr, nullptr, false, 0, &indirect);
     }
     scheduler.EndRendering();
-    pipeline->BindResources(set_writes, push_data);
+    pipeline->BindResources(set_writes, set_write_index, push_data);
 
     const auto bind = ComputeBind(pipeline);
     const vk::Buffer args = buffer->Handle();
@@ -1970,6 +1979,9 @@ void NoteHugeBind(VAddr base, u64 size) {
 
 void Rasterizer::OnSubmit() {
     DrainDrawPipe();
+    if (occlusion) {
+        occlusion->OnSubmit();
+    }
     if (fault_process_pending) {
         fault_process_pending = false;
         buffer_cache.ProcessFaultBuffer();
@@ -2114,6 +2126,19 @@ void Rasterizer::JoinBindHelper(void* context) {
     }
 }
 
+bool Rasterizer::SetWritePool() {
+    // tlg: TLG_SET_WRITE_POOL=0 restores the per-draw clear and resize of the descriptor writes.
+    static const bool enabled = [] {
+        const char* env = std::getenv("TLG_SET_WRITE_POOL");
+        const bool off = env && env[0] == '0';
+        if (off) {
+            std::printf("tlg: per-draw descriptor write pool off (TLG_SET_WRITE_POOL=0)\n");
+        }
+        return !off;
+    }();
+    return enabled;
+}
+
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
     if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
         IsComputeImageClear(pipeline)) {
@@ -2121,7 +2146,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     }
 
     set_write_index = 0;
-    set_writes.clear();
+    if (!SetWritePool()) {
+        set_writes.clear();
+    }
     buffer_infos.clear();
     image_infos.clear();
     // tlg: G-buffer passes sample material textures for a scene rendered below the output
@@ -2172,8 +2199,9 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             if (!stage) {
                 continue;
             }
-            set_writes.resize(set_writes.size() + stage->buffers.size() + stage->images.size() +
-                              stage->samplers.size());
+            EnsureSetWrites(set_write_index + static_cast<u32>(stage->buffers.size() +
+                                                              stage->images.size() +
+                                                              stage->samplers.size()));
             stage->PushUd(binding, push_data);
             const PreparedStage* prepared = FindPreparedStage(*stage);
             BindBuffers(*stage, prepared, binding, push_data, set_write_index);
@@ -2202,7 +2230,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
             const u32 num_buffers = static_cast<u32>(stage->buffers.size());
             const u32 num_descriptors =
                 num_buffers + static_cast<u32>(stage->images.size() + stage->samplers.size());
-            set_writes.resize(set_writes.size() + num_descriptors);
+            EnsureSetWrites(set_write_index + num_descriptors);
             stage->PushUd(binding, push_data);
             const PreparedStage* prepared = FindPreparedStage(*stage);
             buffer_stages[task.count] = {stage, prepared, binding, set_write_index};
@@ -2763,6 +2791,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         set_write.descriptorCount = 1;
         set_write.descriptorType = vk::DescriptorType::eStorageBuffer;
         set_write.pBufferInfo = &buffer_infos.back();
+        set_write.pImageInfo = nullptr;
+        set_write.pTexelBufferView = nullptr;
         ++binding.buffer;
     }
 }
@@ -2824,8 +2854,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             set_write.descriptorCount = 1;
             set_write.descriptorType = vk::DescriptorType::eSampledImage;
             set_write.pImageInfo = &image_infos[first_image_idx + i];
+            set_write.pBufferInfo = nullptr;
+            set_write.pTexelBufferView = nullptr;
         }
-        BindSamplers(stage, prepared, binding, write_index);
+        BindSamplers(stage, prepared, binding, write_index, set_slot);
         return;
     }
     image_bindings.clear();
@@ -3082,23 +3114,75 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         set_write.descriptorType =
             is_storage ? vk::DescriptorType::eStorageImage : vk::DescriptorType::eSampledImage;
         set_write.pImageInfo = &image_infos[image_info_idx];
+        set_write.pBufferInfo = nullptr;
+        set_write.pTexelBufferView = nullptr;
 
         image_info_idx += array_size;
         image_binding_idx += array_size;
         binding.unified += array_size;
     }
 
-    BindSamplers(stage, prepared, binding, write_index);
+    BindSamplers(stage, prepared, binding, write_index, set_slot);
+}
+
+u64 Rasterizer::SamplerSetKey(const Shader::Info& stage, const PreparedStage* prepared) const {
+    // GetSampler's inputs: the S#s, the border color base, the per-sampler depth flags and the
+    // LOD bias of this draw.
+    const u32 count = static_cast<u32>(stage.samplers.size());
+    u64 key =
+        count ? XXH3_64bits(prepared->sampler_sharps, count * sizeof(AmdGpu::Sampler)) : 0;
+    const u64 border_color_base = Regs().ta_bc_base.base_addr;
+    key = HashCombine(key, border_color_base);
+    key = HashCombine(key, u64(std::bit_cast<u32>(sampler_lod_bias)));
+    u32 depth_flags = 0;
+    for (u32 i = 0; i < count; ++i) {
+        depth_flags |= u32(stage.samplers[i].is_depth) << i;
+    }
+    return HashCombine(key, u64(depth_flags));
 }
 
 void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* prepared,
-                              Shader::Backend::Bindings& binding, u32& write_index) {
-    for (u32 sampler_index = 0; sampler_index < stage.samplers.size(); ++sampler_index) {
+                              Shader::Backend::Bindings& binding, u32& write_index,
+                              TextureSet* set_slot) {
+    const u32 count = static_cast<u32>(stage.samplers.size());
+    // tlg (SamplerSetMemo): the set these textures were bound from resolved these samplers
+    // already, so reuse their handles instead of a hash and a map lookup per sampler. The LRU
+    // entries are still marked used, under TouchSamplers' one lock: the collector evicts by age,
+    // and a command recorded with a sampler is still in flight. TouchSamplers also drops the
+    // memo when a sampler was destroyed (its LRU ids may be gone or reused).
+    bool memo = false;
+    bool store = false;
+    if (set_slot != nullptr && set_slot->key != 0 && prepared != nullptr &&
+        !TlgToggle::Disabled(TlgToggle::SamplerSetMemo)) {
+        const u64 generation = texture_cache.SamplerGeneration();
+        const u64 key = SamplerSetKey(stage, prepared);
+        memo = set_slot->sampler_count == count && set_slot->sampler_key == key &&
+               set_slot->sampler_generation == generation &&
+               texture_cache.TouchSamplers(set_slot->sampler_lru_ids.data(), count, generation);
+        store = !memo;
+        if (store) {
+            // Resolve below and remember this set's samplers for the next hit.
+            set_slot->sampler_key = key;
+            set_slot->sampler_generation = generation;
+            set_slot->sampler_count = count;
+        }
+    }
+    for (u32 sampler_index = 0; sampler_index < count; ++sampler_index) {
         const auto& sampler = stage.samplers[sampler_index];
-        auto ssharp =
-            prepared ? prepared->sampler_sharps[sampler_index] : sampler.GetSharp(stage);
-        const auto vk_sampler = texture_cache.GetSampler(
-            ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
+        vk::Sampler vk_sampler;
+        if (memo) {
+            vk_sampler = set_slot->samplers[sampler_index];
+        } else {
+            const auto ssharp =
+                prepared ? prepared->sampler_sharps[sampler_index] : sampler.GetSharp(stage);
+            vk_sampler = texture_cache.GetSampler(
+                ssharp, Regs().ta_bc_base, sampler.is_depth,
+                sampler.is_depth ? 0.0f : sampler_lod_bias,
+                store ? &set_slot->sampler_lru_ids[sampler_index] : nullptr);
+            if (store) {
+                set_slot->samplers[sampler_index] = vk_sampler;
+            }
+        }
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
         auto& set_write = set_writes[write_index++];
         set_write.dstSet = VK_NULL_HANDLE;
@@ -3107,6 +3191,8 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
         set_write.descriptorCount = 1;
         set_write.descriptorType = vk::DescriptorType::eSampler;
         set_write.pImageInfo = &image_infos.back();
+        set_write.pBufferInfo = nullptr;
+        set_write.pTexelBufferView = nullptr;
     }
 }
 
@@ -3196,7 +3282,7 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
         }
     }
     ++texture_set_hits;
-    slot = nullptr;
+    // `slot` stays the hit set: BindSamplers reuses the samplers it resolved (SamplerSetMemo).
     for (u32 i = 0; i < count; ++i) {
         const auto& entry = set.entries[i];
         if (!entry.id) {
@@ -3733,6 +3819,90 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         .size = num_bytes,
     };
     runtime.CopyBuffer(src_buffer, dst_buffer, std::span{&copy, 1});
+}
+
+void Rasterizer::WriteHiddenOcclusion(VAddr address, u32 num_pairs) {
+    static constexpr u64 CounterValid = 1ULL << 63;
+    num_pairs = std::clamp<u32>(num_pairs, 1, OcclusionQueries::MaxCounterPairs);
+    const u32 size = num_pairs * 2 * sizeof(u64);
+    if (IsMapped(address, size) && buffer_cache.IsRegionGpuModified(address, size)) {
+        // Results the GPU wrote before (a counted query at this address): written there too.
+        texture_cache.InvalidateMemoryFromGPU(address, size);
+        VideoCore::written_binding_source = {"occlusion", 0};
+        const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, size, true);
+        runtime.WriteOcclusionResults(buffer, offset, num_pairs,
+                                      occlusion ? occlusion->Pool() : vk::QueryPool{}, {});
+        return;
+    }
+    u64* results = std::bit_cast<u64*>(address);
+    std::fill(results, results + 2 * num_pairs, CounterValid);
+}
+
+void Rasterizer::OcclusionDump(VAddr address, u32 num_pairs) {
+    // TLG_OCCLUSION_LOG=1: counted and hidden queries, every 4096 dumps.
+    static const bool log = [] {
+        const char* v = std::getenv("TLG_OCCLUSION_LOG");
+        return v && *v && std::atoi(v) != 0;
+    }();
+    static u64 dumps, counted, hidden, segments_used;
+    const auto report = [&] {
+        if (log && (++dumps % 4096) == 0) {
+            std::printf("Occlusion: %llu dumps, %llu queries counted (%llu segments), %llu hidden, "
+                        "%llu segments dropped, %u open\n",
+                        static_cast<unsigned long long>(dumps),
+                        static_cast<unsigned long long>(counted),
+                        static_cast<unsigned long long>(segments_used),
+                        static_cast<unsigned long long>(hidden),
+                        static_cast<unsigned long long>(occlusion ? occlusion->Dropped() : 0),
+                        occlusion ? occlusion->NumOpen() : 0u);
+        }
+    };
+    num_pairs = std::clamp<u32>(num_pairs, 1, OcclusionQueries::MaxCounterPairs);
+    const u32 size = num_pairs * 2 * sizeof(u64);
+    if (!occlusion) {
+        WriteHiddenOcclusion(address, num_pairs);
+        report();
+        return;
+    }
+    if (address % 16 == 0) {
+        // Begin dump: nothing is written, the GPU writes the whole query at the end dump.
+        if (!IsMapped(address, size) || !occlusion->Begin(address, num_pairs)) {
+            WriteHiddenOcclusion(address, num_pairs);
+            ++hidden;
+        }
+        report();
+        return;
+    }
+    if (address % 16 != sizeof(u64)) {
+        WriteHiddenOcclusion(address, num_pairs);
+        ++hidden;
+        report();
+        return;
+    }
+    // End dump: the whole query, from its begin counters.
+    const VAddr results = address - sizeof(u64);
+    if (log && counted + hidden < 64) {
+        std::printf("Occlusion: query at %llx, %u pairs\n", static_cast<unsigned long long>(results),
+                    num_pairs);
+    }
+    OcclusionQueries::QueryList queries;
+    if (!occlusion->End(results, queries)) {
+        WriteHiddenOcclusion(results, num_pairs);
+        ++hidden;
+    } else {
+        texture_cache.InvalidateMemoryFromGPU(results, size);
+        VideoCore::written_binding_source = {"occlusion", 0};
+        const auto [buffer, offset] = buffer_cache.ObtainBuffer(results, size, true);
+        const std::span<const u32> used{queries.data(), queries.size()};
+        runtime.WriteOcclusionResults(buffer, offset, num_pairs, occlusion->Pool(), used);
+        occlusion->MarkUsed(used);
+        ++counted;
+        segments_used += queries.size();
+    }
+    // Writing the results ended the rendering scope: the other open queries go on counting from
+    // the next one.
+    occlusion->Resume();
+    report();
 }
 
 u32 Rasterizer::ReadDataFromGds(u32 gds_offset) {

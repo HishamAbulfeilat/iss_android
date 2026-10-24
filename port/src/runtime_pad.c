@@ -380,7 +380,7 @@ static float aim_curve(float v) {
     const float t=fminf((a-dead)/(1.f-dead),1.f);
     return v<0 ? -t*t : t*t;
 }
-static struct { uint32_t buttons; int stick[4], trigger[2]; } injected={0,{-1,-1,-1,-1},{-1,-1}};
+static struct { uint32_t buttons; int stick[4], trigger[2]; int sensor_mode; } injected={0,{-1,-1,-1,-1},{-1,-1},-1};
 static int android_spray_stick_pair(const int axes[4]) {
     return ((axes[2]>=0 && abs(axes[2]-128)>13) ||
             (axes[3]>=0 && abs(axes[3]-128)>13)) ? 2 : 0;
@@ -473,6 +473,7 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             if (motion.mode) tlggpu_graffiti_guide(0);
         }
         motion.toggle_held=sticks;
+        if(injected.sensor_mode>=0) motion.mode=injected.sensor_mode;
         if (motion.mode) {
             roll=1.5708f; simulated=1;
             if (injected.buttons&BTN_CROSS) shake=1;
@@ -485,10 +486,10 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             /* Stabilize only virtual spray: ~100ms axis smoothing,
              * a slower motion range and a bounded step after slow frames. */
             const float spray_dt=fminf(dt,0.050f);
-            const float alpha=spray_dt>0 ? 1.f-expf(-spray_dt*10.f) : 0.f;
+            const float alpha=spray_dt>0 ? 1.f-expf(-spray_dt*25.f) : 0.f;
             spray_axis_x+=(aim_curve(sx)-spray_axis_x)*alpha;
             spray_axis_y+=(aim_curve(sy)-spray_axis_y)*alpha;
-            const float speed=0.48f*tlggpu_sensor_aim_scale();
+            const float speed=0.85f*tlggpu_sensor_aim_scale();
             motion.yaw-=spray_axis_x*speed*spray_dt;
             motion.aim_pitch-=spray_axis_y*speed*spray_dt;
             motion.yaw=fminf(fmaxf(motion.yaw,-1.20f),1.20f);
@@ -838,6 +839,7 @@ static void read_inject(void) {
     injected.buttons=0; android_dpad_swipe=0; android_menu_mode=0; android_menu_automatic=0;
     android_finger.down=0; android_finger.x=960; android_finger.y=471; android_finger.id=0;
     injected_motion=0;
+    injected.sensor_mode=-1;
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     for (int i=0;i<2;++i) injected.trigger[i]=-1;
     char token[64];
@@ -846,6 +848,8 @@ static void read_inject(void) {
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
         if (!strcmp(token,"touchpad_both")) injected.buttons|=CLICK_LEFT|CLICK_RIGHT;
         if (!strcmp(token,"dpad_swipe=1")) android_dpad_swipe=1;
+        if (!strcmp(token,"sensor_mode=1")) injected.sensor_mode=1;
+        if (!strcmp(token,"sensor_mode=0")) injected.sensor_mode=0;
         if (!strcmp(token,"input_menu=1")) android_menu_mode=1;
         if (!strcmp(token,"input_auto=1")) android_menu_automatic=1;
         if (!strcmp(token,"finger=1")) android_finger.down=1;

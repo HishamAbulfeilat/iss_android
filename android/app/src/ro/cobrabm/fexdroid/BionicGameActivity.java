@@ -113,6 +113,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   java.util.ArrayList<String> patches=new java.util.ArrayList<>();
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
+  BionicRendererSettings.environment(prefs,e);
   String resolution=prefs.getString("internal_res","native");
   String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
   if(resolutionPatch!=null)patches.add(resolutionPatch);

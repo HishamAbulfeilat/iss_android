@@ -27,6 +27,7 @@ template<class T> T H(uintptr_t x) {
 static unsigned pushed,legacy,constants,created,destroyed,sets;
 static bool fail_create;
 static bool expect_compute;
+static unsigned expected_writes;
 static u64 observed;
 static std::vector<VkDescriptorUpdateTemplateEntry> entries;
 static VKAPI_ATTR VkResult VKAPI_CALL CreateLayout(VkDevice,const VkPipelineLayoutCreateInfo*,
@@ -66,8 +67,8 @@ static VKAPI_ATTR void VKAPI_CALL PushTemplate(VkCommandBuffer,VkDescriptorUpdat
 static VKAPI_ATTR void VKAPI_CALL PushConstants(VkCommandBuffer,VkPipelineLayout,VkShaderStageFlags,
     uint32_t,uint32_t size,const void* data){++constants;assert(size==128 && *static_cast<const u32*>(data)==37);}
 static VKAPI_ATTR void VKAPI_CALL PushLegacy(VkCommandBuffer,VkPipelineBindPoint,VkPipelineLayout,
-    uint32_t,uint32_t count,const VkWriteDescriptorSet* writes){++legacy;assert(count && writes[0].pBufferInfo);observed=writes[0].pBufferInfo->offset;}
-static VKAPI_ATTR void VKAPI_CALL UpdateSets(VkDevice,uint32_t count,const VkWriteDescriptorSet*,uint32_t,const VkCopyDescriptorSet*){assert(count);}
+    uint32_t,uint32_t count,const VkWriteDescriptorSet* writes){++legacy;assert(count==expected_writes && writes[0].pBufferInfo);observed=writes[0].pBufferInfo->offset;}
+static VKAPI_ATTR void VKAPI_CALL UpdateSets(VkDevice,uint32_t count,const VkWriteDescriptorSet*,uint32_t,const VkCopyDescriptorSet*){assert(count==expected_writes);}
 static VKAPI_ATTR void VKAPI_CALL BindSets(VkCommandBuffer,VkPipelineBindPoint,VkPipelineLayout,uint32_t,
     uint32_t count,const VkDescriptorSet*,uint32_t,const uint32_t*){assert(count==1);++sets;}
 
@@ -110,7 +111,7 @@ struct Pipeline {
     }
     bool IsCompute()const{return compute;}
     void BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBinding>);
-    void BindResources(DescriptorWrites&,const Shader::PushData&)const;
+    void BindResources(DescriptorWrites&,u32,const Shader::PushData&)const;
 };
 // PRODUCTION_METHODS
 }
@@ -147,7 +148,18 @@ int main(int argc,char** argv) {
         if(mode=="mismatch")writes.pop_back();
         if(mode=="empty")writes.clear();
         Shader::PushData push;push.words[0]=37;
-        pipeline.BindResources(writes,push);
+        expected_writes=static_cast<unsigned>(writes.size());
+        const u32 active_count=static_cast<u32>(writes.size());
+        // A smaller subsequent draw leaves old high-water entries in the pool. They must not
+        // enter the template, legacy push, or ordinary descriptor update path.
+        writes.resize(writes.size()+3);
+        for(size_t i=active_count;i<writes.size();++i) {
+            writes[i].descriptorCount=123;
+            writes[i].pBufferInfo=reinterpret_cast<const vk::DescriptorBufferInfo*>(uintptr_t{1});
+        }
+        const auto high_water=writes.size();
+        pipeline.BindResources(writes,active_count,push);
+        assert(writes.size()==high_water);
         bool templated=mode=="deferred"||mode=="direct"||mode=="compute"||mode=="switchdirect";
         if(scheduler.deferred) {
             assert(pushed==0 && constants==0);
