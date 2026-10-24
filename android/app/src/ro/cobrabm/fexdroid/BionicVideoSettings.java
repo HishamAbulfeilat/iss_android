@@ -65,12 +65,9 @@ final class BionicVideoSettings {
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
 
-  CheckBox shadows=new CheckBox(activity);shadows.setText(AppLanguage.text("Disable shadow maps (experimental)", "Desativar mapas de sombras (experimental)"));
+  CheckBox shadows=new CheckBox(activity);shadows.setText(AppLanguage.text("Disable shadows", "Desativar sombras"));
   shadows.setChecked(prefs.getBoolean("patch_shadows",false));
   shadows.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_shadows",checked).apply());l.addView(shadows);
-  CheckBox beams=new CheckBox(activity);beams.setText(AppLanguage.text("Disable light beams (experimental)", "Desativar fachos de luz (experimental)"));
-  beams.setChecked(prefs.getBoolean("patch_light_beams",false));
-  beams.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_light_beams",checked).apply());l.addView(beams);
 
   }return l;
  }
