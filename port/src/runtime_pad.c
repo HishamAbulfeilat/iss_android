@@ -380,10 +380,21 @@ static float aim_curve(float v) {
     const float t=fminf((a-dead)/(1.f-dead),1.f);
     return v<0 ? -t*t : t*t;
 }
-static struct { uint32_t buttons; int stick[4], trigger[2]; int sensor_mode; } injected={0,{-1,-1,-1,-1},{-1,-1},-1};
-static int android_spray_stick_pair(const int axes[4]) {
+static struct { uint32_t buttons; int stick[4], trigger[2]; int sensor_mode,mobile_controls; } injected={0,{-1,-1,-1,-1},{-1,-1},-1,0};
+static int android_spray_stick_pair(const int axes[4], int mobile) {
+    if(mobile) return 2; /* no left movement fallback, even when the right stick is idle */
     return ((axes[2]>=0 && abs(axes[2]-128)>13) ||
             (axes[3]>=0 && abs(axes[3]-128)>13)) ? 2 : 0;
+}
+
+/* Mobile drags already encode speed. Do not apply the physical stick's 15% dead
+ * zone and quadratic acceleration a second time to a precision touch gesture. */
+static float android_spray_curve(float v, int mobile) {
+    if(!mobile) return aim_curve(v);
+    const float dead=0.03f,a=fabsf(v);
+    if(a<=dead) return 0.f;
+    const float t=fminf((a-dead)/(1.f-dead),1.f);
+    return v<0 ? -t : t;
 }
 
 static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
@@ -478,18 +489,18 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
             roll=1.5708f; simulated=1;
             if (injected.buttons&BTN_CROSS) shake=1;
             float sx=0.f, sy=0.f;
-            /* Mobile: hold spray on the left, drag the camera on the right.
-             * Keep the classic left-stick path when the right stick is idle. */
-            const int pair=android_spray_stick_pair(injected.stick);
+            /* Mobile: aim only with the right input. Classic retains its stick fallback. */
+            const int pair=android_spray_stick_pair(injected.stick,injected.mobile_controls);
             if (injected.stick[pair]>=0) sx=((float)injected.stick[pair]-128.f)/127.f;
             if (injected.stick[pair+1]>=0) sy=((float)injected.stick[pair+1]-128.f)/127.f;
-            /* Stabilize only virtual spray: ~100ms axis smoothing,
-             * a slower motion range and a bounded step after slow frames. */
+            /* Stabilize virtual spray without the old slow small-stick response.
+             * A bounded step still prevents jumps after slow frames. */
             const float spray_dt=fminf(dt,0.050f);
-            const float alpha=spray_dt>0 ? 1.f-expf(-spray_dt*25.f) : 0.f;
-            spray_axis_x+=(aim_curve(sx)-spray_axis_x)*alpha;
-            spray_axis_y+=(aim_curve(sy)-spray_axis_y)*alpha;
-            const float speed=0.85f*tlggpu_sensor_aim_scale();
+            const float smoothing=injected.mobile_controls?35.f:25.f;
+            const float alpha=spray_dt>0 ? 1.f-expf(-spray_dt*smoothing) : 0.f;
+            spray_axis_x+=(android_spray_curve(sx,injected.mobile_controls)-spray_axis_x)*alpha;
+            spray_axis_y+=(android_spray_curve(sy,injected.mobile_controls)-spray_axis_y)*alpha;
+            const float speed=(injected.mobile_controls?1.5f:0.85f)*tlggpu_sensor_aim_scale();
             motion.yaw-=spray_axis_x*speed*spray_dt;
             motion.aim_pitch-=spray_axis_y*speed*spray_dt;
             motion.yaw=fminf(fmaxf(motion.yaw,-1.20f),1.20f);
@@ -839,7 +850,7 @@ static void read_inject(void) {
     injected.buttons=0; android_dpad_swipe=0; android_menu_mode=0; android_menu_automatic=0;
     android_finger.down=0; android_finger.x=960; android_finger.y=471; android_finger.id=0;
     injected_motion=0;
-    injected.sensor_mode=-1;
+    injected.sensor_mode=-1;injected.mobile_controls=0;
     for (int i=0;i<4;++i) injected.stick[i]=-1;
     for (int i=0;i<2;++i) injected.trigger[i]=-1;
     char token[64];
@@ -848,6 +859,7 @@ static void read_inject(void) {
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!strcmp(token,ps_names[i].name)) injected.buttons|=ps_names[i].ps;
         if (!strcmp(token,"touchpad_both")) injected.buttons|=CLICK_LEFT|CLICK_RIGHT;
         if (!strcmp(token,"dpad_swipe=1")) android_dpad_swipe=1;
+        if (!strcmp(token,"input_mobile=1")) injected.mobile_controls=1;
         if (!strcmp(token,"sensor_mode=1")) injected.sensor_mode=1;
         if (!strcmp(token,"sensor_mode=0")) injected.sensor_mode=0;
         if (!strcmp(token,"input_menu=1")) android_menu_mode=1;

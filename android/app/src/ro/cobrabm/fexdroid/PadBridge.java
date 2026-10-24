@@ -16,6 +16,8 @@ final class PadBridge {
     private final File state;
     private boolean swapFaceButtons;
     private boolean dpadSwipe;
+    private boolean mobileControls=true;
+    void setMobileControls(boolean enabled){mobileControls=enabled;write();}
     private boolean sensorMode,virtualSensorHeld,physicalSensorHeld;
     boolean isSensorMode(){return sensorMode;}
     void toggleSensorMode(){sensorMode=!sensorMode;write();}
@@ -143,6 +145,7 @@ final class PadBridge {
 
     private void write() {
         StringBuilder text=new StringBuilder();
+        text.append("input_mobile=").append(mobileControls?1:0).append(' ');
         text.append("sensor_mode=").append(sensorMode?1:0).append(' ');
         text.append("dpad_swipe=").append(dpadSwipe?1:0).append(' ');
         text.append("input_menu=").append(menuMode?1:0).append(' ');

@@ -44,13 +44,13 @@ final class TouchControllerOverlay extends View {
     private long swipeEpoch;
     private static boolean direction(String name){return name.equals("up")||name.equals("down")||name.equals("left")||name.equals("right");}
     private boolean visible(String name){
-        if(name.equals("touchpad")&&swipepadEnabled)return false;
+        if(name.equals("touchpad")&&(mobile||swipepadEnabled))return false;
         if(name.equals("swipepad"))return swipepadEnabled;
         boolean extra=name.equals("utilities")||name.equals("graffiti")||name.equals("spray")||name.equals("shake");
         if(!mobile)return !extra;
         if(name.equals("rightstick")||name.equals("l3")||name.equals("r3"))return false;
-        if(name.equals("shake"))return editing||(pad.isSensorMode()&&!pad.isMenuMode());
-        if(name.equals("cross")&&pad.isSensorMode()&&!pad.isMenuMode()&&!editing)return false;
+        if(name.equals("shake"))return pad.isSensorMode();
+        if(name.equals("cross")&&pad.isSensorMode())return false;
         if(direction(name)||name.equals("l3")||name.equals("r3")||name.equals("inputmode"))return editing||utilitiesOpen;
         return true;
     }
@@ -89,7 +89,7 @@ final class TouchControllerOverlay extends View {
         cameraMotionAt=now;
         // Velocity in reference pixels/second, independent of touch report frequency.
         float sensitivity=Math.max(.25f,Math.min(3f,preferences.getFloat(pad.isSensorMode()?"spray_sensitivity":"camera_sensitivity",1f)));
-        float divisor=(pad.isSensorMode()?650f:850f)*dt/sensitivity;
+        float divisor=(pad.isSensorMode()?320f:425f)*dt/sensitivity;
         cameraX=axis(Math.max(-1f,Math.min(1f,dx/divisor)));
         cameraY=axis(Math.max(-1f,Math.min(1f,dy/divisor)));
         final long epoch=++cameraEpoch;
@@ -125,11 +125,11 @@ final class TouchControllerOverlay extends View {
     private Runnable onEditDone;
     private boolean swipepadEnabled,showLabels=true;
     void applyPreferences(){
-        release();swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
+        release();
         showLabels=preferences.getBoolean("controller_labels",true);
         boolean next=preferences.getBoolean("mobile_controls",true);
-        swipepadEnabled=next||swipepadEnabled;
-        if(mobile!=next){mobile=next;loadLayout();}invalidate();
+        swipepadEnabled=preferences.getBoolean(next?"mobile_swipepad_enabled":"swipepad_enabled",next);
+        if(mobile!=next){mobile=next;loadLayout();}pad.setMobileControls(mobile);invalidate();
     }
 
     TouchControllerOverlay(Context context,PadBridge pad,boolean mouseEnabled) {
@@ -137,8 +137,9 @@ final class TouchControllerOverlay extends View {
         pad.onModeChanged(()->{release();utilitiesOpen=mobile&&pad.isMenuMode();invalidate();});
         preferences=context.getSharedPreferences("iss",Context.MODE_PRIVATE);
         guideMarker=new java.io.File(context.getFilesDir(),"issport/android-pad.state.guide");
-        swipepadEnabled=preferences.getBoolean("swipepad_enabled",false);
-        mobile=preferences.getBoolean("mobile_controls",true);swipepadEnabled=mobile||swipepadEnabled;showLabels=preferences.getBoolean("controller_labels",true);loadLayout();
+        mobile=preferences.getBoolean("mobile_controls",true);
+        swipepadEnabled=preferences.getBoolean(mobile?"mobile_swipepad_enabled":"swipepad_enabled",mobile);
+        pad.setMobileControls(mobile);showLabels=preferences.getBoolean("controller_labels",true);loadLayout();
         setContentDescription(AppLanguage.text("On-screen controller", "Controle na tela"));
     }
     private PointF center(String name) { return mobile&&name.equals("leftstick")&&moveOrigin!=null?moveOrigin:centers.get(name); }
@@ -321,7 +322,13 @@ final class TouchControllerOverlay extends View {
                     float x=layoutX(e,i),y=layoutY(e,i);
                     String control=controls.get(e.getPointerId(i));
                     float dx=x-p.x,dy=y-p.y;
-                    if(mobile&&("rightstick".equals(control)||"r2".equals(control))&&(dx!=0||dy!=0))cameraMotion(dx,dy);
+                    if(mobile&&("rightstick".equals(control)||"r2".equals(control))&&(dx!=0||dy!=0)){
+                        if(x<=640||p.x<=640){
+                            // A camera finger crossing onto the left cannot steer there.
+                            // Re-entry establishes a new origin, avoiding a large return delta.
+                            cameraMotionAt=0;cameraEpoch++;cameraX=cameraY=128;
+                        }else cameraMotion(dx,dy);
+                    }
                     if("swipepad".equals(control)&&swipeOrigin!=null&&distance(x,y,swipeOrigin)>10*size("swipepad")){
                         if(!swipeMoved){swipeEpoch++;swipeMoved=true;swipeClick=swipePulse=false;}
                     }
@@ -402,7 +409,6 @@ final class TouchControllerOverlay extends View {
             action(c,"graffiti","↻",pad.isSensorMode()?"ON":"OFF");
             action(c,"shake","↔","×");
             action(c,"options","Ⅱ","OPTIONS");
-            if(!swipepadEnabled)rectangle(c,"touchpad",110,AppLanguage.text("Touch","Toque"));
             if(utilitiesOpen||editing){
                 rectangle(c,"inputmode",100,pad.isAutomaticMode()?"AUTO":pad.isMenuMode()?"MENU":AppLanguage.text("GAME","JOGO"));
                 circle(c,"up",26,"▲",0xaaffb59b);circle(c,"left",26,"◀",0xaaffb59b);
@@ -441,6 +447,7 @@ final class TouchControllerOverlay extends View {
         paint.setColor(0x55ffb896);c.drawCircle(p.x,p.y,33,paint);c.drawCircle(p.x,p.y,9,paint);
     }
     private void action(Canvas c,String name,String icon,String label){
+        if(!visible(name))return;
         PointF p=center(name);float r=radius(name);c.save();c.scale(size(name),size(name),p.x,p.y);
         boolean down=pressed.contains(name)||name.equals("utilities")&&utilitiesOpen||name.equals("graffiti")&&pad.isSensorMode();
         paint.setStyle(Paint.Style.FILL);paint.setColor(down?0xaab93526:0x44150d10);c.drawCircle(p.x,p.y,r,paint);
@@ -515,7 +522,7 @@ final class TouchControllerOverlay extends View {
         paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1.5f);paint.setColor(lit?0xffffa471:0x88d69676);
         c.drawRoundRect(p.x-PAD_HALF_W,p.y-PAD_HALF_H,p.x+PAD_HALF_W,p.y+PAD_HALF_H,PAD_CORNER,PAD_CORNER,paint);
         paint.setStyle(Paint.Style.FILL);paint.setTypeface(Typeface.DEFAULT_BOLD);paint.setTextSize(11);paint.setTextAlign(Paint.Align.CENTER);
-        paint.setColor(0x66f5d7c6);c.drawText("TOUCHPAD",p.x,p.y+4,paint);
+        paint.setColor(0x66f5d7c6);
         for(int i=0;i<controls.size();i++)if("swipepad".equals(controls.valueAt(i))){
             PointF f=positions.get(controls.keyAt(i));
             if(f!=null){paint.setColor(0xaaff9c65);c.drawCircle(p.x+Math.max(-PAD_HALF_W+8,Math.min(PAD_HALF_W-8,(f.x-p.x)/s)),p.y+Math.max(-PAD_HALF_H+8,Math.min(PAD_HALF_H-8,(f.y-p.y)/s)),7,paint);}

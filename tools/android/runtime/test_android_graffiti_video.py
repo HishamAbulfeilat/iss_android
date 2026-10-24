@@ -21,7 +21,7 @@ class GraffitiAndDisplayTests(unittest.TestCase):
         physical = text.split("    if (g) {", 1)[1].split("    /* Android controller/overlay events", 1)[0]
         virtual = text.split("    if (android_pad_enabled()) {", 1)[1].split("    if (real && !simulated) {", 1)[0]
         self.assertIn("const float speed=1.2f*tlggpu_sensor_aim_scale();", physical)
-        self.assertIn("const float speed=0.85f*tlggpu_sensor_aim_scale();", virtual)
+        self.assertIn("const float speed=(injected.mobile_controls?1.5f:0.85f)*tlggpu_sensor_aim_scale();", virtual)
         self.assertIn("spray_axis_x+=", virtual)
         self.assertIn("spray_axis_y+=", virtual)
         self.assertIn("spray_dt=fminf(dt,0.050f)", virtual)
@@ -38,18 +38,42 @@ class GraffitiAndDisplayTests(unittest.TestCase):
         helper=text[start:text.index('\n}',start)+2]
         program='#include <stdlib.h>\n#include <assert.h>\n'+helper+'''
 int main(void){
- int a[4]={128,128,128,128};assert(android_spray_stick_pair(a)==0);
- a[0]=220;assert(android_spray_stick_pair(a)==0);
- a[2]=160;assert(android_spray_stick_pair(a)==2);
- a[2]=128;a[3]=90;assert(android_spray_stick_pair(a)==2);
- a[2]=a[3]=-1;assert(android_spray_stick_pair(a)==0);
- a[2]=130;a[3]=125;assert(android_spray_stick_pair(a)==0);
+ int a[4]={128,128,128,128};assert(android_spray_stick_pair(a,0)==0);
+ a[0]=220;assert(android_spray_stick_pair(a,0)==0);assert(android_spray_stick_pair(a,1)==2);
+ a[2]=160;assert(android_spray_stick_pair(a,0)==2);
+ a[2]=128;a[3]=90;assert(android_spray_stick_pair(a,0)==2);
+ a[2]=a[3]=-1;assert(android_spray_stick_pair(a,0)==0);
+ a[2]=130;a[3]=125;assert(android_spray_stick_pair(a,0)==0);assert(android_spray_stick_pair(a,1)==2);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp)/'spray.c';binary=Path(tmp)/'spray';source.write_text(program)
             subprocess.run(['cc','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)],check=True,capture_output=True,text=True)
             subprocess.run([str(binary)],check=True,capture_output=True,text=True)
+
+    @unittest.skipUnless(shutil.which('cc'), 'C compiler unavailable')
+    def test_mobile_spray_curve_preserves_small_motion_without_changing_classic(self):
+        text=PAD.read_text()
+        helpers=[]
+        for name in ('static float aim_curve(', 'static float android_spray_curve('):
+            start=text.index(name);helpers.append(text[start:text.index('\n}',start)+2])
+        source='#include <assert.h>\n#include <math.h>\n'+'\n'.join(helpers)+r'''
+int main(void){
+ assert(android_spray_curve(0.02f,1)==0.f);
+ assert(android_spray_curve(0.10f,1)>0.07f); // Classic's 15% zone swallowed this entirely.
+ assert(android_spray_curve(0.10f,0)==0.f);
+ for(int i=-200;i<=200;i++){
+  float v=i/100.f;
+  assert(android_spray_curve(v,1)>=-1.f&&android_spray_curve(v,1)<=1.f);
+  assert(fabsf(android_spray_curve(v,1)+android_spray_curve(-v,1))<1e-6f);
+  assert(android_spray_curve(v,0)==aim_curve(v));
+ }
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp);(path/'curve.c').write_text(source)
+            subprocess.run(['cc','-Wall','-Wextra','-Werror',str(path/'curve.c'),'-lm','-o',str(path/'curve')],check=True,capture_output=True,text=True)
+            subprocess.run([str(path/'curve')],check=True,capture_output=True,text=True)
 
     def test_16_9_and_fullscreen_never_claim_impossible_geometry(self):
         activity = ACT.read_text()
