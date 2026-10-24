@@ -121,7 +121,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
   if(prefs.getBoolean("patch_shadows",false))patches.add("Disable shadow maps");
-  if(prefs.getBoolean("patch_light_beams",false))patches.add("Disable light beams");
+
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
   e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");
   e.put("TLG_OUTPUT_RES",outputResolution);
