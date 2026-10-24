@@ -73,7 +73,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                 EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed
                     ? "cache owner" : "guest thread");
 #if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
-    std::printf("ISS hybrid V2: read protection=%s, staged buffer copies=%s, eager fence copies=%s\\n",
+    std::printf("ISS hybrid V2: read protection=%s, staged buffer copies=%s, eager fence copies=%s\n",
                 RegionManager::HybridReadProtectionEnabled() ? "on" : "off",
                 std::getenv("TLG_MAPPED_READBACK") && std::getenv("TLG_MAPPED_READBACK")[0] == '0' ? "on" : "off",
                 std::getenv("TLG_EAGER_READBACK") && std::getenv("TLG_EAGER_READBACK")[0] == '1' ? "on" : "off");
