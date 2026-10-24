@@ -29,7 +29,7 @@ final class TouchControllerOverlay extends View {
     };
     // Approved Direto: aim, spray and power left; camera drag and combat right.
     private static final float[][] MOBILE={
-        {154,216},{358,281},{640,60},{1190,72},{909,317},{1126,324},
+        {154,216},{358,281},{640,60},{995,72},{909,317},{1126,324},
         {135,340},{85,390},{185,390},{135,440},
         {845,482},{922,619},{1126,619},{1190,490},
         {230,585},{280,350},{280,430},{810,460},{330,60},{640,200},
