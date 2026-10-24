@@ -36,7 +36,8 @@ class HybridReadbackTest(unittest.TestCase):
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)
-        self.assertIn('(!precise && p.getBoolean("renderer_experimental_hybrid_readback",false))', src)
+        self.assertIn('final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);', src)
+        self.assertIn('env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");', src)
         self.assertIn('env.put("TLG_READBACKS", precise ? "2" : "1")', src)
 
 
