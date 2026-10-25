@@ -121,7 +121,7 @@ private:
         u64 shader_hash = 0;
         u32 slot = 0;
         u32 size = 0;
-        std::array<float, 6> first{};
+        std::array<float, 32> first{};
     };
     std::array<BindingSample, 24> android_binding_samples{};
     u32 android_binding_sample_count = 0;
