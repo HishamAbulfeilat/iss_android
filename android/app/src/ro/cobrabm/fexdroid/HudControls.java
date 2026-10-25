@@ -105,7 +105,7 @@ final class HudControls {
         ScrollView scroll = new ScrollView(activity);
         scroll.addView(content);
         new AlertDialog.Builder(activity)
-            .setTitle("Performance HUD")
+            .setTitle(AppLanguage.text("Performance HUD","HUD de desempenho"))
             .setView(scroll)
             .setNegativeButton(AppLanguage.text("Cancel", "Cancelar"), null)
             .setPositiveButton(AppLanguage.text("Apply", "Aplicar"), (dialog, which) -> {
