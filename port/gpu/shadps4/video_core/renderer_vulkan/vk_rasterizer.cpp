@@ -2667,6 +2667,13 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                      constant_ring->Data(ring->offset), ring->size);
             }
             if (!desc.IsSpecial()) {
+#ifdef ISS_ANDROID_BIONIC
+                if (gbuffer_draw && camera_motion->NeedGBufferSamples()) {
+                    camera_motion->ObserveGBufferBinding(stage.pgm_hash, buffer_index,
+                                                          ring->size,
+                                                          constant_ring->Data(ring->offset));
+                }
+#endif
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
