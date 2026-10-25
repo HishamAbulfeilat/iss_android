@@ -223,6 +223,21 @@ private:
     vk::UniqueImageView ui_view;
     vk::UniqueImageView ui_depth_view;
     bool depth_blit = false;
+#ifdef ISS_ANDROID_BIONIC
+    // Per-180-frame lightweight diagnostics for the title-specific FSR camera/scene path.
+    // Counts only: no Vulkan readback, per-draw logging or additional allocations.
+    struct AndroidFsrProbe {
+        u32 frames = 0;
+        u32 scene_colors = 0;
+        u32 ldr_targets = 0;
+        u32 ui_draws = 0;
+        u32 native_viewport_draws = 0;
+        u32 rgba_ui_candidates = 0;
+        u32 camera_ready_draws = 0;
+        u32 ldr_match_draws = 0;
+        u32 dispatched = 0;
+    } android_fsr_probe{};
+#endif
     bool scaled_session = false;
     u32 ui_width = 0, ui_height = 0;
     u32 render_width = 0, render_height = 0;
