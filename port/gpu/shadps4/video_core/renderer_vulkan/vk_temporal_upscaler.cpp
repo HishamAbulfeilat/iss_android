@@ -1372,7 +1372,10 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
     }
     const auto& image = texture_cache.GetImage(color);
 #ifdef ISS_ANDROID_BIONIC
-    if (native_viewport && ldr_target && !android_ui_samples_printed &&
+    // The original Bloodborne probe required a known LDR target here.
+    // ISS draws its fullscreen passes before that target is identified,
+    // so sample the actual vertex hashes irrespective of LDR availability.
+    if (native_viewport && !android_ui_samples_printed &&
         android_ui_sample_count < android_ui_samples.size()) {
         bool known = false;
         for (u32 i = 0; i < android_ui_sample_count; ++i) {
