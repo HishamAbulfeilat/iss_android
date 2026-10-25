@@ -19,8 +19,13 @@ export ISS_COMPARE_STATS="${ISS_COMPARE_STATS:-1}"
 # Readback outcomes distinguish successful deferred copies from stale-copy fallbacks.
 export TLG_READBACK_STATS="${TLG_READBACK_STATS:-$ISS_COMPARE_STATS}"
 export TLG_FAULT_PROFILE="${TLG_FAULT_PROFILE:-$ISS_COMPARE_STATS}"
-# Native Bionic deliberately has no optional temporal or spatial upscaling.
-export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 TLG_FSR1=0 TLG_RCAS=0
+# FSR 3.1 uses the existing native Vulkan scene/depth path; keep it opt-in.
+# Never overwrite the Android launcher's FSR selection with a hardcoded "none".
+case "${TLG_UPSCALER:-none}" in
+ fsr3) export TLG_UPSCALER=fsr3 ISS_UPSCALER=fsr3 TLG_OBJECT_MOTION=1 ISS_OBJECT_MOTION=1 TLG_JITTER=1 ISS_JITTER=1 ;;
+ *) export TLG_UPSCALER=none ISS_UPSCALER=off TLG_OBJECT_MOTION=0 ISS_OBJECT_MOTION=0 TLG_JITTER=0 ISS_JITTER=0 ;;
+esac
+export TLG_FSR1=0 TLG_RCAS=0
 export TLG_PAD_FILE="$base/android-pad.state"
 export TLG_CONFIG="$base/user/tlg.ini" ISS_CONFIG="$base/user/tlg.ini"
 export TLG_GPU_USER_DIR="$base/user"
