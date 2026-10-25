@@ -2,6 +2,7 @@
 
 ## Novidades da v0.2 em relação à v0.1
 
+- **Instalação de PKG corrigida:** corrigido o fluxo de extração para a pasta do jogo, com criação automática da pasta **inFamous Second Son** dentro do destino selecionado, tratamento de pastas já ocupadas, verificação de permissão de gravação e exibição de progresso durante a extração.
 - **Novo patch para desativar sombras:** opção experimental para desabilitar o processamento de mapas de sombras em executáveis compatíveis.
 - **Novos patches de resolução interna:** adicionadas as opções **540p (960 × 540)**, **480p (854 × 480)** e **360p (640 × 360)**. São experimentais; as opções de 720p e 900p já existiam na v0.1.
 - **Novo layout de controles Mobile:** controles na tela reorganizados para jogar no celular, com câmera por arrasto, botões de ação e ajustes de sensibilidade da câmera e do spray. O layout clássico continua disponível.
@@ -12,6 +13,7 @@
 
 ## What's new in v0.2 compared with v0.1
 
+- **Fixed PKG installation:** corrected the game extraction flow, automatically creating the **inFamous Second Son** folder inside the selected destination, handling existing nonempty folders, checking write access and showing extraction progress.
 - **New disable-shadows patch:** experimental option to bypass shadow-map processing on compatible game executables.
 - **New internal resolution patches:** **540p (960 × 540)**, **480p (854 × 480)** and **360p (640 × 360)**, all experimental. The 720p and 900p options were already available in v0.1.
 - **New Mobile control layout:** reorganized on-screen controls, drag-to-look camera, action buttons, and camera/spray sensitivity settings. Classic layout remains available.
