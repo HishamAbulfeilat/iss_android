@@ -322,7 +322,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
                             vk::to_string(target.info.pixel_format).c_str(),
                             target.info.size.width, target.info.size.height);
             }
-            std::printf("\\n");
+            std::printf("\n");
         }
 #endif
     }
