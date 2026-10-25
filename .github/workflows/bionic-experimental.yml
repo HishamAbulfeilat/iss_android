@@ -162,8 +162,8 @@ jobs:
         with:
           name: iss-android-bionic-apk-${{ github.sha }}
           path: |
-            out/release/inFAMOUS-Second-Son-Daedalus-v0.1.apk
-            out/release/inFAMOUS-Second-Son-Daedalus-v0.1.apk.sha256
+            out/release/inFAMOUS-Second-Son-Daedalus-v0.2.apk
+            out/release/inFAMOUS-Second-Son-Daedalus-v0.2.apk.sha256
             out/release/RELEASE_NOTES.md
             out/release/RELEASE-METADATA.json
             out/release/LICENSE.txt
