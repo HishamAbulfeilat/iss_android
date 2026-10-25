@@ -266,6 +266,14 @@ final class LanguageCatalogTrPl {
   {"Ready. If frame generation was already on, turn it off and on again to reload the DLL.","Hazır. Kare oluşturma zaten açıksa DLL'yi yeniden yüklemek için kapatıp açın.","Gotowe. Jeśli generowanie klatek było włączone, wyłącz je i włącz ponownie, aby przeładować DLL."},
   {"BloodFrame · Lossless Scaling\nImport Lossless.dll from your Lossless Scaling installation. Shaders are not included with this app.","BloodFrame · Lossless Scaling\nLossless Scaling kurulumunuzdan Lossless.dll dosyasını içe aktarın. Gölgelendiriciler bu uygulamaya dahil değildir.","BloodFrame · Lossless Scaling\nZaimportuj Lossless.dll ze swojej instalacji Lossless Scaling. Shadery nie są dołączone."},
   {"Cannot save performance HUD settings.","Performans HUD ayarları kaydedilemedi.","Nie można zapisać ustawień HUD wydajności."},
+  {"FSR 3.1 temporal upscaling","FSR 3.1 zamansal yükseltme","Skalowanie temporalne FSR 3.1"},
+  {"Enable FSR 3.1 (1080p output, restart required)","FSR 3.1'i aç (1080p çıkış, yeniden başlat)","Włącz FSR 3.1 (wyjście 1080p, wymagany restart)"},
+  {"FSR uses the selected internal resolution and reconstructs before the HUD. Experimental on Android; disabled by default.","FSR iç çözünürlükten HUD'den önce görüntüyü oluşturur. Android'de deneysel; varsayılan kapalı.","FSR rekonstruuje obraz przed HUD z rozdzielczości wewnętrznej. Funkcja eksperymentalna, domyślnie wyłączona."},
+  {"FSR quality preset","FSR kalite ayarı","Profil jakości FSR"},
+  {"FSR Native AA","FSR yerel AA","FSR natywne AA"},
+  {"FSR Quality","FSR Kalite","FSR Jakość"},
+  {"FSR Balanced","FSR Dengeli","FSR Zrównoważony"},
+  {"FSR Performance","FSR Performans","FSR Wydajność"},
   };
   for(String[] row:rows)TEXT.put(row[0],new String[]{row[1],row[2]});
  }
