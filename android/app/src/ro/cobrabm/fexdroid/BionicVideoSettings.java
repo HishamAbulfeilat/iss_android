@@ -25,17 +25,17 @@ final class BionicVideoSettings {
   LinearLayout l=new LinearLayout(activity);l.setOrientation(1);l.setPadding(28,20,28,20);
   android.content.SharedPreferences prefs=activity.getSharedPreferences("iss",0);
   if(page!=2){
-  Switch toggle=new Switch(activity);toggle.setText(AppLanguage.text("Fullscreen","Tela cheia (Fullscreen)"));
+  Switch toggle=new Switch(activity);toggle.setText(AppLanguage.text("Fullscreen","Tela cheia"));
   toggle.setPadding(0,16,0,16);toggle.setChecked(fullscreen(prefs));l.addView(toggle);
   TextView status=new TextView(activity);l.addView(status);
-  TextView label=new TextView(activity);label.setText(AppLanguage.text("Fullscreen mode","Modo de Fullscreen"));label.setPadding(0,24,0,8);l.addView(label);
+  TextView label=new TextView(activity);label.setText(AppLanguage.text("Fullscreen mode","Modo de tela cheia"));label.setPadding(0,24,0,8);l.addView(label);
   RadioGroup modes=new RadioGroup(activity);modes.setOrientation(1);
   RadioButton stretch=new RadioButton(activity);stretch.setId(android.view.View.generateViewId());stretch.setText(AppLanguage.text("Stretch — no cropping","Esticar — sem cortes"));modes.addView(stretch);
   RadioButton crop=new RadioButton(activity);crop.setId(android.view.View.generateViewId());crop.setText(AppLanguage.text("Proportional — crop edges","Proporcional — cortar bordas"));modes.addView(crop);
   modes.check("crop".equals(prefs.getString("display_mode","stretch"))?crop.getId():stretch.getId());l.addView(modes);
-  TextView hint=new TextView(activity);hint.setText(AppLanguage.text("Enable Fullscreen to choose a mode.","Ative Fullscreen para escolher o modo."));l.addView(hint);
+  TextView hint=new TextView(activity);hint.setText(AppLanguage.text("Enable Fullscreen to choose a mode.","Ative a tela cheia para escolher um modo."));l.addView(hint);
   Runnable refresh=()->{boolean enabled=fullscreen(prefs);stretch.setEnabled(enabled);crop.setEnabled(enabled);modes.setAlpha(enabled?1f:0.4f);label.setAlpha(enabled?1f:0.4f);
-   status.setText(enabled?AppLanguage.text("The mode selected below will be applied.","O modo selecionado abaixo será aplicado."):AppLanguage.text("Automatic 16:9 with Fullscreen off.","16:9 automático com Fullscreen desligado."));hint.setVisibility(enabled?android.view.View.GONE:android.view.View.VISIBLE);};
+   status.setText(enabled?AppLanguage.text("The mode selected below will be applied.","O modo selecionado abaixo será aplicado."):AppLanguage.text("Automatic 16:9 with Fullscreen off.","16:9 automático com a tela cheia desligada."));hint.setVisibility(enabled?android.view.View.GONE:android.view.View.VISIBLE);};
   toggle.setOnCheckedChangeListener((button,checked)->{prefs.edit().putBoolean("fullscreen",checked).apply();refresh.run();});
   modes.setOnCheckedChangeListener((group,id)->{if(fullscreen(prefs))prefs.edit().putString("display_mode",id==crop.getId()?"crop":"stretch").apply();});
   refresh.run();
@@ -55,13 +55,13 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(resolutionPatch);
-  CheckBox blur=new CheckBox(activity);blur.setText(AppLanguage.text("Disable Motion Blur", "Desativar Motion Blur"));
+  CheckBox blur=new CheckBox(activity);blur.setText(AppLanguage.text("Disable Motion Blur", "Desativar desfoque de movimento"));
   blur.setChecked(prefs.getBoolean("patch_motion_blur",false));
   blur.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_motion_blur",checked).apply());l.addView(blur);
-  CheckBox dof=new CheckBox(activity);dof.setText(AppLanguage.text("Disable Depth of Field", "Desativar Depth of Field"));
+  CheckBox dof=new CheckBox(activity);dof.setText(AppLanguage.text("Disable Depth of Field", "Desativar profundidade de campo"));
   dof.setChecked(prefs.getBoolean("patch_dof",false));
   dof.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_dof",checked).apply());l.addView(dof);
-  CheckBox depth=new CheckBox(activity);depth.setText(AppLanguage.text("Disable Depth Blur", "Desativar Depth Blur"));
+  CheckBox depth=new CheckBox(activity);depth.setText(AppLanguage.text("Disable Depth Blur", "Desativar desfoque de profundidade"));
   depth.setChecked(prefs.getBoolean("patch_depth_blur",false));
   depth.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_depth_blur",checked).apply());l.addView(depth);
 
