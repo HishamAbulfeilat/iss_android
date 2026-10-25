@@ -229,7 +229,9 @@ void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const voi
     item.shader_hash = hash;
     item.slot = slot;
     item.size = size;
-    std::memcpy(item.first.data(), bytes, item.first.size() * sizeof(float));
+    // A source buffer can be smaller than 128 bytes; never read beyond its size.
+    std::memcpy(item.first.data(), bytes,
+                std::min<u32>(size, static_cast<u32>(sizeof(item.first))));
 }
 #endif
 
@@ -288,10 +290,16 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                 for (u32 i = 0; i < android_binding_sample_count; ++i) {
                     const auto& v = android_binding_samples[i];
                     std::printf("FSR3 ISS CB: shader=%016llx slot=%u bytes=%u "
-                                "f0..5=%g,%g,%g,%g,%g,%g\n",
+                                "f0..15=%g,%g,%g,%g | %g,%g,%g,%g | "
+                                "%g,%g,%g,%g | %g,%g,%g,%g "
+                                "f16..23=%g,%g,%g,%g,%g,%g,%g,%g\n",
                                 static_cast<unsigned long long>(v.shader_hash), v.slot,
-                                v.size, v.first[0], v.first[1], v.first[2],
-                                v.first[3], v.first[4], v.first[5]);
+                                v.size, v.first[0], v.first[1], v.first[2], v.first[3],
+                                v.first[4], v.first[5], v.first[6], v.first[7],
+                                v.first[8], v.first[9], v.first[10], v.first[11],
+                                v.first[12], v.first[13], v.first[14], v.first[15],
+                                v.first[16], v.first[17], v.first[18], v.first[19],
+                                v.first[20], v.first[21], v.first[22], v.first[23]);
                 }
                 android_binding_samples_done = true;
             }
