@@ -1,30 +1,15 @@
-# inFAMOUS Second Son — Daedalus Fork v0.2
+# inFAMOUS Second Son — Daedalus Android v0.2
 
-## Português
+## Alterações da v0.1 para a v0.2
 
-Esta atualização do port Android Bionic mantém o mesmo identificador de aplicativo e exige **o mesmo certificado de assinatura** das builds anteriores para permitir atualização sem perda de dados.
+- **Readback:** o seletor agora apresenta apenas **Relaxed 1** e **Precise 2**. A opção exibida como “Precise 2 — corrige fumaça/poderes; grande queda de FPS” utiliza internamente **as funções do Híbrido**, não o modo Precise original.
+- **Configurações de Readback:** removida a opção Híbrido duplicada das correções do renderizador. A preferência anteriormente salva como Precise passa a selecionar o comportamento Híbrido.
+- **Traduções e textos:** corrigidos rótulos, descrições, mensagens de erro, nomes de menus e textos dos controles, salvamentos, configurações gráficas e geração de quadros; ampliadas as traduções dos idiomas disponíveis.
+- **Versão:** atualizada a identificação exibida no launcher, no menu do jogo e na tela Sobre para **0.2** (versionCode **17**).
 
-### Novidades
-- A tela de Readback passa a oferecer apenas **Relaxed 1** e **Precise 2**.
-- **IMPORTANTE: “Precise 2” é apenas o texto apresentado na interface. Sua execução real é o Híbrido V6, com Readback 1, proteção de leitura, cópias por staging e antecipação por fence; não ativa o Precise 2 real.**
-- A preferência antiga do Precise é interpretada como Híbrido, evitando ativar o caminho antigo por engano.
-- Removida a opção duplicada de proteção híbrida do painel de correções do renderer.
-- Corrigidos textos, rótulos e traduções da interface, inclusive menus e mensagens de configuração.
-- Versão do aplicativo: **0.2** (código **17**). O pacote permanece **com.daedalus.iss.bionic**.
+## Changes from v0.1 to v0.2
 
-### Preservado
-- Runtime Android Bionic, FEX e Vulkan nativo; recursos de instalação PKG, drivers, salvamentos, Bloodframe, controles, HUD e patches existentes.
-- Nenhum código é copiado da branch `experimental-native-passes-arm64`.
-- Certificado de assinatura original; o workflow falha se a chave original não estiver disponível ou se o certificado não coincidir.
-
-### Instalação
-Android 11+, ARM64, Vulkan compatível. Instale a v0.2 sobre a versão anterior com o mesmo pacote e assinatura. Nenhum jogo, firmware, chave ou Lossless.dll acompanha o APK.
-
-## English
-
-- Android Bionic v0.2 keeps the original app ID and release signing certificate.
-- Readback choices are **Relaxed 1** and **Precise 2**. **The Precise 2 UI label intentionally runs the Hybrid V6 backend with Readbacks=1; it does not run the real Precise 2 implementation.**
-- Previously saved Precise preferences automatically select Hybrid functionality.
-- Duplicate hybrid renderer toggle removed; UI wording and translations revised.
-- All prior core game, audio, control, driver, PKG and save features remain. No new native-passes experimental code has been imported.
-- APK version name 0.2, version code 17. The build is rejected if the original signing key or certificate is missing.
+- **Readback:** the selector now shows only **Relaxed 1** and **Precise 2**. The option labeled “Precise 2 — correct smoke/powers; major FPS impact” executes the **Hybrid functionality**, not the original Precise mode.
+- **Readback settings:** removed the duplicate Hybrid toggle from renderer corrections. Previously saved Precise preferences now select Hybrid behavior.
+- **Translations and text:** corrected UI labels, descriptions, error messages, menu names, controls, saves, graphics settings, and frame-generation wording; expanded translations across the available languages.
+- **Version:** launcher, in-game menu, and About screen now display **0.2** (versionCode **17**).
