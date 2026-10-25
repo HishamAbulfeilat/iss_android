@@ -81,13 +81,13 @@ class GameLanguageTests(unittest.TestCase):
     def test_turkish_polish_catalog_covers_all_android_ui_literals(self):
         src=ROOT/'android/app/src/ro/cobrabm/fexdroid'
         catalog=(src/'LanguageCatalogTrPl.java').read_text()
-        keys=set(re.findall(r'\\{\\s*"((?:\\\\.|[^"\\\\])*)"\\s*,',catalog))
+        keys=set(re.findall(r'\{\s*"([^"]+)"\s*,',catalog))
         self.assertGreaterEqual(len(keys),250)
         required=set()
         for source in src.glob('*.java'):
             if source.name.startswith('LanguageCatalog'):
                 continue
-            required.update(re.findall(r'AppLanguage\\.text\\(\\s*"((?:\\\\.|[^"\\\\])*)"\\s*,',
+            required.update(re.findall(r'AppLanguage\.text\(\s*"([^"]+)"\s*,',
                                        source.read_text()))
         self.assertFalse(required-keys,'Untranslated Android UI strings: '+str(sorted(required-keys)))
 
