@@ -219,11 +219,17 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
 }
 
 void CameraMotion::OnConstants(const float* data) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_constants;
+#endif
     // Scene constants: far plane 3000, 1/far, and the render size.
     if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
         std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
         return;
     }
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_signature;
+#endif
     if (frame_has_camera) {
         return; // the first one of a frame is the main camera
     }
@@ -241,10 +247,26 @@ void CameraMotion::OnConstants(const float* data) {
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_gbuffer;
+#endif
     depth_id = depth;
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
+#ifdef ISS_ANDROID_BIONIC
+    if (for_upscaler) {
+        if (Ready()) ++android_probe_ready;
+        if (++android_probe_frames >= 180) {
+            std::printf("FSR3 camera: frames=%u gbuffer=%u constants864=%u "
+                        "signature3000=%u ready=%u\n",
+                        android_probe_frames, android_probe_gbuffer,
+                        android_probe_constants, android_probe_signature, android_probe_ready);
+            android_probe_frames = android_probe_gbuffer = android_probe_constants = 0;
+            android_probe_signature = android_probe_ready = 0;
+        }
+    }
+#endif
     if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }
