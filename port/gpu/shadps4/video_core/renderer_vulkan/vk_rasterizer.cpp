@@ -301,16 +301,26 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         // Discover whether ISS exports native motion vectors in its MRTs.
         // A camera inferred from one object's transform would corrupt temporal history.
         // Read attachment descriptors only (no image download or GPU wait).
-        static std::array<u64, 12> inspected_ps{};
+        static std::array<u64, 12> inspected_layouts{};
         static u32 inspected_count = 0;
         const u64 ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
+        const auto& d = texture_cache.GetImage(db_desc.first);
+        // Distinct render-target layouts, not 12 shaders sharing the same G-buffer.
+        // Otherwise the first few material permutations would exhaust the census.
+        u64 layout = (u64(key.mrt_mask) << 32) ^ u64(d.info.pixel_format);
+        for (u32 slot = 0; slot < cb_descs.size(); ++slot) {
+            if (!(key.mrt_mask & (1u << slot)) || !cb_descs[slot].first) continue;
+            const auto& target = texture_cache.GetImage(cb_descs[slot].first);
+            layout = (layout * 1099511628211ull) ^ u64(target.info.pixel_format);
+            layout = (layout * 1099511628211ull) ^ u64(target.info.size.width);
+            layout = (layout * 1099511628211ull) ^ u64(target.info.size.height);
+        }
         bool seen = false;
         for (u32 n = 0; n < inspected_count; ++n) {
-            if (inspected_ps[n] == ps_hash) { seen = true; break; }
+            if (inspected_layouts[n] == layout) { seen = true; break; }
         }
-        if (!seen && inspected_count < inspected_ps.size()) {
-            inspected_ps[inspected_count++] = ps_hash;
-            const auto& d = texture_cache.GetImage(db_desc.first);
+        if (!seen && inspected_count < inspected_layouts.size()) {
+            inspected_layouts[inspected_count++] = layout;
             std::printf("FSR3 ISS MRT: ps=%016llx mask=%02x depth=%s %ux%u",
                         static_cast<unsigned long long>(ps_hash), key.mrt_mask,
                         vk::to_string(d.info.pixel_format).c_str(), d.info.size.width,
