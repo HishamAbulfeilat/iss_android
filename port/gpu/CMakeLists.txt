@@ -112,12 +112,10 @@ find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 
-# Desktop temporal FSR/DLSS; native Bionic inFAMOUS deliberately omits this SDK.
-if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
-    set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
-endif()
+# Portable native Vulkan FSR 3.1; Android keeps the existing AHB presenter.
+set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
@@ -167,8 +165,6 @@ file(GLOB_RECURSE VIDEO_CORE CONFIGURE_DEPENDS shadps4/video_core/*.cpp)
 # implementation; glibc/desktop retains its VkSurfaceKHR implementation.
 if(ANDROID AND ISS_ANDROID_BIONIC)
     list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain\\.cpp$")
-    list(FILTER VIDEO_CORE EXCLUDE REGEX
-        "renderer_vulkan/vk_temporal_upscaler\\.cpp$|renderer_vulkan/vk_fsr4\\.cpp$|renderer_vulkan/fsr411/fsr411\\.cpp$")
 else()
     list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain_ahb\\.cpp$")
 endif()
@@ -245,9 +241,7 @@ target_compile_options(tlggpu PRIVATE -Wno-deprecated-declarations -Wno-missing-
 if (NOT WIN32)
     target_link_options(tlggpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
-    target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
-endif()
+target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
 target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt-header-only Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 # xbyak is header-only: the distribution's copy when there is one (Fedora xbyak-devel), else the
