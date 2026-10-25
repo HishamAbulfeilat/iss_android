@@ -91,11 +91,18 @@ class LanguageTest {
   assert AppLanguage.resolve("auto",new Locale("ja","JP")).equals("ja");
   assert AppLanguage.resolve("auto",new Locale("hi","IN")).equals("en");
   assert AppLanguage.resolve("de",new Locale("pt","BR")).equals("de");
+  assert AppLanguage.resolve("tr",new Locale("en","US")).equals("tr");
+  assert AppLanguage.resolve("auto",new Locale("pl","PL")).equals("pl");
   assert AppLanguage.resolve("bad",Locale.FRENCH).equals("en");
   for(String code:new String[]{"es","fr","de","it","ru","ja","ko","zh","tr","pl"}){
    assert !LanguageCatalog.text(code,"Cancel").equals("Cancel"):code;
    assert !LanguageCatalog.text(code,"Select game folder").equals("Select game folder"):code;
    assert !LanguageCatalog.text(code,"Jump").equals("Jump"):code;
+   if(code.equals("tr")||code.equals("pl")){
+     assert !LanguageCatalog.text(code,"Disable shadows").equals("Disable shadows");
+     assert !LanguageCatalog.text(code,"Preparing PKG installation…").equals("Preparing PKG installation…");
+     assert !LanguageCatalog.text(code,"Cannot install driver").equals("Cannot install driver");
+   }
    assert LanguageCatalog.text(code,"Unknown diagnostic").equals("Unknown diagnostic");
   }
   assert LanguageCatalog.text("en","Cancel").equals("Cancel");
@@ -105,6 +112,7 @@ class LanguageTest {
             p=Path(tmp)
             (p/'AppLanguage.java').write_text('package ro.cobrabm.fexdroid;import java.util.Locale;final class AppLanguage{'+codes+policy+'}')
             (p/'LanguageCatalog.java').write_text((src/'LanguageCatalog.java').read_text())
+            (p/'LanguageCatalogTrPl.java').write_text((src/'LanguageCatalogTrPl.java').read_text())
             (p/'LanguageTest.java').write_text(test)
             result=subprocess.run(['java','com.sun.tools.javac.Main','-encoding','UTF-8','-d',tmp,*map(str,p.glob('*.java'))],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
