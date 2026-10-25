@@ -204,6 +204,7 @@ final class LanguageCatalog {
   {"BloodFrame · Lossless Scaling\\nImport Lossless.dll from your Lossless Scaling installation. Shaders are not included with this app.","BloodFrame · Lossless Scaling\\nImporta Lossless.dll de tu instalación de Lossless Scaling. Esta app no incluye shaders.","BloodFrame · Lossless Scaling\\nImportez Lossless.dll depuis votre installation. Les shaders ne sont pas inclus.","BloodFrame · Lossless Scaling\\nImportiere Lossless.dll aus deiner Installation. Shader sind nicht enthalten.","BloodFrame · Lossless Scaling\\nImporta Lossless.dll dall'installazione. Gli shader non sono inclusi.","BloodFrame · Lossless Scaling\\nИмпортируйте Lossless.dll из установленного Lossless Scaling. Шейдеры в приложение не входят.","BloodFrame · Lossless Scaling\\nインストール済みのLossless ScalingからLossless.dllを読み込んでください。シェーダーは同梱されません。","BloodFrame · Lossless Scaling\\n설치된 Lossless Scaling에서 Lossless.dll을 가져오세요. 셰이더는 포함되지 않습니다.","BloodFrame · Lossless Scaling\\n请从安装的Lossless Scaling中导入Lossless.dll。本应用不包含着色器。"}
  };
  static String text(String language,String english){
+  if("tr".equals(language)||"pl".equals(language))return LanguageCatalogTrPl.text(language,english);
   int column=-1;for(int i=0;i<CODES.length;i++)if(CODES[i].equals(language))column=i+1;
   if(column<0)return english;
   for(String[] row:ROWS)if(row[0].equals(english))return row[column];
