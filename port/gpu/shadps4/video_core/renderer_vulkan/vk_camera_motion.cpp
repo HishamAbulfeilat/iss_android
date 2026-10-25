@@ -300,6 +300,17 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                                 v.first[12], v.first[13], v.first[14], v.first[15],
                                 v.first[16], v.first[17], v.first[18], v.first[19],
                                 v.first[20], v.first[21], v.first[22], v.first[23]);
+                    std::printf("FSR3 ISS CB matrices: shader=%016llx slot=%u bytes=%u "
+                                "f24..31=%g,%g,%g,%g,%g,%g,%g,%g "
+                                "f48..63=%g,%g,%g,%g | %g,%g,%g,%g | "
+                                "%g,%g,%g,%g | %g,%g,%g,%g\\n",
+                                static_cast<unsigned long long>(v.shader_hash), v.slot, v.size,
+                                v.first[24], v.first[25], v.first[26], v.first[27],
+                                v.first[28], v.first[29], v.first[30], v.first[31],
+                                v.first[48], v.first[49], v.first[50], v.first[51],
+                                v.first[52], v.first[53], v.first[54], v.first[55],
+                                v.first[56], v.first[57], v.first[58], v.first[59],
+                                v.first[60], v.first[61], v.first[62], v.first[63]);
                 }
                 android_binding_samples_done = true;
             }
