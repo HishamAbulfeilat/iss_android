@@ -1,4 +1,4 @@
-"""Source-level guard for the experimental inFAMOUS Relaxed/Precise hybrid."""
+"""Source-level guard for the stable ISS Android Relaxed/Hybrid readback picker."""
 from pathlib import Path
 import unittest
 
@@ -17,7 +17,10 @@ class HybridReadbackTest(unittest.TestCase):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
         self.assertIn("RadioGroup choices = new RadioGroup(activity);", src)
         self.assertIn("choices.check(ids[mode(preferences)]);", src)
-        self.assertIn("putBoolean(KEY,choice==2)", src)
+        self.assertIn("putBoolean(KEY,false)", src)
+        self.assertIn("int choice = selected == ids[1] ? 1 : 0;", src)
+        self.assertIn('return "Precise 2";',src)
+        self.assertNotIn("ids[2]", src)
         self.assertIn("putBoolean(HYBRID_KEY,choice==1)", src)
         main = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicMainActivity.java").read_text()
         player = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicPlayerMenu.java").read_text()
@@ -66,12 +69,15 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('renderer_hybrid_targeted_staging',settings)
         self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',ui)
 
-    def test_explicit_toggle_and_precise_override(self):
+    def test_precise_label_uses_hybrid_backend_without_readbacks_2(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)
-        self.assertIn('final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);', src)
+        self.assertIn('final boolean hybrid = p.getBoolean("renderer_experimental_hybrid_readback",false)', src)
+        self.assertIn('|| p.getBoolean("fix_smoke_powers_precise_readback",false);', src)
         self.assertIn('env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");', src)
-        self.assertIn('env.put("TLG_READBACKS", precise ? "2" : "1")', src)
+        self.assertIn('env.put("TLG_READBACKS", "1");', src)
+        self.assertNotIn('env.put("TLG_READBACKS", precise ? "2" : "1")',src)
+        self.assertNotIn('CheckBox hybrid=new CheckBox(a);',src)
 
 
 if __name__ == "__main__":
