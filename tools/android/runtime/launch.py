@@ -118,7 +118,9 @@ def main():
     configure_language(env, game)
     readbacks = env.get("TLG_READBACKS", env["ISS_READBACKS"])
     mode = {"0": "Disabled", "1": "Relaxed", "2": "Precise"}.get(readbacks, readbacks)
-    print(f"ISS boot defaults: inFAMOUS preset, readbacks={mode} ({readbacks}), temporal upscale off", flush=True)
+    temporal = "FSR 3.1" if env.get("TLG_UPSCALER") == "fsr3" else "off"
+    print(f"ISS boot defaults: inFAMOUS preset, readbacks={mode} ({readbacks}), temporal upscale={temporal}, "
+          f"render={env.get('TLG_RENDER_RES', 'native')}, output={env.get('TLG_OUTPUT_RES', 'native')}", flush=True)
 
     def run_step(script, *arguments):
         name = BASE / "scripts" / (script + ".py")
