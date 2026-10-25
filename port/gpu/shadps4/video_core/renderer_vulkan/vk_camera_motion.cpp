@@ -218,6 +218,21 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const void* bytes) {
+    if (!NeedGBufferSamples() || !bytes || size < 24 || size > 65536) return;
+    for (u32 i = 0; i < android_binding_sample_count; ++i) {
+        const auto& item = android_binding_samples[i];
+        if (item.shader_hash == hash && item.size == size) return;
+    }
+    auto& item = android_binding_samples[android_binding_sample_count++];
+    item.shader_hash = hash;
+    item.slot = slot;
+    item.size = size;
+    std::memcpy(item.first.data(), bytes, item.first.size() * sizeof(float));
+}
+#endif
+
 void CameraMotion::OnConstants(const float* data) {
 #ifdef ISS_ANDROID_BIONIC
     ++android_probe_constants;
@@ -264,6 +279,22 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         android_probe_constants, android_probe_signature, android_probe_ready);
             android_probe_frames = android_probe_gbuffer = android_probe_constants = 0;
             android_probe_signature = android_probe_ready = 0;
+            if (!android_binding_samples_done && android_binding_sample_count) {
+                // One bounded, game-specific trace after the first observed G-buffer.
+                // Unlike Bloodborne's 864-byte constants, ISS has no matching
+                // signature; record actual bound lengths and a few copied floats.
+                std::printf("FSR3 ISS binding layouts: %u distinct shader buffers\n",
+                            android_binding_sample_count);
+                for (u32 i = 0; i < android_binding_sample_count; ++i) {
+                    const auto& v = android_binding_samples[i];
+                    std::printf("FSR3 ISS CB: shader=%016llx slot=%u bytes=%u "
+                                "f0..5=%g,%g,%g,%g,%g,%g\n",
+                                static_cast<unsigned long long>(v.shader_hash), v.slot,
+                                v.size, v.first[0], v.first[1], v.first[2],
+                                v.first[3], v.first[4], v.first[5]);
+                }
+                android_binding_samples_done = true;
+            }
         }
     }
 #endif
