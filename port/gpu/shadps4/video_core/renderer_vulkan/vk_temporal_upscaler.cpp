@@ -320,6 +320,18 @@ bool TemporalUpscaler::OnFrameStart() {
                     target_width, target_height, TlgSettings::RenderPreset());
         android_fsr_probe = {};
     }
+    if (!android_ui_samples_printed && android_ui_sample_count &&
+        android_fsr_probe.frames == 0) {
+        std::printf("FSR3 ISS fullscreen passes: %u distinct candidates\n",
+                    android_ui_sample_count);
+        for (u32 i = 0; i < android_ui_sample_count; ++i) {
+            const auto& v = android_ui_samples[i];
+            std::printf("FSR3 ISS UI: vertex=%016llx target=%ux%u fmt=%u ldr=%u\n",
+                        static_cast<unsigned long long>(v.vertex_hash),
+                        v.width, v.height, v.format, unsigned(v.same_ldr_target));
+        }
+        android_ui_samples_printed = true;
+    }
 #endif
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
@@ -1359,6 +1371,28 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         return;
     }
     const auto& image = texture_cache.GetImage(color);
+#ifdef ISS_ANDROID_BIONIC
+    if (native_viewport && ldr_target && !android_ui_samples_printed &&
+        android_ui_sample_count < android_ui_samples.size()) {
+        bool known = false;
+        for (u32 i = 0; i < android_ui_sample_count; ++i) {
+            if (android_ui_samples[i].vertex_hash == vs_hash &&
+                android_ui_samples[i].width == image.info.size.width &&
+                android_ui_samples[i].height == image.info.size.height) {
+                known = true;
+                break;
+            }
+        }
+        if (!known) {
+            auto& record = android_ui_samples[android_ui_sample_count++];
+            record.vertex_hash = vs_hash;
+            record.width = image.info.size.width;
+            record.height = image.info.size.height;
+            record.format = static_cast<u32>(image.info.pixel_format);
+            record.same_ldr_target = ldr_target == color;
+        }
+    }
+#endif
     const bool movie = vs_hash == ui_trigger_vs || UiComposition::MovieShader(vs_hash) ||
                        (scaled_session && native_viewport);
     const bool ui_draw = movie &&
