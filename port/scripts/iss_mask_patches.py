@@ -70,7 +70,7 @@ def find_mask(blob, base, size, regions, tokens):
                 if len(hits)>1: return hits
     return hits
 
-def compile_masks(xml, names, version, linked_image, eboot_elf):
+def compile_masks(xml, names, version, linked_image, eboot_elf, source_eboot=None):
     if not names: return []
     root=ET.parse(xml).getroot()
     if 'CUSA00004' not in {x.text for x in root.findall('./TitleID/ID')}:
@@ -78,11 +78,18 @@ def compile_masks(xml, names, version, linked_image, eboot_elf):
     found={m.get('Name'):m for m in root.iter('Metadata') if m.get('AppVer') == version and m.get('AppElf','eboot.bin') == 'eboot.bin'}
     for name in names:
         if name not in found: raise ValueError(f'{name}: missing v{version} patch')
+    # Each experimental patch is restricted to explicitly verified binaries. The
+    # regional SELF sha is checked against the original game file, not the
+    # converted eboot.elf; signature uniqueness is still required below.
     verified={found[name].get('ElfSHA256') for name in names if found[name].get('ElfSHA256')}
     if verified:
-        digest=hashlib.sha256(Path(eboot_elf).read_bytes()).hexdigest()
-        if verified!={digest}:
-            raise ValueError('Selected render patch requires the verified inFAMOUS executable; ELF hash mismatch')
+        elf_digest=hashlib.sha256(Path(eboot_elf).read_bytes()).hexdigest()
+        if verified!={elf_digest}:
+            allowed={found[name].get('AllowedEbootSHA256') for name in names
+                     if found[name].get('ElfSHA256')}
+            if (not source_eboot or len(allowed)!=1 or None in allowed or
+                    hashlib.sha256(Path(source_eboot).read_bytes()).hexdigest() not in allowed):
+                raise ValueError('Selected render patch requires the verified inFAMOUS executable; ELF hash mismatch')
     with Path(linked_image).open('rb') as fh, mmap.mmap(fh.fileno(),0,access=mmap.ACCESS_READ) as blob:
         base,size=image_range(blob)
         executable_regions=executable(eboot_elf)
