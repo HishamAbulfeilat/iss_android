@@ -8,8 +8,8 @@ import java.util.Locale;
 
 /** One resolved locale for the Android UI and the game's next boot. */
 final class AppLanguage {
- static final String[] CODES={"auto","en","pt","es","fr","de","it","ru","ja","ko","zh"};
- static final String[] LABELS={"Automatic","English","Português","Español","Français","Deutsch","Italiano","Русский","日本語","한국어","简体中文"};
+ static final String[] CODES={"auto","en","pt","es","fr","de","it","ru","ja","ko","zh","tr","pl"};
+ static final String[] LABELS={"Automatic","English","Português","Español","Français","Deutsch","Italiano","Русский","日本語","한국어","简体中文","Türkçe","Polski"};
  private static volatile String selected="en",gameCode="en";
  static String resolve(String choice,Locale system){
   String code="auto".equals(choice)?system.getLanguage():choice;
