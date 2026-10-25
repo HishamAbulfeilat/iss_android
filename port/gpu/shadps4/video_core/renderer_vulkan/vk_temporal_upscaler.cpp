@@ -243,6 +243,9 @@ bool TemporalUpscaler::ReactiveOn() const {
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.scene_colors;
+#endif
     scene_color = color;
 }
 
@@ -289,6 +292,19 @@ bool TemporalUpscaler::OnFrameStart() {
         }
     }
     const auto& settings = TlgSettings::Get();
+#ifdef ISS_ANDROID_BIONIC
+    if (Active() && ++android_fsr_probe.frames >= 180) {
+        const auto& d = android_fsr_probe;
+        std::printf("FSR3 probe: frames=%u scene_color=%u ldr_target=%u draws=%u "
+                    "native_viewport=%u ui_candidates=%u camera_ready=%u ldr_match=%u "
+                    "dispatch=%u render=%ux%u out=%ux%u preset=%d\\n",
+                    d.frames, d.scene_colors, d.ldr_targets, d.ui_draws,
+                    d.native_viewport_draws, d.rgba_ui_candidates, d.camera_ready_draws,
+                    d.ldr_match_draws, d.dispatched, render_width, render_height,
+                    target_width, target_height, TlgSettings::RenderPreset());
+        android_fsr_probe = {};
+    }
+#endif
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
     const int preset = TlgSettings::RenderPreset();
@@ -1297,12 +1313,21 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
     if (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.ldr_targets;
+#endif
         ldr_target = color;
     }
 }
 
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.ui_draws;
+    if (native_viewport) ++android_fsr_probe.native_viewport_draws;
+    if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
+    if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+#endif
     if (!Scaled() && vs_hash == ui_trigger_vs) done_this_frame = true;
     if (!Scaled() || !color) {
         return;
@@ -1325,6 +1350,9 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
          image.info.pixel_format == vk::Format::eR8G8B8A8Srgb) &&
         RenderTarget(image.info.size.width, image.info.size.height) &&
         !FrameCapture::IsDisplayBuffer(image.info.guest_address);
+#ifdef ISS_ANDROID_BIONIC
+    if (ui_draw) ++android_fsr_probe.rgba_ui_candidates;
+#endif
     switch (UiComposition::Choose(Scaled(), ui_draw,
                                   camera_motion.Ready() && ldr_target == color,
                                   Active() && !failed)) {
@@ -1752,6 +1780,9 @@ void TemporalUpscaler::RunScaled() {
         ok = true;
         reset = false;
         dispatched_last_frame = true;
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.dispatched;
+#endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
