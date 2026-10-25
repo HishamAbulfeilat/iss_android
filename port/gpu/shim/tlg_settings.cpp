@@ -287,12 +287,15 @@ void Load() {
         v.overlay_scale = 140;
     }
 #ifdef ISS_ANDROID_BIONIC
-    // Never let an existing desktop tlg.ini reactivate missing render paths.
-    v.upscaler = UpscalerOff;
+    // Only the Android launcher's explicit FSR 3.1 choice may activate temporal work.
+    // This also prevents stale desktop tlg.ini settings from enabling unsupported providers.
+    const char* android_fsr = std::getenv("TLG_UPSCALER");
+    const bool fsr3 = android_fsr && std::strcmp(android_fsr,"fsr3")==0;
+    v.upscaler = fsr3 ? UpscalerFsr3 : UpscalerOff;
     v.fsr1 = false;
     v.rcas = false;
-    v.object_motion = false;
-    v.jitter = false;
+    v.object_motion = fsr3;
+    v.jitter = fsr3;
 #endif
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
