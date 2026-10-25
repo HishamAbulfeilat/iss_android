@@ -240,6 +240,14 @@ private:
         u32 ldr_match_draws = 0;
         u32 dispatched = 0;
     } android_fsr_probe{};
+    struct AndroidUiSample {
+        u64 vertex_hash = 0;
+        u32 width = 0, height = 0, format = 0;
+        bool same_ldr_target = false;
+    };
+    std::array<AndroidUiSample, 12> android_ui_samples{};
+    u32 android_ui_sample_count = 0;
+    bool android_ui_samples_printed = false;
 #endif
     bool scaled_session = false;
     u32 ui_width = 0, ui_height = 0;
