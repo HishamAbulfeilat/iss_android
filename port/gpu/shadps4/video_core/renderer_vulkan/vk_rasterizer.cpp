@@ -297,6 +297,34 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
+#ifdef ISS_ANDROID_BIONIC
+        // Discover whether ISS exports native motion vectors in its MRTs.
+        // A camera inferred from one object's transform would corrupt temporal history.
+        // Read attachment descriptors only (no image download or GPU wait).
+        static std::array<u64, 12> inspected_ps{};
+        static u32 inspected_count = 0;
+        const u64 ps_hash = pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash;
+        bool seen = false;
+        for (u32 n = 0; n < inspected_count; ++n) {
+            if (inspected_ps[n] == ps_hash) { seen = true; break; }
+        }
+        if (!seen && inspected_count < inspected_ps.size()) {
+            inspected_ps[inspected_count++] = ps_hash;
+            const auto& d = texture_cache.GetImage(db_desc.first);
+            std::printf("FSR3 ISS MRT: ps=%016llx mask=%02x depth=%s %ux%u",
+                        static_cast<unsigned long long>(ps_hash), key.mrt_mask,
+                        vk::to_string(d.info.pixel_format).c_str(), d.info.size.width,
+                        d.info.size.height);
+            for (u32 slot = 0; slot < cb_descs.size(); ++slot) {
+                if (!(key.mrt_mask & (1u << slot)) || !cb_descs[slot].first) continue;
+                const auto& target = texture_cache.GetImage(cb_descs[slot].first);
+                std::printf(" cb%u=%s:%ux%u", slot,
+                            vk::to_string(target.info.pixel_format).c_str(),
+                            target.info.size.width, target.info.size.height);
+            }
+            std::printf("\\n");
+        }
+#endif
     }
     if (upscaler->Enabled() && cb_descs[0].first) {
         upscaler->OnColorTarget(cb_descs[0].first);
