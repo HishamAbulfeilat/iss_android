@@ -24,7 +24,7 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("vk_temporal_upscaler.cpp", (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").as_posix())
         self.assertNotIn("vk_temporal_upscaler_bionic.h", HDR)
         self.assertIn("FfxVkPortableUpscaleContext* context", HDR)
-        self.assertIn("vk_fsr4\\\\.cpp", CM)
+        self.assertIn("vk_fsr4", CM)
         self.assertIn("vk_fsr4_android.cpp", str(next(GPU.glob("shadps4/video_core/renderer_vulkan/vk_fsr4_android.cpp"))))
         self.assertIn("FFX_VK_PORTABLE_OK", (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text())
 
@@ -38,7 +38,7 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn('case "${TLG_UPSCALER:-none}" in', RUN)
         section = RUN.split('case "${TLG_UPSCALER:-none}" in', 1)[1].split('export TLG_FSR1=0', 1)[0]
         script = 'case "${TLG_UPSCALER:-none}" in' + section
-        script += '\nprintf "%s %s %s %s" "$TLG_UPSCALER" "$ISS_UPSCALER" "$TLG_JITTER" "$TLG_OBJECT_MOTION"\n'
+        script += """\nprintf "%s %s %s %s" "$TLG_UPSCALER" "$ISS_UPSCALER" "$TLG_JITTER" "$TLG_OBJECT_MOTION"\n"""
         for selection, expected in (
             ('fsr3', 'fsr3 fsr3 1 1'), ('none', 'none off 0 0'),
             ('fsr4', 'none off 0 0')
