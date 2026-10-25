@@ -297,7 +297,7 @@ bool TemporalUpscaler::OnFrameStart() {
         const auto& d = android_fsr_probe;
         std::printf("FSR3 probe: frames=%u scene_color=%u ldr_target=%u draws=%u "
                     "native_viewport=%u ui_candidates=%u camera_ready=%u ldr_match=%u "
-                    "dispatch=%u render=%ux%u out=%ux%u preset=%d\\n",
+                    "dispatch=%u render=%ux%u out=%ux%u preset=%d\n",
                     d.frames, d.scene_colors, d.ldr_targets, d.ui_draws,
                     d.native_viewport_draws, d.rgba_ui_candidates, d.camera_ready_draws,
                     d.ldr_match_draws, d.dispatched, render_width, render_height,
