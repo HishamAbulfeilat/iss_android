@@ -255,7 +255,7 @@ def main():
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     if xml.name == 'InfamousSecondSon.xml':
         from iss_mask_patches import compile_masks
-        writes=compile_masks(xml,names,needed,a.out/'boot-linked.bin',a.out/'eboot.elf')
+        writes=compile_masks(xml,names,needed,a.out/'boot-linked.bin',a.out/'eboot.elf',a.game_dir/'eboot.bin')
     else:
         writes=compile_patches(xml,names,needed,segments)
     if a.patches_dir:
