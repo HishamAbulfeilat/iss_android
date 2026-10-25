@@ -19,8 +19,8 @@ class FullscreenTests(unittest.TestCase):
 import android.content.SharedPreferences;
 class FullscreenCase {
  static class Prefs implements SharedPreferences {
-  Boolean enabled=null;String mode="stretch",resolution="native";
-  public boolean getBoolean(String k,boolean fallback){assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
+  Boolean enabled=null;boolean fsr3=false;String mode="stretch",resolution="native";
+  public boolean getBoolean(String k,boolean fallback){if(k.equals("fsr3"))return fsr3;assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
   public String getString(String k,String fallback){if(k.equals("internal_res"))return resolution;assert k.equals("display_mode");return mode;}
  }
  static class BionicVideoSettings {
@@ -55,6 +55,9 @@ class FullscreenCase {
   assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
   p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   p.resolution="900p";assert BionicVideoSettings.outputResolution(p).equals("1600x900");
+  p.fsr3=true;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+  p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+  p.fsr3=false;
   for(String key:new String[]{"540p","480p","360p"}){
    p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
   }
