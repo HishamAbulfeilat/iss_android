@@ -10,7 +10,7 @@ import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.TextView;
 
-/** One mutually exclusive menu for Relaxed, experimental Hybrid and Precise readbacks. */
+/** Relaxed or Hybrid V6. The Hybrid uses the legacy Precise 2 label only. */
 final class BionicReadbackSettings {
  static final String KEY = "fix_smoke_powers_precise_readback";
  static final String HYBRID_KEY = "renderer_experimental_hybrid_readback";
@@ -18,17 +18,15 @@ final class BionicReadbackSettings {
  static final String TARGETED_KEY = "renderer_hybrid_targeted_staging";
 
  static int mode(SharedPreferences preferences) {
-  // Preserve the existing Precise preference; it wins over any old hybrid checkbox.
-  if (preferences.getBoolean(KEY, false)) return 2;
-  return preferences.getBoolean(HYBRID_KEY, false) ? 1 : 0;
+  // Old Precise installations migrate to Hybrid behavior, never Precise GPU mode.
+  return preferences.getBoolean(HYBRID_KEY, false) || preferences.getBoolean(KEY, false) ? 1 : 0;
  }
  static boolean enabled(Activity activity) {
-  return mode(activity.getSharedPreferences("iss",0)) == 2;
+  return mode(activity.getSharedPreferences("iss",0)) == 1;
  }
  static String summary(Activity activity) {
   switch (mode(activity.getSharedPreferences("iss",0))) {
-   case 1: return AppLanguage.text("Hybrid V6", "Híbrido V6");
-   case 2: return "Precise 2";
+   case 1: return "Precise 2";
    default: return "Relaxed 1";
   }
  }
@@ -44,8 +42,6 @@ final class BionicReadbackSettings {
   String[] labels = {
    AppLanguage.text("Relaxed 1 — faster; smoke/powers may be incorrect",
                     "Relaxed 1 — mais rápido; fumaça/poderes podem falhar"),
-   AppLanguage.text("Hybrid V6 — V2 graphics correction; optional copy reduction",
-                    "Híbrido V6 — correção visual V2; economia opcional de cópias"),
    AppLanguage.text("Precise 2 — correct smoke/powers; major FPS impact",
                     "Precise 2 — corrige fumaça/poderes; grande queda de FPS")
   };
@@ -87,8 +83,8 @@ final class BionicReadbackSettings {
 
   TextView help = new TextView(activity);
   help.setText(AppLanguage.text(
-   "Hybrid V6 restores the V2 visual baseline with staged readbacks and fence prefetch. The separate targeted-staging test copies only requested and recently read pages inside each 512-KiB window; all other pages remain protected and receive their own readback when read. Restart to apply.",
-   "O híbrido V6 restaura o comportamento visual do V2, com staging e antecipação. O teste de staging seletivo copia apenas páginas solicitadas e lidas recentemente na janela de 512 KiB; as demais permanecem protegidas e terão seu readback quando acessadas. Reinicie para aplicar."));
+   "Restart the game to apply the selected Readback mode.",
+   "Reinicie o jogo para aplicar o modo Readback escolhido."));
   help.setPadding(0,pad,0,0);
   body.addView(help);
 
@@ -99,8 +95,8 @@ final class BionicReadbackSettings {
    .setNegativeButton(AppLanguage.text("Cancel","Cancelar"),null)
    .setPositiveButton(AppLanguage.text("Apply","Aplicar"),(dialog,which)->{
     int selected = choices.getCheckedRadioButtonId();
-    int choice = selected == ids[2] ? 2 : selected == ids[1] ? 1 : 0;
-    preferences.edit().putBoolean(KEY,choice==2)
+    int choice = selected == ids[1] ? 1 : 0;
+    preferences.edit().putBoolean(KEY,false)
      .putBoolean(HYBRID_KEY,choice==1)
      .putBoolean(BACKOFF_KEY,optimized.isChecked())
      .putBoolean(TARGETED_KEY,targeted.isChecked()).apply();
