@@ -11,9 +11,11 @@ import java.util.Map;
 /** Reversible renderer changes, read only when a fresh game process starts. */
 final class BionicRendererSettings {
  static void environment(SharedPreferences p,Map<String,String> env){
-  final boolean precise = p.getBoolean("fix_smoke_powers_precise_readback", false);
-  env.put("TLG_READBACKS", precise ? "2" : "1");
-  final boolean hybrid = !precise && p.getBoolean("renderer_experimental_hybrid_readback",false);
+  // The UI label "Precise 2" intentionally executes the Hybrid V6 path.
+  // Never select real Readbacks=2; treat older Precise preferences as Hybrid.
+  env.put("TLG_READBACKS", "1");
+  final boolean hybrid = p.getBoolean("renderer_experimental_hybrid_readback",false)
+      || p.getBoolean("fix_smoke_powers_precise_readback",false);
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
   // Opt-in V6 experiment; when disabled this is exactly the confirmed V2 path.
   env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
@@ -21,7 +23,7 @@ final class BionicRendererSettings {
       hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
   // V2: use staged GPU->CPU copies for visibility instead of reading sparse
   // residency directly; prefetch recurring fault pages at fences to overlap waits.
-  // Never apply this experiment to the proven Precise mode or plain Relaxed.
+  // Apply these parameters only to Hybrid; plain Relaxed is unchanged.
   if (hybrid) {
    env.put("TLG_MAPPED_READBACK","0");
    env.put("TLG_EAGER_READBACK","1");
@@ -29,9 +31,7 @@ final class BionicRendererSettings {
    env.put("TLG_MAPPED_READBACK","1");
    env.put("TLG_EAGER_READBACK","0");
   }
-  // The PC deferred readback path moves the Precise GPU wait to guest fault handling.
-  // Do not force eager downloads: they can increase synchronization cost.
-  if (precise) env.put("TLG_DEFERRED_READBACK", "1");
+
   env.put("TLG_DYNAMIC_STRIDE",p.getBoolean("renderer_dynamic_stride",true)?"1":"0");
   env.put("TLG_OCCLUSION_MODE",p.getBoolean("renderer_real_occlusion",true)?"4":"3");
   env.put("TLG_GC_BATCH_DOWNLOAD",p.getBoolean("renderer_batch_gc",true)?"1":"0");
@@ -44,12 +44,6 @@ final class BionicRendererSettings {
   String[] keys={"renderer_dynamic_stride","renderer_real_occlusion","renderer_batch_gc","renderer_small_blocks"};
   String[] names={AppLanguage.text("Dynamic compute stride (smoke)","Stride dinâmico de compute (fumaça)"),AppLanguage.text("Real light occlusion","Oclusão real das luzes"),AppLanguage.text("Batched texture write-backs","Retorno de texturas em lote"),AppLanguage.text("Smaller memory blocks","Blocos menores de memória")};
   for(int i=0;i<keys.length;i++){final String key=keys[i];CheckBox control=new CheckBox(a);control.setText(names[i]);control.setChecked(p.getBoolean(key,true));control.setOnCheckedChangeListener((b,on)->p.edit().putBoolean(key,on).apply());panel.addView(control);}
-  CheckBox hybrid=new CheckBox(a);
-  hybrid.setText(AppLanguage.text("Experimental Relaxed + Precise read protection (smoke/powers; may reduce FPS)",
-    "Experimental: Relaxed + proteção de leitura Precise (fumaça/poderes; pode reduzir FPS)"));
-  hybrid.setChecked(p.getBoolean("renderer_experimental_hybrid_readback",false));
-  hybrid.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_experimental_hybrid_readback",on).apply());
-  panel.addView(hybrid);
   new AlertDialog.Builder(a).setTitle(AppLanguage.text("Renderer corrections","Correções do renderer")).setView(panel).setPositiveButton(AppLanguage.text("Done","Concluir"),null).show();
  }
 }
