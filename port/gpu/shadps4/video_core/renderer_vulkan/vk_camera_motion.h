@@ -101,6 +101,14 @@ private:
 
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
+#ifdef ISS_ANDROID_BIONIC
+    // Counters identify which inFAMOUS camera-signature prerequisite is absent.
+    u32 android_probe_frames = 0;
+    u32 android_probe_gbuffer = 0;
+    u32 android_probe_constants = 0;
+    u32 android_probe_signature = 0;
+    u32 android_probe_ready = 0;
+#endif
     bool frame_has_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
