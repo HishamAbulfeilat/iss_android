@@ -268,6 +268,22 @@ bool TemporalUpscaler::RasterScaling() const {
     return !scaled_session && scene_targets.Reduced() && !done_this_frame;
 }
 
+void TemporalUpscaler::OnDisplayPassStart() {
+#ifdef ISS_ANDROID_BIONIC
+    // Bloodborne's Android port can finish a frame at its display boundary
+    // when no Scaleform/UI trigger was found. Never invent camera/motion
+    // inputs: with the current ISS camera-signature mismatch this is inert.
+    if (!Scaled() || ui_phase || done_this_frame || failed || !Active() ||
+        !ldr_target || !camera_motion.Ready()) {
+        return;
+    }
+    RunScaled();
+    if (!ui_phase) {
+        RunUiOnly(ldr_target, camera_motion.Depth());
+    }
+#endif
+}
+
 bool TemporalUpscaler::OnFrameStart() {
     // tlg: TLG_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
