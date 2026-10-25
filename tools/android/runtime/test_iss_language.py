@@ -2,6 +2,7 @@
 from pathlib import Path
 import importlib.util
 import os
+import re
 import struct
 import shutil
 import subprocess
@@ -76,6 +77,19 @@ class GameLanguageTests(unittest.TestCase):
                 self.assertEqual(resolve_language('pt_BR',{'text':{'brazilian'},'audio':set()},{17})[0],1)
             for bad in (b'',b'plgo',data[:210],b'bad!'+data[4:]):
                 path.write_bytes(bad);self.assertEqual(playgo_languages(game),set())
+
+    def test_turkish_polish_catalog_covers_all_android_ui_literals(self):
+        src=ROOT/'android/app/src/ro/cobrabm/fexdroid'
+        catalog=(src/'LanguageCatalogTrPl.java').read_text()
+        keys=set(re.findall(r'\\{\\s*"((?:\\\\.|[^"\\\\])*)"\\s*,',catalog))
+        self.assertGreaterEqual(len(keys),250)
+        required=set()
+        for source in src.glob('*.java'):
+            if source.name.startswith('LanguageCatalog'):
+                continue
+            required.update(re.findall(r'AppLanguage\\.text\\(\\s*"((?:\\\\.|[^"\\\\])*)"\\s*,',
+                                       source.read_text()))
+        self.assertFalse(required-keys,'Untranslated Android UI strings: '+str(sorted(required-keys)))
 
     @unittest.skipUnless(shutil.which('java'),'Java unavailable')
     def test_android_locale_policy_and_actual_catalog(self):
