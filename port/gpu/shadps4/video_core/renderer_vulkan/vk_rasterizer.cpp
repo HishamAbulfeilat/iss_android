@@ -2736,6 +2736,20 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+#ifdef ISS_ANDROID_BIONIC
+            // Direct Bionic draw path has no RingBinding. Sample the actual
+            // non-ring constant source too; only when its full range is mapped.
+            if (gbuffer_draw && camera_motion->NeedGBufferSamples() &&
+                vsharp.base_address != 0 && vsharp.GetSize() >= 24 &&
+                vsharp.GetSize() <= 65536 &&
+                memory->IsValidGpuMapping(vsharp.base_address, 0) &&
+                memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize()) ==
+                    vsharp.GetSize()) {
+                camera_motion->ObserveGBufferBinding(
+                    stage.pgm_hash, buffer_index, vsharp.GetSize(),
+                    reinterpret_cast<const void*>(vsharp.base_address));
+            }
+#endif
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
