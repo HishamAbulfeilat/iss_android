@@ -287,4 +287,3 @@ private:
 
 } // namespace Vulkan
 
-#endif // ISS_ANDROID_BIONIC
