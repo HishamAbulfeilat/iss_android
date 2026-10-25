@@ -23,6 +23,14 @@ class GameLanguageTests(unittest.TestCase):
                 self.assertEqual(resolve_language(code,incomplete)[0],1)
         self.assertEqual(resolve_language('xx',{'text':set(),'audio':set()})[0],1)
 
+    def test_turkish_and_polish_game_languages_require_owned_assets(self):
+        for code,number,token in (('tr',19,'turkish'),('pl',16,'polish')):
+            self.assertEqual(LANGUAGES[code],(number,token))
+            self.assertEqual(resolve_language(code,{'text':{token},'audio':{token}})[:2],(number,code))
+            self.assertEqual(resolve_language(code,{'text':{token},'audio':set()})[0],1)
+            self.assertEqual(resolve_language(code,{'text':set(),'audio':{token}})[0],1)
+            self.assertEqual(resolve_language(code,{'text':set(),'audio':set()},{number})[0],number)
+
     def test_real_package_names_nonempty_files_patch_variants_and_no_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:
             game=Path(tmp);cache=game/'art/cache';cache.mkdir(parents=True)
@@ -84,7 +92,7 @@ class LanguageTest {
   assert AppLanguage.resolve("auto",new Locale("hi","IN")).equals("en");
   assert AppLanguage.resolve("de",new Locale("pt","BR")).equals("de");
   assert AppLanguage.resolve("bad",Locale.FRENCH).equals("en");
-  for(String code:new String[]{"es","fr","de","it","ru","ja","ko","zh"}){
+  for(String code:new String[]{"es","fr","de","it","ru","ja","ko","zh","tr","pl"}){
    assert !LanguageCatalog.text(code,"Cancel").equals("Cancel"):code;
    assert !LanguageCatalog.text(code,"Select game folder").equals("Select game folder"):code;
    assert !LanguageCatalog.text(code,"Jump").equals("Jump"):code;
