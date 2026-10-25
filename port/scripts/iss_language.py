@@ -15,6 +15,7 @@ LANGUAGES = {
     'es': (3, 'spanish'), 'de': (4, 'german'), 'it': (5, 'italian'),
     'pt_PT': (7, 'portuguese'), 'ru': (8, 'russian'), 'ko': (9, 'korean'),
     'zh_TW': (10, 'chinese'), 'zh': (11, 'chinese_s'),
+    'pl': (16, 'polish'), 'tr': (19, 'turkish'),
     'pt_BR': (17, 'brazilian'), 'es_LA': (20, 'latino'), 'fr_CA': (22, 'quebecois'),
 }
 PACKAGE = re.compile(r'^lang_([a-z_]+?)_(text|audio)(_p)?\.xpps?$', re.I)
