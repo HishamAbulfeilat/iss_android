@@ -33,7 +33,8 @@ class InfamousPatchTests(unittest.TestCase):
     def test_catalog_and_conflicts(self):
         self.assertEqual(game_profile('CUSA00004')[2],'01.00')
         allpatch=ET.parse(XML).getroot().findall('Metadata')
-        self.assertEqual(len(allpatch),10)
+        self.assertEqual(len(allpatch),9)
+        self.assertNotIn('Disable light beams',{x.get('Name') for x in allpatch})
         self.assertTrue(all(x.get('AppVer')=='01.00' for x in allpatch))
         self.assertEqual(selected_patches(XML,'01.00',''),[])
         with self.assertRaisesRegex(ValueError,'choose one resolution'):
@@ -59,13 +60,39 @@ class InfamousPatchTests(unittest.TestCase):
                 writes=compile_masks(test_xml,[item.get('Name')],'01.00',path/'boot-linked.bin',path/'eboot.elf')
                 self.assertEqual(len(writes),len(sigs))
     def test_render_patches_reject_an_unverified_executable(self):
-        for name in ('Disable shadow maps','Disable light beams'):
+        for name in ('Disable shadow maps',):
             item=next(x for x in ET.parse(XML).getroot().findall('Metadata') if x.get('Name')==name)
             self.assertEqual(len(item.get('ElfSHA256')),64)
+            self.assertEqual(item.get('AllowedEbootSHA256'),'2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab')
             with tempfile.TemporaryDirectory() as d:
                 path=Path(d);fixture(path,[x.get('Address') for x in item.findall('.//Line')])
                 with self.assertRaisesRegex(ValueError,'ELF hash mismatch'):
                     compile_masks(XML,[name],'01.00',path/'boot-linked.bin',path/'eboot.elf')
+
+    def test_verified_regional_shadow_source_only(self):
+        item=next(x for x in ET.parse(XML).getroot().findall('Metadata')
+                  if x.get('Name')=='Disable shadow maps')
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)
+            fixture(path,[x.get('Address') for x in item.findall('.//Line')])
+            original=path/'eboot.bin'
+            original.write_bytes(b'regional-source-fixture')
+            # The converted ELF digest differs across SELF conversion. The
+            # original signed SELF must independently match the pinned hash.
+            from unittest.mock import Mock
+            verified_source=item.get('AllowedEbootSHA256')
+            with patch('iss_mask_patches.hashlib.sha256',
+                       side_effect=[Mock(hexdigest=lambda:'other-elf-hash'),
+                                    Mock(hexdigest=lambda:verified_source)]):
+                writes=compile_masks(XML,['Disable shadow maps'],'01.00',
+                                     path/'boot-linked.bin',path/'eboot.elf',original)
+                self.assertEqual(len(writes),2)
+            with patch('iss_mask_patches.hashlib.sha256',
+                       side_effect=[Mock(hexdigest=lambda:'other-elf-hash'),
+                                    Mock(hexdigest=lambda:'wrong-source')]):
+                with self.assertRaisesRegex(ValueError,'ELF hash mismatch'):
+                    compile_masks(XML,['Disable shadow maps'],'01.00',
+                                  path/'boot-linked.bin',path/'eboot.elf',original)
 
     def test_fail_closed_when_missing_ambiguous_or_wrong_version(self):
         item=next(x for x in ET.parse(XML).getroot().findall('Metadata') if x.get('Name')=='Disable motion blur')
