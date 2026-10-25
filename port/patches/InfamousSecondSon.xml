@@ -87,15 +87,10 @@
             <Line Type="mask" Address="0F 84 ?? ?? ?? ?? 4C 8D 75 A0 C7 45 A0 00 00 00 00" Offset="0" Value="E92803000090" />
         </PatchList>
     </Metadata>
-    <Metadata Title="inFAMOUS Second Son" Name="Disable shadow maps" ElfSHA256="b3afd173a379f83e1e408e71fdef22b78f93092d332b79decd48a18a08bfc605" Note="Experimental: skips only the shadow-map wrapper, preserving the shared depth pre-pass. Forces the existing depth clear for cached maps and preserves resolve/conversion and state cleanup. Binary control flow validated; device visuals pending." Author="erickmendes22" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
+    <Metadata Title="inFAMOUS Second Son" Name="Disable shadow maps" AllowedEbootSHA256="2d1ca79630d7bbe6fa29575f59aa7996d43071d74ac8e4f7d40137967d9039ab" ElfSHA256="b3afd173a379f83e1e408e71fdef22b78f93092d332b79decd48a18a08bfc605" Note="Experimental: skips only the shadow-map wrapper, preserving the shared depth pre-pass. Forces the existing depth clear for cached maps and preserves resolve/conversion and state cleanup. Binary control flow validated; device visuals pending." Author="erickmendes22" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
         <PatchList>
             <Line Type="mask" Address="49 8B 47 08 48 8B 00 4C 8B A0 78 05 00 00 4D 85 E4" Offset="0" Value="E9DE0000009090" />
             <Line Type="mask" Address="83 B8 40 24 00 00 02 74 0B 4C 89 FF 4C 89 F6 E8" Offset="7" Value="9090" />
-        </PatchList>
-    </Metadata>
-    <Metadata Title="inFAMOUS Second Son" Name="Disable light beams" ElfSHA256="b3afd173a379f83e1e408e71fdef22b78f93092d332b79decd48a18a08bfc605" Note="Experimental: skips the dedicated spotlight beam draw using its original stack/canary epilogue. Main diffuse/specular lights, light target setup, shadows and final composition remain active. Binary control flow validated; device visuals pending." Author="erickmendes22" PatchVer="1.0" AppVer="01.00" AppElf="eboot.bin" isEnabled="false">
-        <PatchList>
-            <Line Type="mask" Address="48 8B 46 08 4C 8B 36 41 0F B7 B7 7C 01 00 00" Offset="0" Value="E90C0100009090" />
         </PatchList>
     </Metadata>
 </Patch>
