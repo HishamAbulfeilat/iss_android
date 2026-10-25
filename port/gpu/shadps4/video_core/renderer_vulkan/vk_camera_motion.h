@@ -71,6 +71,15 @@ public:
 
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
+#ifdef ISS_ANDROID_BIONIC
+    // Capture only a handful of distinct source-buffer layouts, once per gameplay session.
+    // Never copy from guest pointers: callers supply the CPU-owned constant ring.
+    [[nodiscard]] bool NeedGBufferSamples() const noexcept {
+        return for_upscaler && !android_binding_samples_done &&
+               android_binding_sample_count < android_binding_samples.size();
+    }
+    void ObserveGBufferBinding(u64 stage_hash, u32 slot, u32 bytes, const void* ring_copy);
+#endif
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
     void OnGBufferPass(VideoCore::ImageId depth);
@@ -108,6 +117,15 @@ private:
     u32 android_probe_constants = 0;
     u32 android_probe_signature = 0;
     u32 android_probe_ready = 0;
+    struct BindingSample {
+        u64 shader_hash = 0;
+        u32 slot = 0;
+        u32 size = 0;
+        std::array<float, 6> first{};
+    };
+    std::array<BindingSample, 24> android_binding_samples{};
+    u32 android_binding_sample_count = 0;
+    bool android_binding_samples_done = false;
 #endif
     bool frame_has_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
