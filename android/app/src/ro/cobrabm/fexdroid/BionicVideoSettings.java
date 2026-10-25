@@ -9,6 +9,8 @@ final class BionicVideoSettings {
  }
  static String outputResolution(android.content.SharedPreferences prefs){
   String patch=prefs.getString("internal_res","native");
+  // FSR3 reconstructs from the selected internal resolution into 1080p.
+  if(prefs.getBoolean("fsr3",false))return "1920x1080";
   return "720p".equals(patch)?"1280x720":"900p".equals(patch)?"1600x900":"1920x1080";
  }
  static String internalPatchName(String key){
@@ -41,6 +43,31 @@ final class BionicVideoSettings {
   refresh.run();
   }
   if(page!=1){
+  TextView fsrTitle=new TextView(activity);
+  fsrTitle.setText(AppLanguage.text("FSR 3.1 temporal upscaling","Upscaling temporal FSR 3.1"));
+  fsrTitle.setTextSize(18);fsrTitle.setPadding(0,16,0,8);l.addView(fsrTitle);
+  CheckBox fsr=new CheckBox(activity);
+  fsr.setText(AppLanguage.text("Enable FSR 3.1 (1080p output, restart required)","Ativar FSR 3.1 (saída 1080p, reinicie o jogo)"));
+  fsr.setChecked(prefs.getBoolean("fsr3",false));l.addView(fsr);
+  TextView fsrHint=new TextView(activity);
+  fsrHint.setText(AppLanguage.text("FSR uses the selected internal resolution and reconstructs before the HUD. Experimental on Android; disabled by default.","FSR usa a resolução interna selecionada e reconstrói antes da HUD. Experimental no Android; desativado por padrão."));
+  l.addView(fsrHint);
+  TextView fsrPresetLabel=new TextView(activity);
+  fsrPresetLabel.setText(AppLanguage.text("FSR quality preset","Qualidade do FSR"));
+  l.addView(fsrPresetLabel);
+  Spinner fsrPreset=new Spinner(activity);
+  String[] presetLabels={AppLanguage.text("FSR Native AA","FSR AA nativo"),AppLanguage.text("FSR Quality","FSR Qualidade"),AppLanguage.text("FSR Balanced","FSR Equilibrado"),AppLanguage.text("FSR Performance","FSR Desempenho")};
+  fsrPreset.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,presetLabels));
+  int storedPreset=Math.max(0,Math.min(3,prefs.getInt("fsr3_preset",1)));
+  fsrPreset.setSelection(storedPreset);
+  fsrPreset.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+   public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int pos,long id){
+    if(pos>=0&&pos<4)prefs.edit().putInt("fsr3_preset",pos).apply();
+   }
+   public void onNothingSelected(android.widget.AdapterView<?> parent){}
+  });l.addView(fsrPreset);
+  fsrPreset.setEnabled(fsr.isChecked());fsrPresetLabel.setEnabled(fsr.isChecked());
+  fsr.setOnCheckedChangeListener((button,checked)->{prefs.edit().putBoolean("fsr3",checked).apply();fsrPreset.setEnabled(checked);fsrPresetLabel.setEnabled(checked);});
   TextView patchLabel=new TextView(activity);patchLabel.setText(AppLanguage.text("Internal patches — verified executable", "Patches internos — executável validado"));patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
   Spinner resolutionPatch=new Spinner(activity);
   String[] keys={"native","720p","900p","540p","480p","360p"};
