@@ -2745,9 +2745,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 memory->IsValidGpuMapping(vsharp.base_address, 0) &&
                 memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize()) ==
                     vsharp.GetSize()) {
+                std::array<u8, 24> sampled{};
+                memory->CopySparseMemory(vsharp.base_address, sampled.data(), sampled.size());
                 camera_motion->ObserveGBufferBinding(
-                    stage.pgm_hash, buffer_index, vsharp.GetSize(),
-                    reinterpret_cast<const void*>(vsharp.base_address));
+                    stage.pgm_hash, buffer_index, vsharp.GetSize(), sampled.data());
             }
 #endif
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
