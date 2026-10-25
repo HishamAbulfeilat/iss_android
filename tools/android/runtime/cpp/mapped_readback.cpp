@@ -16,6 +16,7 @@
 #include "common/interval_set.h"
 #include "video_core/buffer_cache/readback_copy_pages.h"
 #include "video_core/buffer_cache/write_tick_tracker.h"
+#include "video_core/buffer_cache/hybrid_staging_window.h"
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 using u8=uint8_t; using u32=uint32_t; using u64=uint64_t; using VAddr=u64;
 namespace boost::container {template<class T,size_t N> using small_vector=std::vector<T>;}
@@ -192,6 +193,7 @@ struct BufferCache {
     vk::DeviceMemory residency_chunk{};u64 residency_chunk_used=0,residency_allocations=0;
     std::optional<std::pair<vk::DeviceMemory,u64>> AllocateResidency(u64,ResidencyAttempt&);
     void UndoResidency(const ResidencyAttempt&);
+    HybridStagingWindow hybrid_staging_hot_pages;
     std::mutex deferred_mutex,eager_mutex;
     std::vector<std::shared_ptr<DeferredReadback>> deferred_readbacks;
     std::atomic<u32> deferred_count{},eager_count{};
@@ -216,8 +218,10 @@ struct BufferCache {
 
 int main(int argc,char** argv) {
     const std::string mode=argc>1?argv[1]:"coherent";
+    const bool targeted=mode=="hybrid_targeted_pages";
+    if (targeted) setenv("TLG_ISS_HYBRID_TARGETED_STAGE","1",1);
     const bool hybrid_stage=mode=="hybrid_stage_write" || mode=="hybrid_stage_gap";
-    VideoCore::RegionManager::hybrid_enabled=hybrid_stage;
+    VideoCore::RegionManager::hybrid_enabled=hybrid_stage || targeted;
     const bool partial=mode.starts_with("partial_");
     if(!partial)setenv("TLG_MAPPED_READBACK_PARTIAL","0",1);
     if(mode=="off")setenv("TLG_MAPPED_READBACK","0",1);
@@ -348,11 +352,11 @@ int main(int argc,char** argv) {
     if(mode=="noncoherent" || mode=="currentnoncoherent" || mode=="invalidatefail" || mode=="readyinvalidatefail")c.residency_coherent=false;
     if(mode=="invalidatefail" || mode=="readyinvalidatefail")fail_invalidate=true;
     if(mode=="ready" || mode=="readyinvalidatefail")c.scheduler.sem.completed=7;
-    if(hybrid_stage)c.mapped_readbacks_enabled=false;
+    if(hybrid_stage || targeted)c.mapped_readbacks_enabled=false;
     if(mode=="currentready")c.scheduler.complete_on_flush=true;
     const u64 required_size=(mode=="inside64current" || mode=="hole" || mode=="mapfail")?32:4;
     auto r=c.StartDeferredReadback(base+0x3ff0,required_size);assert(r);
-    const bool mapped=!hybrid_stage && mode!="currentoff" && mode!="currentmapfail" && mode!="unknown" && mode!="hole" && mode!="mapfail";
+    const bool mapped=!hybrid_stage && !targeted && mode!="currentoff" && mode!="currentmapfail" && mode!="unknown" && mode!="hole" && mode!="mapfail";
     assert(r->mapped==mapped);
     if(mode=="outsidecurrent") {
         assert(r->start==base && r->end==base+65536);
@@ -370,6 +374,16 @@ int main(int argc,char** argv) {
     if(current && mapped)assert(c.scheduler.CurrentTick()==11 && Readbacks().mapped_submitted==1);
     if(current)assert(barriers==2 && !c.scheduler.host_read_barrier);
     assert(c.staging_pool.allocations==(mapped?0u:1u));
+    if (targeted) {
+        assert(!r->mapped && !r->applied && r->copies.size()==1);
+        assert(r->copies[0].srcOffset==0x3ff0 && r->copies[0].size==16);
+        auto other=c.StartDeferredReadback(base+0x4100,4);
+        assert(other && other!=r && !other->mapped);
+        assert(c.deferred_count==2);
+        assert(!other->copies.empty());
+        assert(c.tracker.IsRegionGpuModified(base+0x4100,4));
+        return 0;
+    }
     if (hybrid_stage) {
         // Real Start/NoteDeviceWrite/Finish methods: no test-only stale logic.
         assert(!r->mapped && !r->applied && c.deferred_count==1);

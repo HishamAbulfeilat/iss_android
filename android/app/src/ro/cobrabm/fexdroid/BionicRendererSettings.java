@@ -17,6 +17,8 @@ final class BionicRendererSettings {
   env.put("TLG_ISS_HYBRID_READ_PROTECT",hybrid ? "1" : "0");
   // Opt-in V6 experiment; when disabled this is exactly the confirmed V2 path.
   env.put("TLG_ISS_EAGER_BACKOFF_63",hybrid && p.getBoolean("renderer_hybrid_eager_backoff",false) ? "1" : "0");
+  env.put("TLG_ISS_HYBRID_TARGETED_STAGE",
+      hybrid && p.getBoolean("renderer_hybrid_targeted_staging",false) ? "1" : "0");
   // V2: use staged GPU->CPU copies for visibility instead of reading sparse
   // residency directly; prefetch recurring fault pages at fences to overlap waits.
   // Never apply this experiment to the proven Precise mode or plain Relaxed.

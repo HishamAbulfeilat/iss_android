@@ -21,6 +21,7 @@
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
+#include "video_core/buffer_cache/hybrid_staging_window.h"
 #include "video_core/buffer_cache/range_set.h"
 #include "video_core/buffer_cache/readback_copy_pages.h"
 #include "video_core/buffer_cache/write_tick_tracker.h"
@@ -213,6 +214,7 @@ private:
     void NoteGpuWriteForEager(VAddr addr, u64 size); ///< GPU-side threads, before the write
     void MarkEagerStale(VAddr addr, u64 size);       ///< any thread: CPU bytes the copy lacks
     void ApplyEagerSubtractsLocked();                ///< GPU-side threads, eager_mutex held
+    HybridStagingWindow hybrid_staging_hot_pages; // cache owner, opt-in only
     std::mutex eager_mutex;
     std::map<VAddr, EagerPage> eager_pages; ///< by 4 KiB page address
     std::vector<VAddr> eager_free_offsets;

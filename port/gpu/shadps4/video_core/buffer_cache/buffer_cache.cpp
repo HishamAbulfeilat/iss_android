@@ -1395,6 +1395,11 @@ bool BufferCache::CaptureMappedReadback(DeferredReadback& readback) {
 
 std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadback(VAddr device_addr,
                                                                                   u64 size) {
+    // Opt-in locality test. Unmodified V2 behavior when disabled.
+    static const bool targeted_stage = [] {
+        const char* e = std::getenv("TLG_ISS_HYBRID_TARGETED_STAGE");
+        return e && e[0] == '1' && RegionManager::HybridReadProtectionEnabled();
+    }();
     PruneDeferredReadbacks();
     const bool prioritize_request = mapped_readbacks_enabled &&
         EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed &&
@@ -1416,6 +1421,12 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
             const VAddr join_end = readback->mapped ? device_addr + size : window_end;
             if (!readback->Done() && !readback->stale && readback->start <= join_start &&
                 join_end <= readback->end) {
+                // A staging envelope covers 512 KiB, but not necessarily each
+                // page inside it. Never return an unrelated incomplete snapshot.
+                if (targeted_stage && !readback->mapped &&
+                    !readback->CopiesTouchPages(device_addr, device_addr + size)) {
+                    continue;
+                }
                 if (readback->mapped && wait_tick_limit && readback->tick > wait_tick_limit &&
                     !scheduler.GetWorkSemaphore()->IsFree(readback->tick)) {
                     // Its wider prefetch waits longer than our own data needs.
@@ -1470,7 +1481,10 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         const VAddr end = !mapped_attempt ? window_end : attempt ? required_end : prefetch_end;
         // Overlapping copies are settled first, so their dirty ranges are available
         // and one readback cannot unmark memory another has not published yet.
-        SettleDeferredReadbacks(start, end, mapped_attempt ? wait_tick_limit : 0);
+        const bool targeted_now = targeted_stage && !try_mapped && !mapped_attempt;
+        SettleDeferredReadbacks(targeted_now ? required_start : start,
+                                targeted_now ? required_end : end,
+                                mapped_attempt ? wait_tick_limit : 0);
         if (eager_count.load(std::memory_order_acquire)) {
             std::scoped_lock lock{eager_mutex};
             ApplyEagerSubtractsLocked();
@@ -1480,7 +1494,24 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         readback->arena_base = arena->cpu_addr;
         readback->start = start;
         readback->end = end;
-        total_size_bytes = CollectDownloads(arena, start, end - start, readback->copies);
+        total_size_bytes = 0;
+        bool selected = false;
+        if (targeted_now) {
+            selected = hybrid_staging_hot_pages.ForEachSelected(
+                window_start, window_end, device_addr, device_addr + size,
+                [&](VAddr page_start, u64 page_length) {
+                    const std::size_t first_copy = readback->copies.size();
+                    const u64 dest_offset = total_size_bytes;
+                    total_size_bytes +=
+                        CollectDownloads(arena, page_start, page_length, readback->copies);
+                    for (std::size_t i = first_copy; i < readback->copies.size(); ++i) {
+                        readback->copies[i].dstOffset += dest_offset;
+                    }
+                });
+        }
+        if (!selected) {
+            total_size_bytes = CollectDownloads(arena, start, end - start, readback->copies);
+        }
         if (mapped_attempt) {
             if (total_size_bytes && PrepareMappedReadback(*readback, total_size_bytes, false,
                                                           attempt == 0 ? wait_tick_limit : 0)) break;

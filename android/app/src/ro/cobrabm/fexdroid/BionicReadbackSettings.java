@@ -15,6 +15,7 @@ final class BionicReadbackSettings {
  static final String KEY = "fix_smoke_powers_precise_readback";
  static final String HYBRID_KEY = "renderer_experimental_hybrid_readback";
  static final String BACKOFF_KEY = "renderer_hybrid_eager_backoff";
+ static final String TARGETED_KEY = "renderer_hybrid_targeted_staging";
 
  static int mode(SharedPreferences preferences) {
   // Preserve the existing Precise preference; it wins over any old hybrid checkbox.
@@ -68,14 +69,26 @@ final class BionicReadbackSettings {
   optimized.setChecked(preferences.getBoolean(BACKOFF_KEY,false));
   optimized.setPadding(0,pad/2,0,pad/2);
   body.addView(optimized);
-  optimized.setVisibility(choices.getCheckedRadioButtonId()==ids[1] ? View.VISIBLE : View.GONE);
-  choices.setOnCheckedChangeListener((group,selectedId)->
-      optimized.setVisibility(selectedId==ids[1] ? View.VISIBLE : View.GONE));
+  CheckBox targeted = new CheckBox(activity);
+  targeted.setText(AppLanguage.text(
+      "Performance experiment: demand-driven staged readbacks",
+      "Teste de desempenho: readbacks seletivos por páginas solicitadas"));
+  targeted.setChecked(preferences.getBoolean(TARGETED_KEY,false));
+  targeted.setPadding(0,pad/2,0,pad/2);
+  body.addView(targeted);
+  int initialVisibility=choices.getCheckedRadioButtonId()==ids[1] ? View.VISIBLE : View.GONE;
+  optimized.setVisibility(initialVisibility);
+  targeted.setVisibility(initialVisibility);
+  choices.setOnCheckedChangeListener((group,selectedId)->{
+      int visibility=selectedId==ids[1] ? View.VISIBLE : View.GONE;
+      optimized.setVisibility(visibility);
+      targeted.setVisibility(visibility);
+  });
 
   TextView help = new TextView(activity);
   help.setText(AppLanguage.text(
-   "Hybrid V6 restores the V2 visual baseline with staged readbacks and fence prefetch. Optional copy reduction skips repeatedly stale, unread speculative pages; all demanded readbacks retain the staging fallback. Restart to apply.",
-   "O híbrido V6 restaura o comportamento visual do V2, com staging e antecipação. A economia opcional deixa de repetir cópias antecipadas não utilizadas; as leituras necessárias mantêm o staging. Reinicie para aplicar."));
+   "Hybrid V6 restores the V2 visual baseline with staged readbacks and fence prefetch. The separate targeted-staging test copies only requested and recently read pages inside each 512-KiB window; all other pages remain protected and receive their own readback when read. Restart to apply.",
+   "O híbrido V6 restaura o comportamento visual do V2, com staging e antecipação. O teste de staging seletivo copia apenas páginas solicitadas e lidas recentemente na janela de 512 KiB; as demais permanecem protegidas e terão seu readback quando acessadas. Reinicie para aplicar."));
   help.setPadding(0,pad,0,0);
   body.addView(help);
 
@@ -89,7 +102,8 @@ final class BionicReadbackSettings {
     int choice = selected == ids[2] ? 2 : selected == ids[1] ? 1 : 0;
     preferences.edit().putBoolean(KEY,choice==2)
      .putBoolean(HYBRID_KEY,choice==1)
-     .putBoolean(BACKOFF_KEY,optimized.isChecked()).apply();
+     .putBoolean(BACKOFF_KEY,optimized.isChecked())
+     .putBoolean(TARGETED_KEY,targeted.isChecked()).apply();
     if (refreshed!=null) refreshed.run();
    }).show();
  }

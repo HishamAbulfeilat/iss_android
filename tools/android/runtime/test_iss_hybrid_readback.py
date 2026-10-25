@@ -55,6 +55,16 @@ class HybridReadbackTest(unittest.TestCase):
         self.assertIn('bool buffer_write_needs_host_barrier = true;',header)
         self.assertIn('if (buffer_write_needs_host_barrier)',runtime)
 
+    def test_targeted_staging_is_opt_in_and_does_not_join_uncopied_pages(self):
+        src = (ROOT / "port/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp").read_text()
+        settings = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
+        ui = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicReadbackSettings.java").read_text()
+        self.assertIn('TLG_ISS_HYBRID_TARGETED_STAGE',src)
+        self.assertIn('hybrid_staging_hot_pages.ForEachSelected(',src)
+        self.assertIn('readback->CopiesTouchPages(device_addr, device_addr + size)',src)
+        self.assertIn('renderer_hybrid_targeted_staging',settings)
+        self.assertIn('.putBoolean(TARGETED_KEY,targeted.isChecked()).apply();',ui)
+
     def test_explicit_toggle_and_precise_override(self):
         src = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicRendererSettings.java").read_text()
         self.assertIn('renderer_experimental_hybrid_readback', src)
