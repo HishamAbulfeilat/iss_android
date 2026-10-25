@@ -65,6 +65,9 @@ public:
     void OnDispatch(u64 cs_hash);
 
     /// Start of a frame in the command stream (display pass).
+    // Bloodborne Android: complete a scaled scene before the display copy if no UI draw was identified.
+    // No dispatch occurs until camera, depth and scene color were validated.
+    void OnDisplayPassStart();
     bool OnFrameStart();
     bool RasterScaling() const;
     /// tlg: LOD bias for scene materials, log2(render / output) while a reduced scene is
