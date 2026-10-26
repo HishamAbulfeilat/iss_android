@@ -12,16 +12,22 @@ JAVA=shutil.which('java')
 class FullscreenTests(unittest.TestCase):
     def test_default_off_switching_and_relaunch(self):
         source=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicVideoSettings.java').read_text()
-        policy='\n'.join(method(source,s) for s in (' static boolean fullscreen(', ' static String gameDisplayMode(', ' static String outputResolution(', ' static String internalPatchName('))
+        policy='\n'.join(method(source,s) for s in (
+            ' static boolean fullscreen(', ' static String gameDisplayMode(',
+            ' static String fsrMode(', ' static String fsrInternalResolution(',
+            ' static String effectiveResolutionPatch(', ' static String fsrInputSize(',
+            ' static int fsrEnginePreset(', ' static String outputResolution(',
+            ' static String internalPatchName('))
         activity=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java').read_text()
         apply=method(activity,' private void applyFullscreen()')
         code=r'''
 import android.content.SharedPreferences;
 class FullscreenCase {
  static class Prefs implements SharedPreferences {
-  Boolean enabled=null;boolean fsr3=false;String mode="stretch",resolution="native";
+  Boolean enabled=null;boolean fsr3=false;String mode="stretch",resolution="native",fsrMode=null;int oldFsrPreset=1;
   public boolean getBoolean(String k,boolean fallback){if(k.equals("fsr3"))return fsr3;assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
-  public String getString(String k,String fallback){if(k.equals("internal_res"))return resolution;assert k.equals("display_mode");return mode;}
+  public String getString(String k,String fallback){if(k.equals("internal_res"))return resolution;if(k.equals("fsr3_mode"))return fsrMode;assert k.equals("display_mode");return mode;}
+  public int getInt(String k,int fallback){assert k.equals("fsr3_preset");return oldFsrPreset;}
  }
  static class BionicVideoSettings {
 ''' + policy + r'''
@@ -57,7 +63,22 @@ class FullscreenCase {
   p.resolution="900p";assert BionicVideoSettings.outputResolution(p).equals("1600x900");
   p.fsr3=true;assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
+  p.fsrMode="quality";
+  assert BionicVideoSettings.fsrMode(p).equals("quality");
+  assert BionicVideoSettings.fsrInternalResolution(p).equals("540p");
+  assert BionicVideoSettings.effectiveResolutionPatch(p).equals("540p");
+  assert BionicVideoSettings.fsrInputSize(p).equals("960x540");
+  assert BionicVideoSettings.fsrEnginePreset(p)==1;
+  p.fsrMode="performance";
+  assert BionicVideoSettings.fsrInternalResolution(p).equals("360p");
+  assert BionicVideoSettings.effectiveResolutionPatch(p).equals("360p");
+  assert BionicVideoSettings.fsrInputSize(p).equals("640x360");
+  assert BionicVideoSettings.fsrEnginePreset(p)==3;
+  p.fsrMode=null;p.oldFsrPreset=3;
+  assert BionicVideoSettings.fsrMode(p).equals("performance");
+  p.oldFsrPreset=1;assert BionicVideoSettings.fsrMode(p).equals("quality");
   p.fsr3=false;
+  assert BionicVideoSettings.effectiveResolutionPatch(p).equals("720p");
   for(String key:new String[]{"540p","480p","360p"}){
    p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
   }
@@ -71,7 +92,7 @@ class FullscreenCase {
 '''
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp);stub=path/'android/content/SharedPreferences.java';stub.parent.mkdir(parents=True)
-            stub.write_text('package android.content; public interface SharedPreferences {boolean getBoolean(String k,boolean fallback);String getString(String k,String fallback);}')
+            stub.write_text('package android.content; public interface SharedPreferences {boolean getBoolean(String k,boolean fallback);String getString(String k,String fallback);int getInt(String k,int fallback);}')
             source=path/'FullscreenCase.java';source.write_text(code)
             result=subprocess.run([JAVA,'com.sun.tools.javac.Main','-d',temp,str(stub),str(source)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
