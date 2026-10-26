@@ -13,21 +13,32 @@ unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH L
 export PATH="$headers/bin:$PATH"
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
 export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
-# FSR-Vulkan is pinned as a submodule. The Bionic CI builds port/gpu
-# directly (not port/build.sh), so apply the Android-safe FFX pool fix here.
-# Without this the backend reserves millions of descriptors per type and
-# Turnip rejects the FSR3 context during initialization.
+# The Android workflow configures port/gpu directly, bypassing port/build.sh.
+# Apply BOTH the compact descriptor pool and the native-HAL dispatch fix before
+# CMake sees the FSR-Vulkan headers. Otherwise the renderer compiles against the
+# unpatched ABI while the source expects getInstanceProcAddr.
 fsr_module="$PWD/port/gpu/third_party/fsr-vulkan"
-fsr_pool_patch="$PWD/port/gpu/patches/fsr-vulkan/0004-ffx-vk-compact-descriptor-pool-for-mobile.patch"
+fsr_patch_dir="$PWD/port/gpu/patches/fsr-vulkan"
 [[ -f "$fsr_module/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp" ]] || {
   echo "Missing pinned FSR-Vulkan SDK in Android checkout" >&2
   exit 1
 }
-if ! git -C "$fsr_module" apply --reverse --check "$fsr_pool_patch" 2>/dev/null; then
-  git -C "$fsr_module" apply --check "$fsr_pool_patch"
-  git -C "$fsr_module" apply "$fsr_pool_patch"
-fi
-echo "FSR3 Vulkan descriptor pool patch verified"
+for patch_name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch; do
+  patch="$fsr_patch_dir/$patch_name"
+  [[ -f "$patch" ]] || { echo "Required FidelityFX patch absent: $patch_name" >&2; exit 1; }
+  if ! git -C "$fsr_module" apply --reverse --check "$patch" 2>/dev/null; then
+    git -C "$fsr_module" apply --check "$patch" || {
+      echo "Unable to apply FidelityFX patch: $patch_name" >&2
+      exit 1
+    }
+    git -C "$fsr_module" apply "$patch"
+  fi
+  echo "FidelityFX patch verified: $patch_name"
+done
+grep -q 'PFN_vkGetInstanceProcAddr getInstanceProcAddr;' "$fsr_module/include/ffx_vk_portable.h" || {
+  echo "FidelityFX native-HAL ABI missing after patch application" >&2
+  exit 1
+}
 mkdir -p "$build/.cmake/api/v1/query"
 touch "$build/.cmake/api/v1/query/codemodel-v2"
 cmake -S port/gpu -B "$build" -G Ninja \
