@@ -124,6 +124,11 @@ private:
     u32 android_probe_constants = 0;
     u32 android_probe_signature = 0;
     u32 android_probe_ready = 0;
+    // Independent snapshots from the game's native camera update; never set
+    // current.valid here without depth/frame correspondence validation.
+    u64 android_camera_last_sequence = 0;
+    u32 android_camera_log_count = 0;
+    u32 android_camera_frame_updates = 0;
     struct BindingSample {
         u64 shader_hash = 0;
         u32 slot = 0;
