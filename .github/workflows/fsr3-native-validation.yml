@@ -44,7 +44,7 @@ jobs:
           assert block.count(needle) >= 6, block.count(needle)
           block = block.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI backend failure line=%d\\n", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
           data = data[:begin] + block + data[end:]
-          data = data.replace("#include <vulkan/vulkan.h>", "#include <vulkan/vulkan.h>\\n#include <cstdio>", 1)
+          data = data.replace("#include <vulkan/vulkan.h>", "#include <vulkan/vulkan.h>\n#include <cstdio>", 1)
           path.write_text(data)
           PY
       - name: Compile and run real FidelityFX context creation tests
