@@ -231,6 +231,29 @@ void CameraMotion::PrepareIssNativeCamera() {
         return;
     }
 
+    // Native projection row 2 also contains the game's own subpixel TAA
+    // jitter. The Android rasterizer applies a SECOND viewport jitter for FSR.
+    // Motion vectors must exclude the guest jitter step between frames;
+    // otherwise a completely stationary camera creates phantom half-pixel
+    // movement (measured in ISS log 9).
+    const std::array<float, 2> guest_jitter_ndc{
+        sample.projection[8], sample.projection[9]};
+    const bool guest_jitter_ok = std::isfinite(guest_jitter_ndc[0]) &&
+                                 std::isfinite(guest_jitter_ndc[1]) &&
+                                 std::abs(guest_jitter_ndc[0]) < 0.02f &&
+                                 std::abs(guest_jitter_ndc[1]) < 0.02f;
+    if (!guest_jitter_ok) {
+        native_previous_valid = native_motion_valid = false;
+        current.valid = previous.valid = false;
+        ++native_frames_rejected;
+        return;
+    }
+    native_jitter_delta_ndc = native_previous_valid
+        ? std::array<float, 2>{
+              native_previous_jitter_ndc[0] - guest_jitter_ndc[0],
+              native_previous_jitter_ndc[1] - guest_jitter_ndc[1]}
+        : std::array<float, 2>{};
+
     const bool same_camera = native_previous_valid &&
                              native_previous_object == sample.guest_object;
     // Frame IDs advance by several camera-update calls per actual scene frame.
@@ -269,6 +292,7 @@ void CameraMotion::PrepareIssNativeCamera() {
                 sizeof(sample.composite));
     native_previous_object = sample.guest_object;
     native_previous_sequence = sequence;
+    native_previous_jitter_ndc = guest_jitter_ndc;
     native_previous_valid = true;
     native_near = sample.near_plane;
     native_far = sample.far_plane;
@@ -328,6 +352,12 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
                     12 * sizeof(float));
         std::memcpy(push.proj.data(), native_reprojection.data() + 12,
                     4 * sizeof(float));
+        // The previous_jitter slot is unused by the normal FSR motion
+        // shader. In native mode it carries the guest's PREV-CURRENT
+        // projection jitter delta, converted from NDC into render pixels.
+        push.previous_jitter = {
+            native_jitter_delta_ndc[0] * (float(width) * 0.5f),
+            -native_jitter_delta_ndc[1] * (float(height) * 0.5f)};
     }
 #endif
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
