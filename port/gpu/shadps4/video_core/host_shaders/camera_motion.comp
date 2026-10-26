@@ -65,7 +65,12 @@ void main() {
             const vec2 prev_ndc = previous_clip.xy / previous_clip.w;
             const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5,
                                       0.5 - prev_ndc.y * 0.5);
-            const vec2 camera_motion = (prev_uv - scene_uv) * size;
+            // The native matrices contain inFAMOUS' own quarter-pixel
+            // projection jitter in addition to the Android viewport jitter.
+            // previous_jitter is the guest projection jitter delta (pixels)
+            // for mode 3/4. FSR motion vectors must not contain that delta.
+            const vec2 camera_motion =
+                (prev_uv - scene_uv) * size - previous_jitter;
             if (!any(isnan(camera_motion)) && !any(isinf(camera_motion)) &&
                 all(lessThan(abs(camera_motion), size * 0.5))) {
                 result = camera_motion;
