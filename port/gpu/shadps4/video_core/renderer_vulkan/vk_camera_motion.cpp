@@ -314,7 +314,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                 ++android_camera_log_count;
                 std::printf("FSR3 ISS camera capture: seq=%llu delta=%llu object=0x%llx "
                             "depth=%u valid_scalars=%u near=%.9g far=%.9g "
-                            "vfov=%.9g aspect=%.9g tan_h=%.9g tan_v=%.9g\\n",
+                            "vfov=%.9g aspect=%.9g tan_h=%.9g tan_v=%.9g\n",
                             static_cast<unsigned long long>(sequence),
                             static_cast<unsigned long long>(update_delta),
                             static_cast<unsigned long long>(sample.guest_object),
@@ -324,7 +324,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                             sample.tangent_vertical);
                 const auto dump_matrix = [](const char* name, const float* matrix) {
                     for (u32 row = 0; row < 4; ++row) {
-                        std::printf("FSR3 ISS camera %s row%u = %.9g, %.9g, %.9g, %.9g\\n",
+                        std::printf("FSR3 ISS camera %s row%u = %.9g, %.9g, %.9g, %.9g\n",
                                     name, row, matrix[row * 4], matrix[row * 4 + 1],
                                     matrix[row * 4 + 2], matrix[row * 4 + 3]);
                     }
@@ -337,7 +337,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
         }
         if (android_probe_frames == 179) {
             std::printf("FSR3 ISS camera capture: %u frame-boundary updates / 180 frames, "
-                        "last_sequence=%llu samples_logged=%u\\n",
+                        "last_sequence=%llu samples_logged=%u\n",
                         android_camera_frame_updates,
                         static_cast<unsigned long long>(android_camera_last_sequence),
                         android_camera_log_count);
