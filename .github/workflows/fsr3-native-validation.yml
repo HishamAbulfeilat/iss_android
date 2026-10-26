@@ -31,6 +31,22 @@ jobs:
             git -C "$mod" apply --check "$PWD/port/gpu/patches/fsr-vulkan/$name"
             git -C "$mod" apply "$PWD/port/gpu/patches/fsr-vulkan/$name"
           done
+      - name: Pinpoint native backend failure inside CI only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("port/gpu/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp")
+          data = path.read_text()
+          begin = data.index("FfxErrorCode CreateBackendContextVK(", data.index("FFX_API size_t ffxGetScratchMemorySizeVK"))
+          end = data.index("FfxErrorCode GetDeviceCapabilitiesVK(", begin)
+          block = data[begin:end]
+          needle = "return FFX_ERROR_BACKEND_API_ERROR;"
+          assert block.count(needle) >= 6, block.count(needle)
+          block = block.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI backend failure line=%d\\n", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
+          data = data[:begin] + block + data[end:]
+          data = data.replace("#include <vulkan/vulkan.h>", "#include <vulkan/vulkan.h>\\n#include <cstdio>", 1)
+          path.write_text(data)
+          PY
       - name: Compile and run real FidelityFX context creation tests
         run: |
           if [[ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]]; then
