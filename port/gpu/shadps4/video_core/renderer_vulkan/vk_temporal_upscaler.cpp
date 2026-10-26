@@ -507,6 +507,85 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                         unsigned(caps.shaderFloat16),
                         unsigned(caps.subgroupSizeControl), caps.subgroupSize,
                         w, h, ow, oh);
+            // The ISS Android Vulkan HAL is accessed directly rather than via
+            // libvulkan's normal loader. Compare the portable AMD capability
+            // result against the actual HAL function pointers: this separates a
+            // missing Turnip format from a mismatched Vulkan dispatch table.
+            static constexpr struct {
+                VkFormat format;
+                VkFormatFeatureFlags required;
+                const char* label;
+            } required_formats[] = {
+                {VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                      VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                      VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R8Unorm"},
+                {VK_FORMAT_R8G8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RG8Unorm"},
+                {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RGBA8Unorm"},
+                {VK_FORMAT_R16_SNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_DST_BIT, "R16Snorm"},
+                {VK_FORMAT_R16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R16Float"},
+                {VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "RG16Float"},
+                {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                                VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "RGBA16Float"},
+                {VK_FORMAT_R16G16_SINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                          VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                          VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RG16Sint"},
+                {VK_FORMAT_R32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R32Float"},
+                {VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT, "RG32Float"},
+                {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RGBA32Float"},
+                {VK_FORMAT_R32_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                       VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                       VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT, "R32Uint"}
+            };
+            u32 supported = 0;
+            const auto direct_fmt =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFormatProperties;
+            if (direct_fmt) {
+                for (const auto& item : required_formats) {
+                    VkFormatProperties fp{};
+                    direct_fmt(device_info.physicalDevice, item.format, &fp);
+                    if ((fp.optimalTilingFeatures & item.required) == item.required) {
+                        ++supported;
+                    } else {
+                        std::printf("FSR3 ISS HAL missing format=%s required=0x%x available=0x%x\n",
+                                    item.label, unsigned(item.required),
+                                    unsigned(fp.optimalTilingFeatures));
+                    }
+                }
+            }
+            std::printf("FSR3 ISS HAL direct capability: format_checks=%u/%zu "
+                        "vkGetPhysicalDeviceFormatProperties=%u\n",
+                        supported, std::size(required_formats), unsigned(direct_fmt != nullptr));
 #else
             std::printf("Upscaler: FSR 3 context creation failed (code=%d)\n",
                         int(create_result));
