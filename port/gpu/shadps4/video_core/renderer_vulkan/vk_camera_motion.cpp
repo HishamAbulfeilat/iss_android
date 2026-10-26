@@ -240,12 +240,21 @@ void CameraMotion::PrepareIssNativeCamera() {
                              sequence - native_previous_sequence <= 64;
     native_motion_valid = same_camera && consecutive;
     if (native_motion_valid) {
+        // PS4/inFAMOUS stores row-vector camera matrices. For a homogeneous
+        // CURRENT clip-space row vector, the PREVIOUS clip coordinate is:
+        //   clip_previous = clip_current * inverse(current) * composite(previous)
+        // The GLSL shader instead computes dot(row, column_vector), so upload
+        // the TRANSPOSE of this product. The earlier previous*inverse product
+        // was mathematically incorrect despite passing camera-inverse checks.
+        // For a captured static-camera jitter pair the correct transform has
+        // about (+0.00104,-0.00185) XY translation in its last row; the old
+        // product wrongly placed motion in the Z-dependent matrix entries.
         for (int row = 0; row < 4; ++row) {
             for (int col = 0; col < 4; ++col) {
                 double value = 0.0;
                 for (int k = 0; k < 4; ++k) {
-                    value += double(native_previous_composite[row * 4 + k]) *
-                             double(sample.inverse[k * 4 + col]);
+                    value += double(sample.inverse[k * 4 + row]) *
+                             double(native_previous_composite[col * 4 + k]);
                 }
                 if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
                     native_motion_valid = false;
