@@ -300,7 +300,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .jitter = jitter,
         .previous_jitter = previous_jitter,
 #ifdef ISS_ANDROID_BIONIC
-        .mode = native_motion_valid ? 3u :
+        .mode = native_motion_valid ? (object_valid ? 3u : 4u) :
                 (object_only ? 2u : (object_valid ? 1u : 0u)),
 #else
         .mode = object_valid ? 1u : 0u,
