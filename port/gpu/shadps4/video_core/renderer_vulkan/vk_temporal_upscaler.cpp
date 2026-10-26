@@ -467,7 +467,8 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     device_info.shaderFloat16Enabled = instance.IsShaderFloat16Enabled();
     device_info.subgroupSizeControlEnabled = instance.IsSubgroupSizeControlEnabled();
     device_info.synchronization2Enabled = VK_TRUE;
-    device_info.shaderStorageImageWriteWithoutFormatEnabled = VK_TRUE;
+    device_info.shaderStorageImageWriteWithoutFormatEnabled =
+        instance.IsStorageImageWriteWithoutFormatEnabled() ? VK_TRUE : VK_FALSE;
 
     FfxVkPortableUpscaleCreateInfo create_info{};
     create_info.structSize = sizeof(create_info);
@@ -495,6 +496,12 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             caps.structSize = sizeof(caps);
             const auto cap_result =
                 ffxVkPortableQueryDeviceCapabilities(device_info.physicalDevice, &caps);
+            std::printf("FSR3 ISS logical device: storage_write_without_format=%u "
+                        "float16=%u subgroup_control=%u synchronization2=%u\n",
+                        unsigned(device_info.shaderStorageImageWriteWithoutFormatEnabled),
+                        unsigned(device_info.shaderFloat16Enabled),
+                        unsigned(device_info.subgroupSizeControlEnabled),
+                        unsigned(device_info.synchronization2Enabled));
             std::printf("FSR3 ISS create failure: code=%d capabilities_code=%d "
                         "compute=%u subgroup=%u formats=%u prerequisites=%u "
                         "float16=%u subgroup_control=%u subgroup_size=%u "
