@@ -462,6 +462,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     device_info.physicalDevice = instance.GetPhysicalDevice();
     device_info.device = device;
     device_info.getDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+    device_info.getInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
     device_info.queue = instance.GetGraphicsQueue();
     device_info.queueFamilyIndex = instance.GetGraphicsQueueFamilyIndex();
     device_info.shaderFloat16Enabled = instance.IsShaderFloat16Enabled();
