@@ -501,6 +501,14 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
+#ifdef ISS_ANDROID_BIONIC
+    // inFAMOUS PS4 projection has z_clip/w = near/z - near/far:
+    // D32 depth is ~1 at the near plane and ~0 at the far plane.
+    // The FSR3 SDK otherwise interprets this reversed-Z depth as normal,
+    // poisoning depth clipping, disocclusion and temporal accumulation.
+    // Real near/far come from the native camera snapshot in RunScaled().
+    create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED;
+#endif
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
