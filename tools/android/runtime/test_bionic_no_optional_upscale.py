@@ -54,10 +54,25 @@ class BionicFsr3Tests(unittest.TestCase):
         game = (src / "BionicGameActivity.java").read_text()
         video = (src / "BionicVideoSettings.java").read_text()
         self.assertIn('prefs.getBoolean("fsr3",false)', video)
-        self.assertIn('if(prefs.getBoolean("fsr3",false))return "1920x1080";', video)
+        self.assertIn('if(prefs.getBoolean("fsr3",false))return "1280x720";', video)
+        self.assertIn('"performance".equals(fsrMode(prefs))?"360p":"540p"', video)
+        self.assertIn('"performance".equals(fsrMode(prefs))?"640x360":"960x540"', video)
+        self.assertIn('prefs.getBoolean("fsr3",false)?fsrInternalResolution(prefs)', video)
+        self.assertIn('resolutionPatch.setEnabled(!active)', video)
+        self.assertIn('if(!prefs.getBoolean("fsr3",false)&&pos>=0', video)
         self.assertIn('e.put("TLG_UPSCALER",fsr3?"fsr3":"none")', game)
-        self.assertIn('e.put("TLG_RENDER_RES",internal)', game)
-        self.assertIn('e.put("TLG_UPSCALE_PRESET"', game)
+        self.assertIn('e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs))', game)
+        self.assertIn('e.put("TLG_UPSCALE_PRESET",Integer.toString(BionicVideoSettings.fsrEnginePreset(prefs)))', game)
+        self.assertIn('BionicVideoSettings.effectiveResolutionPatch(prefs)', game)
+        self.assertIn('if(resolutionPatch!=null)patches.add(resolutionPatch)', game)
+        self.assertNotIn('prefs.getString("internal_res","native");\\n   String internal=', game)
+        # Both internal game patches must exist so there is exactly one automatic
+        # executable resolution patch when FSR3 is enabled.
+        patches = (ROOT / "port/patches/InfamousSecondSon.xml").read_text()
+        for size in ("640x360", "960x540"):
+            self.assertIn('Name="Render resolution '+size+'"', patches)
+        self.assertIn('e.put("ISS_SCREEN_W",dimensions[0])', game)
+        self.assertIn('e.put("ISS_SCREEN_H",dimensions[1])', game)
 
     def test_pc_zero_is_diagnosable(self):
         self.assertIn("arm->uc_mcontext.regs[30]", PROBE)
