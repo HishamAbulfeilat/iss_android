@@ -632,6 +632,75 @@ static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t 
             address - segments[i].address <= segments[i].size - bytes) return 1;
     return 0;
 }
+/* inFAMOUS camera update, decrypted 1.07 SELF SHA256 2d1ca796...
+ * 0x582514: mov rax,[r15]; the view/projection matrices have just been written
+ * by 0x5821b0..0x582513. The FEX hook must execute the replaced load itself
+ * before continuing at 0x582517. Never intercept unknown executable revisions.
+ */
+#if !defined(GUEST_CPU_NATIVE)
+enum { ISS_CAMERA_FUNCTION = 0x5821b0, ISS_CAMERA_HOOK = 0x582514,
+       ISS_CAMERA_FUNCTION_LENGTH = 0x37d };
+static void iss_camera_updated(GuestRegs *regs) {
+    const uintptr_t object = (uintptr_t)regs->gpr[GUEST_RBX];
+    if (object) {
+        TlgIssCameraSnapshot sample = {0};
+        sample.guest_object = object;
+        memcpy(sample.projection, (const void *)(object + 0x1c0), sizeof(sample.projection));
+        memcpy(sample.view_transform, (const void *)(object + 0x200), sizeof(sample.view_transform));
+        memcpy(sample.composite, (const void *)(object + 0x430), sizeof(sample.composite));
+        memcpy(sample.inverse, (const void *)(object + 0x4b0), sizeof(sample.inverse));
+        memcpy(&sample.near_plane, (const void *)(object + 0x584), sizeof(float));
+        memcpy(&sample.far_plane, (const void *)(object + 0x588), sizeof(float));
+        memcpy(&sample.vertical_fov, (const void *)(object + 0x590), sizeof(float));
+        memcpy(&sample.aspect, (const void *)(object + 0x59c), sizeof(float));
+        memcpy(&sample.tangent_horizontal, (const void *)(object + 0x5a0), sizeof(float));
+        memcpy(&sample.tangent_vertical, (const void *)(object + 0x5a4), sizeof(float));
+        tlggpu_iss_camera_publish(&sample);
+    }
+    /* Preserve guest RAX: the replaced instruction is exactly mov rax,[r15].
+     * No x86 flags, vector register or stack content are modified. */
+    const uintptr_t canary = (uintptr_t)regs->gpr[GUEST_R15];
+    if (canary) memcpy(&regs->gpr[GUEST_RAX], (const void *)canary, sizeof(uint64_t));
+    regs->rip += 3;
+}
+static void install_iss_camera_capture(const char *app0, Segment *segments,
+                                       uint64_t count, uint64_t size) {
+    char path[4096], serial[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    if (strcmp(serial, "CUSA00004") && strcmp(serial, "CUSA00223") &&
+        strcmp(serial, "CUSA00263")) return;
+    if (size < ISS_CAMERA_FUNCTION + ISS_CAMERA_FUNCTION_LENGTH ||
+        !mapped(segments, count, ISS_CAMERA_FUNCTION, ISS_CAMERA_FUNCTION_LENGTH)) {
+        puts("FSR3 ISS camera: unsupported image range, no hook installed");
+        return;
+    }
+    const unsigned char *function = image + ISS_CAMERA_FUNCTION;
+    uint64_t fingerprint = UINT64_C(0xcbf29ce484222325);
+    for (size_t i = 0; i < ISS_CAMERA_FUNCTION_LENGTH; ++i) {
+        fingerprint ^= function[i];
+        fingerprint *= UINT64_C(0x100000001b3);
+    }
+    static const unsigned char original[] = {0x49, 0x8b, 0x07};
+    if (fingerprint != UINT64_C(0x63f0e204edc47713) ||
+        memcmp(image + ISS_CAMERA_HOOK, original, sizeof(original))) {
+        puts("FSR3 ISS camera: function identity mismatch, hook disabled");
+        return;
+    }
+    if (!guest_cpu_hook((uintptr_t)(image + ISS_CAMERA_HOOK), sizeof(original),
+                        iss_camera_updated)) {
+        puts("FSR3 ISS camera: FEX hook unavailable");
+        return;
+    }
+    puts("FSR3 ISS camera: verified guest update capture active (post-matrix, 4x4)");
+}
+#else
+static void install_iss_camera_capture(const char *app0, Segment *segments,
+                                       uint64_t count, uint64_t size) {
+    (void)app0; (void)segments; (void)count; (void)size;
+}
+#endif
+
 static void install_infamous_menu_watch(const char *app0,Segment *segments,uint64_t count,uint64_t size){
     char path[4096],serial[32]="";
     snprintf(path,sizeof(path),"%s/sce_sys/param.sfo",app0?app0:".");
@@ -1450,6 +1519,7 @@ int main(int argc, char **argv) {
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     install_infamous_menu_watch(app0,segments,ns,size);
+    if (gpu_enabled) install_iss_camera_capture(app0, segments, ns, size);
     if (gpu_enabled) install_orb_multiplier(app0, segments, ns, size);
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
