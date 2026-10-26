@@ -483,9 +483,34 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             PrintIssues("create info", issues);
             return false;
         }
-        if (ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context) !=
-            FFX_VK_PORTABLE_OK) {
-            std::printf("Upscaler: FSR 3 context creation failed\n");
+        const auto create_result =
+            ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+        if (create_result != FFX_VK_PORTABLE_OK) {
+#ifdef ISS_ANDROID_BIONIC
+            // FidelityFX's native Vulkan adapter has multiple distinct failure
+            // paths (unsupported formats/subgroups, backend init, Vk allocation).
+            // Record the exact one once, without GPU readbacks or additional work
+            // on successful frames. The previous unqualified message hid it.
+            FfxVkPortableDeviceCapabilities caps{};
+            caps.structSize = sizeof(caps);
+            const auto cap_result =
+                ffxVkPortableQueryDeviceCapabilities(device_info.physicalDevice, &caps);
+            std::printf("FSR3 ISS create failure: code=%d capabilities_code=%d "
+                        "compute=%u subgroup=%u formats=%u prerequisites=%u "
+                        "float16=%u subgroup_control=%u subgroup_size=%u "
+                        "size=%ux%u->%ux%u\n",
+                        int(create_result), int(cap_result),
+                        unsigned(caps.hasComputeQueue),
+                        unsigned(caps.subgroupOperations),
+                        unsigned(caps.requiredFsr3StorageFormats),
+                        unsigned(caps.fsr3ComputePrerequisites),
+                        unsigned(caps.shaderFloat16),
+                        unsigned(caps.subgroupSizeControl), caps.subgroupSize,
+                        w, h, ow, oh);
+#else
+            std::printf("Upscaler: FSR 3 context creation failed (code=%d)\n",
+                        int(create_result));
+#endif
             context = nullptr;
             return false;
         }
