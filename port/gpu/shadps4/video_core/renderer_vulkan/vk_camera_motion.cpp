@@ -7,6 +7,9 @@
 #include <cstring>
 
 #include "tlg_toggles.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "../../../tlggpu.h"
+#endif
 
 #include "video_core/host_shaders/camera_motion_comp.h"
 #include "video_core/host_shaders/camera_motion_debug_comp.h"
@@ -288,6 +291,59 @@ void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
 #ifdef ISS_ANDROID_BIONIC
     if (for_upscaler) {
+        // Read exactly one completed guest camera sample at this frame boundary,
+        // after G-buffer draws but before depth_id is reset. We intentionally
+        // do NOT feed these raw matrices into the FSR motion shader: which camera
+        // owns the drawn depth, matrix order and jitter must first be verified.
+        TlgIssCameraSnapshot sample{};
+        const u64 sequence = tlggpu_iss_camera_read(&sample);
+        if (sequence && sequence != android_camera_last_sequence) {
+            const u64 update_delta = sequence - android_camera_last_sequence;
+            android_camera_last_sequence = sequence;
+            ++android_camera_frame_updates;
+            const bool finite = std::isfinite(sample.near_plane) &&
+                std::isfinite(sample.far_plane) &&
+                std::isfinite(sample.vertical_fov) && std::isfinite(sample.aspect);
+            const bool plausible = finite && sample.near_plane > 0 &&
+                sample.far_plane > sample.near_plane && sample.vertical_fov > 0.1f &&
+                sample.vertical_fov < 3.14f && sample.aspect > 0.2f &&
+                sample.aspect < 8.0f;
+            const bool print_sample = android_camera_log_count < 3 ||
+                (android_probe_frames == 179 && android_camera_log_count < 9);
+            if (print_sample) {
+                ++android_camera_log_count;
+                std::printf("FSR3 ISS camera capture: seq=%llu delta=%llu object=0x%llx "
+                            "depth=%u valid_scalars=%u near=%.9g far=%.9g "
+                            "vfov=%.9g aspect=%.9g tan_h=%.9g tan_v=%.9g\\n",
+                            static_cast<unsigned long long>(sequence),
+                            static_cast<unsigned long long>(update_delta),
+                            static_cast<unsigned long long>(sample.guest_object),
+                            unsigned(bool(depth_id)), unsigned(plausible),
+                            sample.near_plane, sample.far_plane, sample.vertical_fov,
+                            sample.aspect, sample.tangent_horizontal,
+                            sample.tangent_vertical);
+                const auto dump_matrix = [](const char* name, const float* matrix) {
+                    for (u32 row = 0; row < 4; ++row) {
+                        std::printf("FSR3 ISS camera %s row%u = %.9g, %.9g, %.9g, %.9g\\n",
+                                    name, row, matrix[row * 4], matrix[row * 4 + 1],
+                                    matrix[row * 4 + 2], matrix[row * 4 + 3]);
+                    }
+                };
+                dump_matrix("projection", sample.projection);
+                dump_matrix("view_transform", sample.view_transform);
+                dump_matrix("composite", sample.composite);
+                dump_matrix("inverse", sample.inverse);
+            }
+        }
+        if (android_probe_frames == 179) {
+            std::printf("FSR3 ISS camera capture: %u frame-boundary updates / 180 frames, "
+                        "last_sequence=%llu samples_logged=%u\\n",
+                        android_camera_frame_updates,
+                        static_cast<unsigned long long>(android_camera_last_sequence),
+                        android_camera_log_count);
+            android_camera_frame_updates = 0;
+        }
+
         if (Ready()) ++android_probe_ready;
         if (++android_probe_frames >= 180) {
             std::printf("FSR3 camera: frames=%u gbuffer=%u constants864=%u "
