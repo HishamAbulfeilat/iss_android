@@ -1801,6 +1801,12 @@ void TemporalUpscaler::RunScaled() {
     if (depth.info.size.width != iw || depth.info.size.height != ih || w > ow || h > oh) {
         return;
     }
+#ifdef ISS_ANDROID_BIONIC
+    // Some scenes complete from UiComposition::Background::Temporal rather
+    // than the fullscreen display boundary. Both routes must latch the camera
+    // immediately before the motion-vector pass of this exact scene frame.
+    camera_motion.PrepareIssNativeCamera();
+#endif
     if (!EnsureResources(w, h, ow, oh, false)) {
         failed = true;
         return;
