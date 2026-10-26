@@ -394,6 +394,26 @@ bool TemporalUpscaler::OnFrameStart() {
     last_jitter = jitter_on;
     dispatched_last_frame = false;
 
+#ifdef ISS_ANDROID_BIONIC
+    // The ISS 540p->1080p FSR context used to be allocated at the first
+    // full-screen scene boundary, after the game's texture cache had reached
+    // its critical Vulkan memory budget. Reserve the AMD SDK history images
+    // and native compute pipelines at the first frame instead, while memory
+    // is still available. Do not touch UI, Readback, or guest render patches.
+    // For explicit render-resolution sessions the sizes are known from boot.
+    if (active && scaled_session &&
+        upscaler == TlgSettings::UpscalerFsr3 &&
+        render_width && render_height &&
+        render_width <= target_width && render_height <= target_height &&
+        !resources_ready && !context && !failed) {
+        // RunScaled uses the tonemapped (non-HDR) context for these sessions.
+        if (!EnsureResources(render_width, render_height,
+                             target_width, target_height, false)) {
+            failed = true;
+        }
+    }
+#endif
+
     // The display pass of an upscaled frame reads the upscaled UI image.
     display_redirect = ui_phase;
     ui_phase = false;
