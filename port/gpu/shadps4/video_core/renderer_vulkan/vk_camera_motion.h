@@ -50,6 +50,13 @@ public:
     [[nodiscard]] bool Ready() const noexcept {
         return current.valid && previous.valid && depth_id;
     }
+#ifdef ISS_ANDROID_BIONIC
+    // ISS may have per-pixel object motion before the game's camera layout is known.
+    // This is deliberately separate from Ready(): object vectors do not make a valid camera.
+    [[nodiscard]] bool IssObjectMotionReady(u32 width, u32 height) const noexcept {
+        return depth_id && bool(ObjectMotionImage(width, height));
+    }
+#endif
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
     }
