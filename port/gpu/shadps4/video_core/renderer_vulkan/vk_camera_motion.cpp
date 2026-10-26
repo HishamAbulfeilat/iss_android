@@ -255,7 +255,8 @@ void CameraMotion::PrepareIssNativeCamera() {
             if (!native_motion_valid) break;
         }
     }
-    native_previous_composite = sample.composite;
+    std::memcpy(native_previous_composite.data(), sample.composite,
+                sizeof(sample.composite));
     native_previous_object = sample.guest_object;
     native_previous_sequence = sequence;
     native_previous_valid = true;
