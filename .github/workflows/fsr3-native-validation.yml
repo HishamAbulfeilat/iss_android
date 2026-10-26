@@ -44,6 +44,20 @@ jobs:
           assert block.count(needle) >= 6, block.count(needle)
           block = block.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI backend failure line=%d\\n", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
           data = data[:begin] + block + data[end:]
+          # The context can fail on the very first SDK resource even if
+          # backend context creation itself succeeded.
+          for start_name, end_name in (
+              ("FfxErrorCode allocateDeviceMemory(", "void setVKObjectName("),
+              ("FfxErrorCode CreateResourceVK(", "FfxErrorCode DestroyResourceVK("),
+              ("FfxErrorCode CreatePipelineVK(", "FfxErrorCode DestroyPipelineVK("),
+          ):
+              start_at = data.index(start_name, data.index("FFX_API size_t ffxGetScratchMemorySizeVK"))
+              end_at = data.index(end_name, start_at)
+              part = data[start_at:end_at]
+              count = part.count(needle)
+              assert count, start_name
+              part = part.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI %s line=%d\\n", "' + start_name + '", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
+              data = data[:start_at] + part + data[end_at:]
           data = data.replace("#include <vulkan/vulkan.h>", "#include <vulkan/vulkan.h>\n#include <cstdio>", 1)
           path.write_text(data)
           PY
