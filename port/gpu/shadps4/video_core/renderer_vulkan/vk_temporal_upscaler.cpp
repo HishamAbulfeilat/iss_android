@@ -274,8 +274,25 @@ void TemporalUpscaler::OnDisplayPassStart() {
     // when no Scaleform/UI trigger was found. Never invent camera/motion
     // inputs: with the current ISS camera-signature mismatch this is inert.
     if (!Scaled() || ui_phase || done_this_frame || failed || !Active() ||
-        !ldr_target || !camera_motion.Ready()) {
+        !ldr_target) {
         return;
+    }
+    const bool calibrated_camera = camera_motion.Ready();
+    const auto& color = texture_cache.GetImage(ldr_target);
+    const bool object_fallback =
+        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        camera_motion.IssObjectMotionReady(color.info.size.width, color.info.size.height);
+    if (!calibrated_camera && !object_fallback) {
+        return;
+    }
+    if (object_fallback && !calibrated_camera) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            std::printf("FSR3 ISS: fullscreen frame boundary, valid native object-motion "
+                        "attachment %ux%u (no camera history; experimental)\n",
+                        color.info.size.width, color.info.size.height);
+        }
     }
     RunScaled();
     if (!ui_phase) {
@@ -1811,9 +1828,19 @@ void TemporalUpscaler::RunScaled() {
     info.outputSize = {ow, oh};
     info.frameTimeMilliseconds = frame_ms;
     info.preExposure = 1.0f;
+#ifdef ISS_ANDROID_BIONIC
+    // The FSR context needs finite camera metadata even when motion comes from
+    // per-object screen vectors. These values are conservative placeholders;
+    // they are NOT reconstructed camera parameters for inFAMOUS.
+    const bool camera_valid = camera_motion.Ready();
+    info.cameraNear = camera_valid ? camera_motion.Near() : 0.1f;
+    info.cameraFar = 3000.0f;
+    info.cameraVerticalFovRadians = camera_valid ? camera_motion.VerticalFov() : 1.04719755f;
+#else
     info.cameraNear = camera_motion.Near();
     info.cameraFar = 3000.0f;
     info.cameraVerticalFovRadians = camera_motion.VerticalFov();
+#endif
     info.viewSpaceToMeters = 1.0f;
     info.sharpness = std::min(settings.sharpness.load(), 1.0f);
     info.enableSharpening = settings.sharpen ? VK_TRUE : VK_FALSE;
