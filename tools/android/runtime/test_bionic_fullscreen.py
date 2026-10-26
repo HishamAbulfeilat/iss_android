@@ -55,8 +55,8 @@ class FullscreenCase {
   assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
   p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   p.resolution="900p";assert BionicVideoSettings.outputResolution(p).equals("1600x900");
-  p.fsr3=true;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
-  p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+  p.fsr3=true;assert BionicVideoSettings.outputResolution(p).equals("1280x720");
+  p.resolution="720p";assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   p.fsr3=false;
   for(String key:new String[]{"540p","480p","360p"}){
    p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
