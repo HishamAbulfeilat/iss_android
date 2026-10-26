@@ -586,6 +586,30 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             std::printf("FSR3 ISS HAL direct capability: format_checks=%u/%zu "
                         "vkGetPhysicalDeviceFormatProperties=%u\n",
                         supported, std::size(required_formats), unsigned(direct_fmt != nullptr));
+            VkPhysicalDeviceSubgroupProperties subgroup{};
+            subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+            VkPhysicalDeviceProperties2 properties{};
+            properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties.pNext = &subgroup;
+            const auto direct_properties =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2;
+            if (direct_properties) {
+                direct_properties(device_info.physicalDevice, &properties);
+            }
+            VkPhysicalDeviceFeatures2 features{};
+            features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            const auto direct_features =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2;
+            if (direct_features) {
+                direct_features(device_info.physicalDevice, &features);
+            }
+            std::printf("FSR3 ISS HAL subgroup: size=%u operations=0x%x stages=0x%x "
+                        "writeWithoutFormat=%u native_property_fn=%u native_feature_fn=%u\n",
+                        subgroup.subgroupSize, unsigned(subgroup.supportedOperations),
+                        unsigned(subgroup.supportedStages),
+                        unsigned(features.features.shaderStorageImageWriteWithoutFormat),
+                        unsigned(direct_properties != nullptr),
+                        unsigned(direct_features != nullptr));
 #else
             std::printf("Upscaler: FSR 3 context creation failed (code=%d)\n",
                         int(create_result));
