@@ -4,7 +4,7 @@ Subject: [PATCH] Expose FidelityFX interface and FSR3 context creation error cod
 diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
 --- a/src/ffx_vk_fsr3_portable.cpp
 +++ b/src/ffx_vk_fsr3_portable.cpp
-@@ -471,6 +471,10 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
+@@ -470,5 +470,8 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
          result->scratchSize, 1);
      if (ffxResult != FFX_OK) {
 +        std::printf("FSR3 ISS BACKEND stage=ffxGetInterfaceVK ffx_error=%u scratch_bytes=%zu\n",
@@ -13,7 +13,7 @@ diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
          std::free(result->scratchAllocation);
          delete result;
          return fromFfxResult(ffxResult);
-@@ -496,6 +500,11 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
+@@ -495,4 +498,9 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
      activeBackendCreateTracker = nullptr;
      if (ffxResult != FFX_OK) {
 +        std::printf("FSR3 ISS BACKEND stage=ffxFsr3UpscalerContextCreate ffx_error=%u "
