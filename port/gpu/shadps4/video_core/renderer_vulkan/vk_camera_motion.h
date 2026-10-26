@@ -29,7 +29,12 @@ public:
     CameraMotion(const Instance& instance, Scheduler& scheduler,
                  VideoCore::TextureCache& texture_cache, Runtime& runtime);
     ~CameraMotion();
-    void InvalidateHistory() { current.valid = previous.valid = false; }
+    void InvalidateHistory() {
+        current.valid = previous.valid = false;
+#ifdef ISS_ANDROID_BIONIC
+        native_previous_valid = native_motion_valid = false;
+#endif
+    }
     void SetObjectMotion(ObjectMotion* motion) noexcept {
         object_motion = motion;
     }
@@ -56,6 +61,13 @@ public:
     [[nodiscard]] bool IssObjectMotionReady(u32 width, u32 height) const noexcept {
         return depth_id && bool(ObjectMotionImage(width, height));
     }
+    // Latch the completed game-camera matrix and the preceding scene-frame
+    // matrix BEFORE the display pass starts the temporal upscale.
+    void PrepareIssNativeCamera();
+    [[nodiscard]] bool IssNativeCameraReady() const noexcept {
+        return native_motion_valid && Ready();
+    }
+    [[nodiscard]] float IssNativeFar() const noexcept { return native_far; }
 #endif
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
@@ -129,6 +141,19 @@ private:
     u64 android_camera_last_sequence = 0;
     u32 android_camera_log_count = 0;
     u32 android_camera_frame_updates = 0;
+    // Native inFAMOUS camera matrices are x86 row-major 4x4 float matrices,
+    // copied from the verified guest update; no guest pointers retained.
+    std::array<float, 16> native_previous_composite{};
+    std::array<float, 16> native_reprojection{};
+    u64 native_previous_object = 0;
+    u64 native_previous_sequence = 0;
+    bool native_previous_valid = false;
+    bool native_motion_valid = false;
+    float native_near = 10.0f;
+    float native_far = 10000000.0f;
+    float native_vertical_fov = 1.0f;
+    u32 native_frames_valid = 0;
+    u32 native_frames_rejected = 0;
     struct BindingSample {
         u64 shader_hash = 0;
         u32 slot = 0;
