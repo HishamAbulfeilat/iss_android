@@ -13,6 +13,21 @@ unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH L
 export PATH="$headers/bin:$PATH"
 export PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig:$prefix/share/pkgconfig"
 export PKG_CONFIG_PATH="$PKG_CONFIG_LIBDIR"
+# FSR-Vulkan is pinned as a submodule. The Bionic CI builds port/gpu
+# directly (not port/build.sh), so apply the Android-safe FFX pool fix here.
+# Without this the backend reserves millions of descriptors per type and
+# Turnip rejects the FSR3 context during initialization.
+fsr_module="$PWD/port/gpu/third_party/fsr-vulkan"
+fsr_pool_patch="$PWD/port/gpu/patches/fsr-vulkan/0004-ffx-vk-compact-descriptor-pool-for-mobile.patch"
+[[ -f "$fsr_module/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp" ]] || {
+  echo "Missing pinned FSR-Vulkan SDK in Android checkout" >&2
+  exit 1
+}
+if ! git -C "$fsr_module" apply --reverse --check "$fsr_pool_patch" 2>/dev/null; then
+  git -C "$fsr_module" apply --check "$fsr_pool_patch"
+  git -C "$fsr_module" apply "$fsr_pool_patch"
+fi
+echo "FSR3 Vulkan descriptor pool patch verified"
 mkdir -p "$build/.cmake/api/v1/query"
 touch "$build/.cmake/api/v1/query/codemodel-v2"
 cmake -S port/gpu -B "$build" -G Ninja \
