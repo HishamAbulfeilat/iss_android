@@ -1,11 +1,11 @@
 From: ISS Android Bionic
-Subject: [PATCH] FFX Vulkan 1.1.4: size descriptor pool for bound descriptors, not maximum resource arena
+Subject: [PATCH] Right-size FSR3 descriptor pools for 11 pipelines
 
----
 diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
 --- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
 +++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
-@@ -1606,12 +1606,19 @@
+@@ -1605,13 +1605,21 @@
+ 
          // create a global descriptor pool to hold all descriptors we'll need
          VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {};
 -        VkDescriptorPoolSize poolSizes[] = {
@@ -15,13 +15,14 @@ diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.
 -            { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
 -            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, backendContext->maxEffectContexts * FFX_MAX_RESOURCE_COUNT * FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME },
 -        };
-+        // Each allocated descriptor set consumes only the descriptors it binds;
-+        // FFX_MAX_RESOURCE_COUNT=512 is an arena maximum, not 512 descriptors
-+        // of EVERY type for EVERY set. The old estimate reserved 2,048,000
-+        // descriptors of each type for one context and exhausted mobile drivers.
-+        // Keep every queued-frame / repeated-pass descriptor set available.
++        // FSR3 1.1.4 creates 11 compute pipelines. Reserve room for 12;
++        // the SDK's FFX_MAX_PASS_COUNT=50 is an arena-wide upper bound, not
++        // the number of FSR3 passes. The overly large descriptor pool can be
++        // rejected on mobile Vulkan even when all formats are supported.
++        const uint32_t passSlots = effect == FFX_EFFECT_FSR3UPSCALER ? 12u
++                                                                      : FFX_MAX_PASS_COUNT;
 +        const uint32_t descriptorSetSlots = backendContext->maxEffectContexts *
-+            FFX_MAX_PASS_COUNT * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME;
++            passSlots * FFX_MAX_QUEUED_FRAMES * MAX_PIPELINE_USAGE_PER_FRAME;
 +        VkDescriptorPoolSize poolSizes[] = {
 +            { VK_DESCRIPTOR_TYPE_SAMPLER, descriptorSetSlots * 8 },
 +            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, descriptorSetSlots * 32 },
@@ -32,3 +33,12 @@ diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.
  
          descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
          descriptorPoolCreateInfo.pNext = nullptr;
+@@ -1618,7 +1626,7 @@
+         descriptorPoolCreateInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+         descriptorPoolCreateInfo.poolSizeCount = static_cast<uint32_t>(FFX_ARRAY_ELEMENTS(poolSizes));
+         descriptorPoolCreateInfo.pPoolSizes = poolSizes;
+-        descriptorPoolCreateInfo.maxSets = backendContext->maxEffectContexts * FFX_MAX_PASS_COUNT * MAX_PIPELINE_USAGE_PER_FRAME * FFX_MAX_QUEUED_FRAMES;
++        descriptorPoolCreateInfo.maxSets = descriptorSetSlots;
+ 
+         if (backendContext->vkFunctionTable.vkCreateDescriptorPool(backendContext->device, &descriptorPoolCreateInfo, nullptr, &backendContext->descriptorPool) != VK_SUCCESS) {
+             return FFX_ERROR_BACKEND_API_ERROR;
