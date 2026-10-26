@@ -24,7 +24,9 @@ layout(push_constant) uniform Constants {
     vec2 size;         // pixels
     vec2 jitter;       // current viewport shift in render pixels (x right, y down)
     vec2 previous_jitter;
-    uint mode;         // motion: 1 = object motion vectors available; debug: 0 motion, 1 raw
+    uint mode;         // motion: 1 = original camera + object, 2 = objects only
+                       //         3 = ISS native camera + object, 4 = ISS camera only
+                       //         debug: 0 motion, 1 raw
                        // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|
 };
 
@@ -39,6 +41,47 @@ void main() {
     // Bloodborne 864-byte global camera structure has not been found in this game.
     // Do not reconstruct any world position or project with an invalid camera.
     // Uncovered/occluded pixels get zero motion instead of NaNs or invented camera motion.
+    // ISS camera mode: the verified game 4x4 matrices were multiplied on the
+    // host as previous_composite * inverse(current_composite), ROW-MAJOR.
+    // They map CURRENT NDC clip coordinates into PREVIOUS clip coordinates.
+    // The fourth row occupies the old 'proj' push-constant slot. Never use
+    // Bloodborne's affine/3000-far-plane assumptions for this mode.
+    if (mode == 3u || mode == 4u) {
+        const vec2 uv = (vec2(pixel) + 0.5) / size;
+        const vec4 current_clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0,
+                                       depth, 1.0);
+        const vec4 previous_clip = vec4(
+            dot(reproject[0], current_clip),
+            dot(reproject[1], current_clip),
+            dot(reproject[2], current_clip),
+            dot(proj, current_clip));
+        vec2 result = vec2(0.0);
+        if (!any(isnan(previous_clip)) && !any(isinf(previous_clip)) &&
+            abs(previous_clip.w) > 1.0e-5) {
+            const vec2 prev_ndc = previous_clip.xy / previous_clip.w;
+            const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5,
+                                      0.5 - prev_ndc.y * 0.5);
+            const vec2 camera_motion = (prev_uv - uv) * size;
+            if (!any(isnan(camera_motion)) && !any(isinf(camera_motion)) &&
+                all(lessThan(abs(camera_motion), size * 0.5))) {
+                result = camera_motion;
+            }
+        }
+        // Per-object vectors take priority only at the exact scene depth;
+        // all uncovered pixels receive native camera reprojected motion.
+        if (mode == 3u) {
+            const vec4 object_motion = texelFetch(object_tex, pixel, 0);
+            const float threshold = max(2e-7, (1.0 - depth) * 0.01);
+            if (object_motion.b > 0.99 &&
+                abs(object_motion.a - depth) < threshold &&
+                !any(isnan(object_motion.rg)) &&
+                !any(isinf(object_motion.rg))) {
+                result = object_motion.rg;
+            }
+        }
+        imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
+        return;
+    }
     if (mode == 2u) {
         const vec4 object_motion = texelFetch(object_tex, pixel, 0);
         const float depth_threshold = max(2e-7, (1.0 - depth) * 0.01);
