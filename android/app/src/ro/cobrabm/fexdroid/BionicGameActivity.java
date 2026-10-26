@@ -117,18 +117,17 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   boolean fsr3=prefs.getBoolean("fsr3",false);
   e.put("TLG_UPSCALER",fsr3?"fsr3":"none");
   if(fsr3){
-   int preset=Math.max(0,Math.min(3,prefs.getInt("fsr3_preset",1)));
-   e.put("TLG_UPSCALE_PRESET",Integer.toString(preset));
+   // The upscaler exclusively owns render resolution while active:
+   //   Performance 640x360 -> 1280x720; Quality 960x540 -> 1280x720.
+   // The corresponding executable patch is still required internally, but
+   // manual resolution-patch preferences must not be combined with it.
+   e.put("TLG_UPSCALE_PRESET",Integer.toString(BionicVideoSettings.fsrEnginePreset(prefs)));
    e.put("TLG_FSR_SHARPNESS","0.25");
    e.put("TLG_REACTIVE","0");
    e.put("TLG_JITTER","1");
-   String renderResolution=prefs.getString("internal_res","native");
-   String internal="720p".equals(renderResolution)?"1280x720":"900p".equals(renderResolution)?"1600x900":
-     "540p".equals(renderResolution)?"960x540":"480p".equals(renderResolution)?"854x480":
-     "360p".equals(renderResolution)?"640x360":null;
-   if(internal!=null)e.put("TLG_RENDER_RES",internal);
+   e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
   }
-  String resolution=prefs.getString("internal_res","native");
+  String resolution=BionicVideoSettings.effectiveResolutionPatch(prefs);
   String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
   if(resolutionPatch!=null)patches.add(resolutionPatch);
   if(prefs.getBoolean("patch_motion_blur",false))patches.add("Disable motion blur");
