@@ -277,6 +277,10 @@ void TemporalUpscaler::OnDisplayPassStart() {
         !ldr_target) {
         return;
     }
+    // Scene depth and the completed game's camera must belong to the SAME
+    // frame. Latch a native CUSA00004 camera pair here, BEFORE RunScaled()
+    // records motion; OnDisplayPass runs too late (after RunScaled).
+    camera_motion.PrepareIssNativeCamera();
     const bool calibrated_camera = camera_motion.Ready();
     const auto& color = texture_cache.GetImage(ldr_target);
     const bool object_fallback =
@@ -1990,7 +1994,8 @@ void TemporalUpscaler::RunScaled() {
     // they are NOT reconstructed camera parameters for inFAMOUS.
     const bool camera_valid = camera_motion.Ready();
     info.cameraNear = camera_valid ? camera_motion.Near() : 0.1f;
-    info.cameraFar = 3000.0f;
+    info.cameraFar = camera_motion.IssNativeCameraReady() ?
+                         camera_motion.IssNativeFar() : 3000.0f;
     info.cameraVerticalFovRadians = camera_valid ? camera_motion.VerticalFov() : 1.04719755f;
 #else
     info.cameraNear = camera_motion.Near();
