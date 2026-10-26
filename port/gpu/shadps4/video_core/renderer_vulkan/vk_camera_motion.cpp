@@ -181,6 +181,17 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     bool object_valid = false;
     const vk::ImageView object_view = object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(cmdbuf, width, height, object_valid) : depth_view;
+#ifdef ISS_ANDROID_BIONIC
+    const bool object_only = !Ready() && object_valid;
+    if (object_only) {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            std::printf("FSR3 ISS: using depth-matched object motion without camera "
+                        "(experimental, uncovered pixels use zero vectors)\n");
+        }
+    }
+#endif
     const PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
         .proj = current.proj,
@@ -188,7 +199,11 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
+#ifdef ISS_ANDROID_BIONIC
+        .mode = object_only ? 2u : (object_valid ? 1u : 0u),
+#else
         .mode = object_valid ? 1u : 0u,
+#endif
     };
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
