@@ -1,0 +1,25 @@
+From: ISS Android Bionic
+Subject: [PATCH] Expose FidelityFX interface and FSR3 context creation error codes
+
+diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
+--- a/src/ffx_vk_fsr3_portable.cpp
++++ b/src/ffx_vk_fsr3_portable.cpp
+@@ -471,6 +471,10 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
+         result->scratchSize, 1);
+     if (ffxResult != FFX_OK) {
++        std::printf("FSR3 ISS BACKEND stage=ffxGetInterfaceVK ffx_error=%u scratch_bytes=%zu\n",
++                    static_cast<unsigned>(ffxResult), result->scratchSize);
++        std::fflush(stdout);
+         std::free(result->scratchAllocation);
+         delete result;
+         return fromFfxResult(ffxResult);
+@@ -496,6 +500,11 @@ extern "C" FfxVkPortableResult ffxVkPortableUpscaleContextCreate(
+     activeBackendCreateTracker = nullptr;
+     if (ffxResult != FFX_OK) {
++        std::printf("FSR3 ISS BACKEND stage=ffxFsr3UpscalerContextCreate ffx_error=%u "
++                    "backend_context_created=%u scratch_bytes=%zu\n",
++                    static_cast<unsigned>(ffxResult), unsigned(createTracker.created),
++                    result->scratchSize);
++        std::fflush(stdout);
+         if (createTracker.created)
+             ffxFsr3UpscalerContextDestroy(&result->ffxContext);
