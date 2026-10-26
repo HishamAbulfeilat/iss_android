@@ -264,10 +264,14 @@ void CameraMotion::PrepareIssNativeCamera() {
     native_near = sample.near_plane;
     native_far = sample.far_plane;
     native_vertical_fov = sample.vertical_fov;
+
+    // A verified native camera sample is a valid frame anchor even when
+    // the PREVIOUS frame is not yet available. The first sample seeds the
+    // temporal history; it is intentionally NOT ready for reprojection.
+    // Without this flag OnDisplayPass calls InvalidateHistory(), destroys the
+    // seed every frame, and native_motion_valid can never become true.
+    frame_has_camera = true;
     if (native_motion_valid) {
-        // This is a real camera pair for the current G-buffer scene.
-        // Do not let OnDisplayPass invalidate it as missing 864-byte constants.
-        frame_has_camera = true;
         previous.valid = current.valid = true;
         ++native_frames_valid;
     } else {
