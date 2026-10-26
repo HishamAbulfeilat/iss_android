@@ -145,6 +145,10 @@ private:
     // copied from the verified guest update; no guest pointers retained.
     std::array<float, 16> native_previous_composite{};
     std::array<float, 16> native_reprojection{};
+    // Game-native projection's subpixel NDC shift (row-vector, row 2).
+    // The guest's built-in jitter must not appear as camera-object motion.
+    std::array<float, 2> native_previous_jitter_ndc{};
+    std::array<float, 2> native_jitter_delta_ndc{};
     u64 native_previous_object = 0;
     u64 native_previous_sequence = 0;
     bool native_previous_valid = false;
