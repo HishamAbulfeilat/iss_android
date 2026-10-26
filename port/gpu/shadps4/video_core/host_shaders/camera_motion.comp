@@ -48,8 +48,12 @@ void main() {
     // Bloodborne's affine/3000-far-plane assumptions for this mode.
     if (mode == 3u || mode == 4u) {
         const vec2 uv = (vec2(pixel) + 0.5) / size;
-        const vec4 current_clip = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0,
-                                       depth, 1.0);
+        // Viewport jitter is applied by the Vulkan rasterizer, separately
+        // from the native game's projection matrix. Remove that offset from
+        // the clip reconstruction, just as the original camera shader does.
+        const vec2 scene_uv = uv - jitter / size;
+        const vec4 current_clip = vec4(scene_uv.x * 2.0 - 1.0,
+                                       1.0 - scene_uv.y * 2.0, depth, 1.0);
         const vec4 previous_clip = vec4(
             dot(reproject[0], current_clip),
             dot(reproject[1], current_clip),
@@ -61,7 +65,7 @@ void main() {
             const vec2 prev_ndc = previous_clip.xy / previous_clip.w;
             const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5,
                                       0.5 - prev_ndc.y * 0.5);
-            const vec2 camera_motion = (prev_uv - uv) * size;
+            const vec2 camera_motion = (prev_uv - scene_uv) * size;
             if (!any(isnan(camera_motion)) && !any(isinf(camera_motion)) &&
                 all(lessThan(abs(camera_motion), size * 0.5))) {
                 result = camera_motion;
