@@ -226,6 +226,7 @@ void CameraMotion::PrepareIssNativeCamera() {
     }
     if (!inverse_ok) {
         native_previous_valid = native_motion_valid = false;
+        current.valid = previous.valid = false;
         ++native_frames_rejected;
         return;
     }
@@ -450,7 +451,7 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         static_cast<unsigned long long>(android_camera_last_sequence),
                         android_camera_log_count);
             std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
-                        "current_native=%u\\n",
+                        "current_native=%u\n",
                         native_frames_valid, native_frames_rejected,
                         unsigned(native_motion_valid));
             native_frames_valid = native_frames_rejected = 0;
