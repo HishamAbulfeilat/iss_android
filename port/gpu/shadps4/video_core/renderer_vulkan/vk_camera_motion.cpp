@@ -156,10 +156,16 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
 CameraMotion::~CameraMotion() = default;
 
 float CameraMotion::VerticalFov() const noexcept {
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) return native_vertical_fov;
+#endif
     return 2.0f * std::atan(1.0f / current.proj[1]);
 }
 
 float CameraMotion::Near() const noexcept {
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) return native_near;
+#endif
     // depth = zs + zo / z is 0 at the near plane.
     return -current.proj[3] / current.proj[2];
 }
@@ -179,6 +185,96 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
                                                       : vk::Image{};
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void CameraMotion::PrepareIssNativeCamera() {
+    // The fullscreen upscale consumes this game's native scene depth.
+    // Read the latest completed camera update immediately before that pass,
+    // not at OnDisplayPass (which runs after the upscale).
+    if (!for_upscaler || !depth_id) return;
+    TlgIssCameraSnapshot sample{};
+    const u64 sequence = tlggpu_iss_camera_read(&sample);
+    if (!sequence || sequence == native_previous_sequence) return;
+    const bool scalars_ok =
+        std::isfinite(sample.near_plane) && sample.near_plane > 0.0f &&
+        std::isfinite(sample.far_plane) && sample.far_plane > sample.near_plane &&
+        std::isfinite(sample.vertical_fov) && sample.vertical_fov > 0.1f &&
+        sample.vertical_fov < 3.14f &&
+        std::isfinite(sample.aspect) && sample.aspect > 0.2f && sample.aspect < 8.0f;
+    bool inverse_ok = scalars_ok && sample.guest_object != 0;
+    if (inverse_ok) {
+        // Verified against an actual CUSA00004 camera dump: the matrices at
+        // +0x430 and +0x4b0 multiply to identity in ROW-MAJOR order.
+        for (int row = 0; row < 4 && inverse_ok; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                double value = 0.0;
+                for (int k = 0; k < 4; ++k) {
+                    const float a = sample.composite[row * 4 + k];
+                    const float b = sample.inverse[k * 4 + col];
+                    if (!std::isfinite(a) || !std::isfinite(b)) {
+                        inverse_ok = false;
+                        break;
+                    }
+                    value += double(a) * double(b);
+                }
+                if (!inverse_ok || !std::isfinite(value) ||
+                    std::abs(value - (row == col ? 1.0 : 0.0)) > 0.02) {
+                    inverse_ok = false;
+                    break;
+                }
+            }
+        }
+    }
+    if (!inverse_ok) {
+        native_previous_valid = native_motion_valid = false;
+        ++native_frames_rejected;
+        return;
+    }
+
+    const bool same_camera = native_previous_valid &&
+                             native_previous_object == sample.guest_object;
+    // Frame IDs advance by several camera-update calls per actual scene frame.
+    // Large gaps (menu/loading/pause) must reset temporal history.
+    const bool consecutive = native_previous_sequence &&
+                             sequence > native_previous_sequence &&
+                             sequence - native_previous_sequence <= 64;
+    native_motion_valid = same_camera && consecutive;
+    if (native_motion_valid) {
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                double value = 0.0;
+                for (int k = 0; k < 4; ++k) {
+                    value += double(native_previous_composite[row * 4 + k]) *
+                             double(sample.inverse[k * 4 + col]);
+                }
+                if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
+                    native_motion_valid = false;
+                    break;
+                }
+                native_reprojection[row * 4 + col] = float(value);
+            }
+            if (!native_motion_valid) break;
+        }
+    }
+    native_previous_composite = sample.composite;
+    native_previous_object = sample.guest_object;
+    native_previous_sequence = sequence;
+    native_previous_valid = true;
+    native_near = sample.near_plane;
+    native_far = sample.far_plane;
+    native_vertical_fov = sample.vertical_fov;
+    if (native_motion_valid) {
+        // This is a real camera pair for the current G-buffer scene.
+        // Do not let OnDisplayPass invalidate it as missing 864-byte constants.
+        frame_has_camera = true;
+        previous.valid = current.valid = true;
+        ++native_frames_valid;
+    } else {
+        previous.valid = current.valid = false;
+        ++native_frames_rejected;
+    }
+}
+#endif
+
 void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view,
                                 vk::ImageView motion_view, u32 width, u32 height) {
     bool object_valid = false;
@@ -195,7 +291,7 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         }
     }
 #endif
-    const PushConstants push{
+    PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
         .proj = current.proj,
         .prev_proj = previous.proj,
@@ -203,11 +299,22 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
         .jitter = jitter,
         .previous_jitter = previous_jitter,
 #ifdef ISS_ANDROID_BIONIC
-        .mode = object_only ? 2u : (object_valid ? 1u : 0u),
+        .mode = native_motion_valid ? 3u :
+                (object_only ? 2u : (object_valid ? 1u : 0u)),
 #else
         .mode = object_valid ? 1u : 0u,
 #endif
     };
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) {
+        // Reuse existing 80-byte push-constant space for the full 4x4
+        // current-clip -> previous-clip matrix. No larger Vulkan push range.
+        std::memcpy(push.reproject.data(), native_reprojection.data(),
+                    12 * sizeof(float));
+        std::memcpy(push.proj.data(), native_reprojection.data() + 12,
+                    4 * sizeof(float));
+    }
+#endif
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
     const vk::DescriptorImageInfo motion_info{.imageView = motion_view,
@@ -341,6 +448,11 @@ void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
                         android_camera_frame_updates,
                         static_cast<unsigned long long>(android_camera_last_sequence),
                         android_camera_log_count);
+            std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
+                        "current_native=%u\\n",
+                        native_frames_valid, native_frames_rejected,
+                        unsigned(native_motion_valid));
+            native_frames_valid = native_frames_rejected = 0;
             android_camera_frame_updates = 0;
         }
 
