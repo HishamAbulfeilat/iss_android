@@ -402,6 +402,29 @@ extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
     out->faults_handled = TlgFreeze::faults_handled.load(std::memory_order_relaxed);
 }
 
+// FEX pushes a completed camera snapshot here from the guest update routine.
+// No address survives the call: the four matrices and scalar fields are copied.
+// The reader takes one frame-consistent snapshot under the same short lock.
+namespace {
+std::mutex iss_camera_mutex;
+TlgIssCameraSnapshot iss_camera_latest{};
+}
+
+extern "C" void tlggpu_iss_camera_publish(const TlgIssCameraSnapshot* sample) {
+    if (!sample) return;
+    std::lock_guard lock{iss_camera_mutex};
+    const uint64_t next = iss_camera_latest.sequence + 1;
+    iss_camera_latest = *sample;
+    iss_camera_latest.sequence = next;
+}
+
+extern "C" uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot* sample) {
+    if (!sample) return 0;
+    std::lock_guard lock{iss_camera_mutex};
+    *sample = iss_camera_latest;
+    return sample->sequence;
+}
+
 extern "C" unsigned tlggpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }
