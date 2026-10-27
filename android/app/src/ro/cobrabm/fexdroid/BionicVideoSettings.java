@@ -29,6 +29,18 @@ final class BionicVideoSettings {
   // FSR3 fixed-render session: quality=1, performance=3.
   return "performance".equals(fsrMode(prefs))?3:1;
  }
+ // 0–200%: 0–100% is the FidelityFX RCAS pass, 101–200% additionally
+ // runs a post-FSR sharpening pass before game UI is composed. 25% preserves
+ // the previous fixed Android setting for existing installs.
+ static int fsrSharpnessPercent(android.content.SharedPreferences prefs){
+  return Math.max(0,Math.min(200,prefs.getInt("fsr3_sharpness_pct",25)));
+ }
+ static boolean fsrSharpenEnabled(android.content.SharedPreferences prefs){
+  return prefs.getBoolean("fsr3_sharpen_enabled",true);
+ }
+ static String fsrSharpnessValue(android.content.SharedPreferences prefs){
+  return Float.toString(fsrSharpnessPercent(prefs)/100.0f);
+ }
  static String outputResolution(android.content.SharedPreferences prefs){
   String patch=prefs.getString("internal_res","native");
   if(prefs.getBoolean("fsr3",false))return "1280x720";
@@ -93,6 +105,35 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(fsrPreset);
+  CheckBox sharpening=new CheckBox(activity);
+  sharpening.setText(AppLanguage.text("Enable FSR sharpening","Ativar nitidez do FSR"));
+  sharpening.setChecked(fsrSharpenEnabled(prefs));l.addView(sharpening);
+  TextView sharpenLabel=new TextView(activity);l.addView(sharpenLabel);
+  SeekBar sharpenSlider=new SeekBar(activity);
+  sharpenSlider.setMax(200);
+  sharpenSlider.setProgress(fsrSharpnessPercent(prefs));l.addView(sharpenSlider);
+  TextView sharpenHint=new TextView(activity);
+  sharpenHint.setText(AppLanguage.text(
+   "0–100%: FSR RCAS sharpening. Above 100%: extra pass before the game HUD. High values can cause halos. Restart the game to apply.",
+   "0–100%: nitidez RCAS do FSR. Acima de 100%: etapa extra antes da HUD do jogo. Valores altos podem causar halos. Reinicie o jogo para aplicar."));
+  l.addView(sharpenHint);
+  Runnable updateSharpText=()->sharpenLabel.setText(
+    AppLanguage.text("Sharpening strength","Intensidade da nitidez")+": "+
+    sharpenSlider.getProgress()+"%"+(sharpenSlider.getProgress()>100?" · Extra":""));
+  sharpenSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+   public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
+    if(fromUser)prefs.edit().putInt("fsr3_sharpness_pct",progress).apply();
+    updateSharpText.run();
+   }
+   public void onStartTrackingTouch(SeekBar bar){}
+   public void onStopTrackingTouch(SeekBar bar){}
+  });
+  sharpening.setOnCheckedChangeListener((button,checked)->{
+   prefs.edit().putBoolean("fsr3_sharpen_enabled",checked).apply();
+   sharpenSlider.setEnabled(checked&&fsr.isChecked());
+   sharpenLabel.setEnabled(checked&&fsr.isChecked());
+  });
+  updateSharpText.run();
   TextView patchLabel=new TextView(activity);patchLabel.setText(AppLanguage.text("Internal patches — verified executable", "Patches internos — executável validado"));patchLabel.setTextSize(18);patchLabel.setPadding(0,16,0,8);l.addView(patchLabel);
   Spinner resolutionPatch=new Spinner(activity);
   String[] keys={"native","720p","900p","540p","480p","360p"};
@@ -116,6 +157,10 @@ final class BionicVideoSettings {
   Runnable syncFsr=()->{
    boolean active=fsr.isChecked();
    fsrPreset.setEnabled(active);fsrPresetLabel.setEnabled(active);
+   sharpening.setEnabled(active);
+   sharpenSlider.setEnabled(active&&sharpening.isChecked());
+   sharpenLabel.setEnabled(active&&sharpening.isChecked());
+   sharpenHint.setEnabled(active);
    resolutionPatch.setEnabled(!active);
    resolutionPatch.setAlpha(active?0.4f:1f);
    resolutionLocked.setVisibility(active?android.view.View.VISIBLE:android.view.View.GONE);
