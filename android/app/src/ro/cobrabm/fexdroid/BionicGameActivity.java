@@ -122,7 +122,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    // The corresponding executable patch is still required internally, but
    // manual resolution-patch preferences must not be combined with it.
    e.put("TLG_UPSCALE_PRESET",Integer.toString(BionicVideoSettings.fsrEnginePreset(prefs)));
-   e.put("TLG_FSR_SHARPNESS","0.25");
+   e.put("TLG_FSR_SHARPNESS",BionicVideoSettings.fsrSharpnessValue(prefs));
+   e.put("TLG_FSR_SHARPEN",BionicVideoSettings.fsrSharpenEnabled(prefs)?"1":"0");
    e.put("TLG_REACTIVE","0");
    e.put("TLG_JITTER","1");
    e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
