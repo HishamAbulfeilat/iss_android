@@ -2104,7 +2104,7 @@ void TemporalUpscaler::RunScaled() {
         if (!native_jitter_reported && camera_motion.IssNativeCameraReady()) {
             native_jitter_reported = true;
             std::printf("FSR3 ISS jitter aligned: native=%.3f,%.3f viewport=%.3f,%.3f "
-                        "sdk=%.3f,%.3f (render pixels)\\n",
+                        "sdk=%.3f,%.3f (render pixels)\n",
                         native_jitter_pixels[0], native_jitter_pixels[1],
                         sign * jitter[0], sign * jitter[1],
                         info.jitterOffset.x, info.jitterOffset.y);
