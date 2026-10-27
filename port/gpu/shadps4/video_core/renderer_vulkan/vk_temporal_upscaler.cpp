@@ -339,6 +339,26 @@ bool TemporalUpscaler::OnFrameStart() {
                     d.native_viewport_draws, d.rgba_ui_candidates, d.camera_ready_draws,
                     d.ldr_match_draws, d.dispatched, render_width, render_height,
                     target_width, target_height, TlgSettings::RenderPreset());
+        // Single bounded line per 180 frames: determines whether softness
+        // comes from guest scene/UI resolution or disabled FSR sharpening.
+        // These are counters/metadata only: no extra GPU copy or shader pass.
+        const float strength = std::clamp(settings.sharpness.load(), 0.0f, 2.0f);
+        std::printf("FSR3 ISS visual: source=%ux%u fmt=%u depth=%ux%u fmt=%u "
+                    "output=%ux%u ui_only=%u ui_draws_after_fsr=%u "
+                    "color_redirects=%u sampled_redirects=%u "
+                    "sharpen_enabled=%u strength=%.2f sdk_rcas=%.2f "
+                    "rcas_dispatches=%u extra_strength=%.2f extra_dispatches=%u "
+                    "jitter=%u camera_native=%u depth_reversed=1\n",
+                    d.source_width, d.source_height, d.source_format,
+                    d.depth_width, d.depth_height, d.depth_format,
+                    target_width, target_height, d.ui_only_copies,
+                    d.ui_draws_after_fsr, d.redirected_color, d.redirected_samples,
+                    unsigned(settings.sharpen.load()), strength,
+                    settings.sharpen.load() ? std::min(strength, 1.0f) : 0.0f,
+                    d.rcas_dispatches,
+                    settings.sharpen.load() ? std::max(0.0f, strength - 1.0f) : 0.0f,
+                    d.extra_sharpen_dispatches, unsigned(settings.jitter.load()),
+                    unsigned(camera_motion.IssNativeCameraReady()));
         android_fsr_probe = {};
     }
     if (!android_ui_samples_printed && android_ui_sample_count &&
@@ -1043,6 +1063,9 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
     cmdbuf.pushConstants(*taa_sharpen_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(extra), &extra);
     cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.extra_sharpen_dispatches;
+#endif
     image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                   vk::AccessFlagBits2::eShaderStorageWrite, all, rw);
 }
@@ -1546,6 +1569,9 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         return;
     }
     if (ui_phase) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.ui_draws_after_fsr;
+#endif
         // A UI movie can start without stencil and enable it for later text/masks.
         if (color == ui_color && depth && depth != ui_depth) {
             EnsureUiResources(ui_width, ui_height, ui_format,
@@ -1727,6 +1753,9 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
 }
 
 void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId depth_id) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.ui_only_copies;
+#endif
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->Mark(0xF5A1'0000ull, [] { return std::string{"upscaler RunUiOnly"}; });
     }
@@ -1809,6 +1838,14 @@ void TemporalUpscaler::RunScaled() {
     if (depth.info.size.width != iw || depth.info.size.height != ih || w > ow || h > oh) {
         return;
     }
+#ifdef ISS_ANDROID_BIONIC
+    android_fsr_probe.source_width = iw;
+    android_fsr_probe.source_height = ih;
+    android_fsr_probe.depth_width = depth.info.size.width;
+    android_fsr_probe.depth_height = depth.info.size.height;
+    android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
+    android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+#endif
 #ifdef ISS_ANDROID_BIONIC
     // Some scenes complete from UiComposition::Background::Temporal rather
     // than the fullscreen display boundary. Both routes must latch the camera
@@ -2039,6 +2076,8 @@ void TemporalUpscaler::RunScaled() {
         dispatched_last_frame = true;
 #ifdef ISS_ANDROID_BIONIC
         ++android_fsr_probe.dispatched;
+        if (settings.sharpen.load() && settings.sharpness.load() > 0.0f)
+            ++android_fsr_probe.rcas_dispatches;
 #endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
     }
@@ -2080,6 +2119,9 @@ vk::ImageView TemporalUpscaler::Mirror(vk::Image image, std::vector<MirrorView>&
 bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                                      const VideoCore::ImageViewInfo& view_info, Target& target) {
     if (ui_phase && color == ui_color) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.redirected_color;
+#endif
         target = {Mirror(vk::Image(ui_image), ui_views, view_info.format, {}),
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
         return true;
@@ -2172,6 +2214,9 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
             cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
         });
     }
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.redirected_samples;
+#endif
     view = Mirror(vk::Image(ui_image), ui_views, info.format, info.mapping);
     layout = vk::ImageLayout::eGeneral;
     return true;
