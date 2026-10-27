@@ -68,6 +68,15 @@ public:
         return native_motion_valid && Ready();
     }
     [[nodiscard]] float IssNativeFar() const noexcept { return native_far; }
+    // inFAMOUS already offsets its scene projection by a native 2-phase TAA jitter.
+    // The FSR dispatch must report that displacement as well as the host viewport
+    // jitter, or temporal accumulation samples the wrong subpixel positions.
+    // Native projection indices 8/9 are NDC shifts: x right, y up.
+    [[nodiscard]] std::array<float, 2> IssNativeJitterPixels(u32 width, u32 height) const noexcept {
+        if (!native_previous_valid || !frame_has_camera) return {};
+        return {native_previous_jitter_ndc[0] * (0.5f * float(width)),
+                -native_previous_jitter_ndc[1] * (0.5f * float(height))};
+    }
 #endif
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
