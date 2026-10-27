@@ -243,6 +243,8 @@ private:
         u32 ui_draws_after_fsr = 0;
         u32 redirected_color = 0;
         u32 redirected_samples = 0;
+        u32 native_camera_dispatches = 0;
+        u32 fallback_motion_dispatches = 0;
         u32 rcas_dispatches = 0;
         u32 extra_sharpen_dispatches = 0;
         u32 source_width = 0, source_height = 0;
