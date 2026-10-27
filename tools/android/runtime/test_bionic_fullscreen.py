@@ -16,7 +16,9 @@ class FullscreenTests(unittest.TestCase):
             ' static boolean fullscreen(', ' static String gameDisplayMode(',
             ' static String fsrMode(', ' static String fsrInternalResolution(',
             ' static String effectiveResolutionPatch(', ' static String fsrInputSize(',
-            ' static int fsrEnginePreset(', ' static String outputResolution(',
+            ' static int fsrEnginePreset(', ' static int fsrSharpnessPercent(',
+            ' static boolean fsrSharpenEnabled(', ' static String fsrSharpnessValue(',
+            ' static String outputResolution(',
             ' static String internalPatchName('))
         activity=(ROOT/'android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java').read_text()
         apply=method(activity,' private void applyFullscreen()')
@@ -24,10 +26,10 @@ class FullscreenTests(unittest.TestCase):
 import android.content.SharedPreferences;
 class FullscreenCase {
  static class Prefs implements SharedPreferences {
-  Boolean enabled=null;boolean fsr3=false;String mode="stretch",resolution="native",fsrMode=null;int oldFsrPreset=1;
-  public boolean getBoolean(String k,boolean fallback){if(k.equals("fsr3"))return fsr3;assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
+  Boolean enabled=null;boolean fsr3=false, sharpen=true;String mode="stretch",resolution="native",fsrMode=null;int oldFsrPreset=1, sharpness=25;
+  public boolean getBoolean(String k,boolean fallback){if(k.equals("fsr3"))return fsr3;if(k.equals("fsr3_sharpen_enabled"))return sharpen;assert k.equals("fullscreen");return enabled==null?fallback:enabled;}
   public String getString(String k,String fallback){if(k.equals("internal_res"))return resolution;if(k.equals("fsr3_mode"))return fsrMode;assert k.equals("display_mode");return mode;}
-  public int getInt(String k,int fallback){assert k.equals("fsr3_preset");return oldFsrPreset;}
+  public int getInt(String k,int fallback){if(k.equals("fsr3_sharpness_pct"))return sharpness;assert k.equals("fsr3_preset");return oldFsrPreset;}
  }
  static class BionicVideoSettings {
 ''' + policy + r'''
@@ -77,6 +79,18 @@ class FullscreenCase {
   p.fsrMode=null;p.oldFsrPreset=3;
   assert BionicVideoSettings.fsrMode(p).equals("performance");
   p.oldFsrPreset=1;assert BionicVideoSettings.fsrMode(p).equals("quality");
+  assert BionicVideoSettings.fsrSharpenEnabled(p);
+  assert BionicVideoSettings.fsrSharpnessPercent(p)==25;
+  assert BionicVideoSettings.fsrSharpnessValue(p).equals("0.25");
+  p.sharpness=150;
+  assert BionicVideoSettings.fsrSharpnessValue(p).equals("1.5");
+  p.sharpness=-10;
+  assert BionicVideoSettings.fsrSharpnessPercent(p)==0;
+  p.sharpness=300;
+  assert BionicVideoSettings.fsrSharpnessPercent(p)==200;
+  assert BionicVideoSettings.fsrSharpnessValue(p).equals("2.0");
+  p.sharpen=false;
+  assert !BionicVideoSettings.fsrSharpenEnabled(p);
   p.fsr3=false;
   assert BionicVideoSettings.effectiveResolutionPatch(p).equals("720p");
   for(String key:new String[]{"540p","480p","360p"}){
