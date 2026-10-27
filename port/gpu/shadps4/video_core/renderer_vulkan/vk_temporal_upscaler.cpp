@@ -348,7 +348,7 @@ bool TemporalUpscaler::OnFrameStart() {
                     "color_redirects=%u sampled_redirects=%u "
                     "sharpen_enabled=%u strength=%.2f sdk_rcas=%.2f "
                     "rcas_dispatches=%u extra_strength=%.2f extra_dispatches=%u "
-                    "jitter=%u camera_native=%u depth_reversed=1\n",
+                    "jitter=%u native_camera_dispatches=%u fallback_motion_dispatches=%u depth_reversed=1\n",
                     d.source_width, d.source_height, d.source_format,
                     d.depth_width, d.depth_height, d.depth_format,
                     target_width, target_height, d.ui_only_copies,
@@ -358,7 +358,7 @@ bool TemporalUpscaler::OnFrameStart() {
                     d.rcas_dispatches,
                     settings.sharpen.load() ? std::max(0.0f, strength - 1.0f) : 0.0f,
                     d.extra_sharpen_dispatches, unsigned(settings.jitter.load()),
-                    unsigned(camera_motion.IssNativeCameraReady()));
+                    d.native_camera_dispatches, d.fallback_motion_dispatches);
         android_fsr_probe = {};
     }
     if (!android_ui_samples_printed && android_ui_sample_count &&
@@ -2076,6 +2076,14 @@ void TemporalUpscaler::RunScaled() {
         dispatched_last_frame = true;
 #ifdef ISS_ANDROID_BIONIC
         ++android_fsr_probe.dispatched;
+        // Sample the camera state at the ACTUAL successful FSR dispatch,
+        // not OnFrameStart, where the previous frame's camera is invalidated.
+        // This is a per-scene result and makes the 180-frame summary truthful.
+        if (camera_motion.IssNativeCameraReady()) {
+            ++android_fsr_probe.native_camera_dispatches;
+        } else {
+            ++android_fsr_probe.fallback_motion_dispatches;
+        }
         if (settings.sharpen.load() && settings.sharpness.load() > 0.0f)
             ++android_fsr_probe.rcas_dispatches;
 #endif
