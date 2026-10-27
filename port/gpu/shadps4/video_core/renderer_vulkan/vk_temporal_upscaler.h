@@ -239,6 +239,15 @@ private:
         u32 camera_ready_draws = 0;
         u32 ldr_match_draws = 0;
         u32 dispatched = 0;
+        u32 ui_only_copies = 0;
+        u32 ui_draws_after_fsr = 0;
+        u32 redirected_color = 0;
+        u32 redirected_samples = 0;
+        u32 rcas_dispatches = 0;
+        u32 extra_sharpen_dispatches = 0;
+        u32 source_width = 0, source_height = 0;
+        u32 depth_width = 0, depth_height = 0;
+        u32 source_format = 0, depth_format = 0;
     } android_fsr_probe{};
     struct AndroidUiSample {
         u64 vertex_hash = 0;
