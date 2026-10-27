@@ -257,7 +257,8 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
-        {"TLG_FSR_SHARPNESS", "sharpness"},        {"TLG_JITTER", "jitter"},
+        {"TLG_FSR_SHARPNESS", "sharpness"},        {"TLG_FSR_SHARPEN", "sharpen"},
+        {"TLG_JITTER", "jitter"},
         {"TLG_REACTIVE", "reactive"},              {"TLG_REACTIVE_SCALE", "reactive_scale"},
         {"TLG_REACTIVE_THRESHOLD", "reactive_threshold"}, {"TLG_REACTIVE_MAX", "reactive_max"},
         {"TLG_UPSCALE_PRESET", "preset"},            {"TLG_OBJECT_MOTION", "object_motion"},
