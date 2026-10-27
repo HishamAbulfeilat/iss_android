@@ -97,6 +97,29 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn('if (camera_motion.IssNativeCameraReady()) {', renderer)
         self.assertNotIn('camera_native=%u', renderer)
 
+    def test_iss_native_projection_jitter_reaches_fsr3(self):
+        camera_h = (GPU / "shadps4/video_core/renderer_vulkan/vk_camera_motion.h").read_text()
+        camera_cpp = (GPU / "shadps4/video_core/renderer_vulkan/vk_camera_motion.cpp").read_text()
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        self.assertIn("sample.projection[8], sample.projection[9]", camera_cpp)
+        self.assertIn("IssNativeJitterPixels(u32 width, u32 height)", camera_h)
+        self.assertIn("native_previous_jitter_ndc[0] * (0.5f * float(width))", camera_h)
+        self.assertIn("-native_previous_jitter_ndc[1] * (0.5f * float(height))", camera_h)
+        self.assertIn("const auto native_jitter_pixels = camera_motion.IssNativeJitterPixels(w, h);", renderer)
+        self.assertIn("info.jitterOffset = {sign * jitter[0] + native_jitter_pixels[0],", renderer)
+        self.assertIn("sign * jitter[1] + native_jitter_pixels[1]", renderer)
+        # inFAMOUS uses a native +/-0.25 pixel camera offset at 640x360.
+        # Halving the host Halton sample keeps the total within +/-0.5 pixel.
+        self.assertIn("0.5f * (Halton(jitter_index, 2) - 0.5f)", renderer)
+        self.assertIn("0.5f * (Halton(jitter_index, 3) - 0.5f)", renderer)
+        for nx, ny in ((1 / 1280, -1 / 720), (-1 / 1280, 1 / 720)):
+            guest_x, guest_y = nx * (640 / 2), -ny * (360 / 2)
+            self.assertAlmostEqual(abs(guest_x), 0.25)
+            self.assertAlmostEqual(abs(guest_y), 0.25)
+            for halton_x, halton_y in ((0.0, 0.0), (1.0, 1.0), (0.5, 0.5)):
+                self.assertLessEqual(abs(guest_x + 0.5 * (halton_x - 0.5)), 0.5)
+                self.assertLessEqual(abs(guest_y + 0.5 * (halton_y - 0.5)), 0.5)
+
     def test_pc_zero_is_diagnosable(self):
         self.assertIn("arm->uc_mcontext.regs[30]", PROBE)
         self.assertIn("native caller LR:", PROBE)
