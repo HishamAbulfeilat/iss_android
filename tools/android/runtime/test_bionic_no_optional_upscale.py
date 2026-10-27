@@ -64,6 +64,13 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn('e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs))', game)
         self.assertIn('e.put("TLG_UPSCALE_PRESET",Integer.toString(BionicVideoSettings.fsrEnginePreset(prefs)))', game)
         self.assertIn('BionicVideoSettings.effectiveResolutionPatch(prefs)', game)
+        self.assertIn('BionicVideoSettings.fsrSharpnessValue(prefs)', game)
+        self.assertIn('BionicVideoSettings.fsrSharpenEnabled(prefs)', game)
+        self.assertIn('e.put("TLG_FSR_SHARPEN"', game)
+        self.assertIn('fsr3_sharpness_pct', video)
+        self.assertIn('fsr3_sharpen_enabled', video)
+        self.assertIn('sharpenSlider.setMax(200)', video)
+        self.assertIn('sharpenSlider.setEnabled(active&&sharpening.isChecked())', video)
         self.assertIn('if(resolutionPatch!=null)patches.add(resolutionPatch)', game)
         self.assertNotIn('prefs.getString("internal_res","native");\\n   String internal=', game)
         # Both internal game patches must exist so there is exactly one automatic
@@ -73,6 +80,18 @@ class BionicFsr3Tests(unittest.TestCase):
             self.assertIn('Name="Render resolution '+size+'"', patches)
         self.assertIn('e.put("ISS_SCREEN_W",dimensions[0])', game)
         self.assertIn('e.put("ISS_SCREEN_H",dimensions[1])', game)
+
+    def test_fsr_visual_diagnostics_have_no_readback_or_per_draw_printing(self):
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        upscaler_h = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.h").read_text()
+        native = (GPU / "shim/tlg_settings.cpp").read_text()
+        self.assertIn('{"TLG_FSR_SHARPEN", "sharpen"}', native)
+        self.assertIn('FSR3 ISS visual: source=%ux%u', renderer)
+        for key in ('rcas_dispatches', 'extra_sharpen_dispatches',
+                    'ui_draws_after_fsr', 'redirected_color',
+                    'redirected_samples', 'ui_only_copies'):
+            self.assertIn(key, upscaler_h)
+        self.assertIn('if (Active() && ++android_fsr_probe.frames >= 180)', renderer)
 
     def test_pc_zero_is_diagnosable(self):
         self.assertIn("arm->uc_mcontext.regs[30]", PROBE)
