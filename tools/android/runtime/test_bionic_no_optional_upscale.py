@@ -50,6 +50,22 @@ class BionicFsr3Tests(unittest.TestCase):
                 self.assertAlmostEqual(actual, expected, places=6)
         # Existing non-ISS/PC code retains log2(render/output) without -1.
 
+    def test_iss_ldr_fsr3_has_valid_exposure_input(self):
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        # AMD FSR3: an absent input exposure image is only valid with
+        # AUTO_EXPOSURE. Keep HDR flag behavior unchanged and inverted depth.
+        self.assertIn('if (!hdr && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3)', renderer)
+        self.assertIn('create_info.flags |= FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;', renderer)
+        self.assertIn('create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED;', renderer)
+        self.assertIn('info.exposure.structSize = sizeof(info.exposure);', renderer)
+        self.assertIn('FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED |\n                        FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;', renderer)
+        # Do not turn the LDR frame into HDR input: that corrupts color.
+        self.assertIn('create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT', renderer)
+        manifest = (ROOT / 'android/app/BionicAndroidManifest.xml').read_text()
+        self.assertIn('package="com.daedalus.iss.bionic"', manifest)
+        build = (ROOT / 'tools/android/bionic/build_apk.sh').read_text()
+        self.assertIn("package: name='com.daedalus.iss.bionic'", build)
+
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
