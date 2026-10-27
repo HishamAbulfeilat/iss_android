@@ -3,6 +3,12 @@ on:
   push:
     branches: [experimental-bionic]
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Optional in-repository feature branch or commit to build using the ORIGINAL Android package/signing key'
+        type: string
+        required: false
+        default: ''
 concurrency:
   group: iss-bionic-${{ github.ref }}
   cancel-in-progress: true
@@ -16,9 +22,28 @@ jobs:
       ISS_JOBS: '2'
       ISS_RELEASE_BUILD: '1'
     steps:
+      # Build code from an optional experiment, but run the job on the
+      # signed experimental-bionic workflow ref so the ORIGINAL signing-key
+      # cache remains available. Never generate an ephemeral key for releases.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           submodules: recursive
+      - name: Reject packages that cannot upgrade the installed Daedalus app
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          manifest = ET.parse('android/app/BionicAndroidManifest.xml').getroot()
+          actual = manifest.attrib.get('package')
+          expected = 'com.daedalus.iss.bionic'
+          if actual != expected:
+              raise SystemExit(f'Build rejected: {actual!r} cannot update the installed app {expected!r}')
+          build = Path('tools/android/bionic/build_apk.sh').read_text()
+          if "package: name='com.daedalus.iss.bionic'" not in build:
+              raise SystemExit('Build rejected: build_apk.sh does not verify the original package identity')
+          print('Upgrade-compatible Android package identity:', actual)
+          PY
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
