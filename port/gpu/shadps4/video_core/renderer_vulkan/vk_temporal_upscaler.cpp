@@ -1545,7 +1545,22 @@ float TemporalUpscaler::SceneMipBias() const {
     if (!Active() || TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa) return 0.0f;
     const float render = float(TlgSettings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
-    return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
+    if (!(render > 0.0f && render < output)) return 0.0f;
+    const float resolution_bias = std::log2(render / output);
+#ifdef ISS_ANDROID_BIONIC
+    // FidelityFX FSR3 integration guide: mipBias = log2(render/output) - 1.
+    // ISS previously used only log2(render/output), losing a full mip level
+    // of material texture detail BEFORE FSR could reconstruct it.
+    // For the actual 640->1280 performance mode this restores -2.0 (was -1.0);
+    // for 960->1280 quality it is -1.415 (was -0.415).
+    // Keep this strictly within native Bionic FSR3; never sharpen depth,
+    // shadows, HUD or post effects (those passes do not enter the G-buffer
+    // sampler-bias path in vk_rasterizer.cpp).
+    if (Scaled() && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3) {
+        return resolution_bias - 1.0f;
+    }
+#endif
+    return resolution_bias;
 }
 
 bool TemporalUpscaler::Scaled() const {
