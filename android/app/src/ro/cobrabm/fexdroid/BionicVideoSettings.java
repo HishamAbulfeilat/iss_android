@@ -119,7 +119,7 @@ final class BionicVideoSettings {
   l.addView(sharpenHint);
   Runnable updateSharpText=()->sharpenLabel.setText(
     AppLanguage.text("Sharpening strength","Intensidade da nitidez")+": "+
-    sharpenSlider.getProgress()+"%"+(sharpenSlider.getProgress()>100?" · Extra":""));
+    sharpenSlider.getProgress()+"%");
   sharpenSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
    public void onProgressChanged(SeekBar bar,int progress,boolean fromUser){
     if(fromUser)prefs.edit().putInt("fsr3_sharpness_pct",progress).apply();
