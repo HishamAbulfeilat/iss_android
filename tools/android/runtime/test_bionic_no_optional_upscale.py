@@ -28,6 +28,28 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("vk_fsr4_android.cpp", str(next(GPU.glob("shadps4/video_core/renderer_vulkan/vk_fsr4_android.cpp"))))
         self.assertIn("FFX_VK_PORTABLE_OK", (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text())
 
+    def test_iss_fsr3_material_mip_bias_preserves_detail(self):
+        import math
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        raster = (GPU / "shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp").read_text()
+        self.assertIn("const float resolution_bias = std::log2(render / output);", renderer)
+        self.assertIn("return resolution_bias - 1.0f;", renderer)
+        self.assertIn("Scaled() && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3", renderer)
+        self.assertIn("return resolution_bias;", renderer)
+        self.assertIn("sampler_lod_bias += upscaler->SceneMipBias();", raster)
+        self.assertIn("GetGraphicsKey().mrt_mask", raster)
+        self.assertIn("std::popcount(", raster)
+        self.assertIn("sampler.is_depth ? 0.0f : sampler_lod_bias", raster)
+        # The inFAMOUS G-buffer gets AMD's suggested material mip
+        # levels; post/UI/depth keep their original sampling.
+        for width, output, expected in ((640, 1280, -2.0),
+                                        (960, 1280, math.log2(.75) - 1.0),
+                                        (1280, 1280, 0.0)):
+            with self.subTest(render_width=width):
+                actual = math.log2(width / output) - 1.0 if width < output else 0.0
+                self.assertAlmostEqual(actual, expected, places=6)
+        # Existing non-ISS/PC code retains log2(render/output) without -1.
+
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
