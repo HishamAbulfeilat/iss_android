@@ -458,7 +458,19 @@ bool TemporalUpscaler::OnFrameStart() {
     const u32 phases = Scaled() ? Motion::JitterPhases(render_width, target_width)
         : Motion::JitterPhases(scene_targets.Size().width, 1920);
     jitter_index = jitter_index % phases + 1;
-    jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
+#ifdef ISS_ANDROID_BIONIC
+    // ISS has its own +/-0.25-pixel projection jitter, independently of the
+    // Vulkan viewport jitter. Use half-strength host Halton samples here so
+    // their sum stays within the FSR3 +/-0.5-pixel reconstruction footprint.
+    // The native component is added to FSR dispatch metadata in RunScaled().
+    if (scaled_session && upscaler == TlgSettings::UpscalerFsr3) {
+        jitter = {0.5f * (Halton(jitter_index, 2) - 0.5f),
+                  0.5f * (Halton(jitter_index, 3) - 0.5f)};
+    } else
+#endif
+    {
+        jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
+    }
     return changed;
 }
 
@@ -2033,7 +2045,19 @@ void TemporalUpscaler::RunScaled() {
 
     info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
     const float sign = TlgToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+#ifdef ISS_ANDROID_BIONIC
+    // The rendered scene is displaced twice: by the game's native projection
+    // jitter and by the Vulkan viewport. Feeding only the viewport jitter to
+    // FidelityFX makes its history reconstruction sample an incorrect location
+    // (visible as excessive blur even with RCAS sharpening enabled).
+    // CameraMotion removes the guest-jitter DELTA from motion vectors, which
+    // is correct: jitter belongs in jitterOffset, not in scene velocity.
+    const auto native_jitter_pixels = camera_motion.IssNativeJitterPixels(w, h);
+    info.jitterOffset = {sign * jitter[0] + native_jitter_pixels[0],
+                         sign * jitter[1] + native_jitter_pixels[1]};
+#else
     info.jitterOffset = {sign * jitter[0], sign * jitter[1]};
+#endif
     info.motionVectorScale = {1.0f, 1.0f};
     info.renderSize = {w, h};
     info.outputSize = {ow, oh};
@@ -2076,6 +2100,15 @@ void TemporalUpscaler::RunScaled() {
         dispatched_last_frame = true;
 #ifdef ISS_ANDROID_BIONIC
         ++android_fsr_probe.dispatched;
+        static bool native_jitter_reported = false;
+        if (!native_jitter_reported && camera_motion.IssNativeCameraReady()) {
+            native_jitter_reported = true;
+            std::printf("FSR3 ISS jitter aligned: native=%.3f,%.3f viewport=%.3f,%.3f "
+                        "sdk=%.3f,%.3f (render pixels)\\n",
+                        native_jitter_pixels[0], native_jitter_pixels[1],
+                        sign * jitter[0], sign * jitter[1],
+                        info.jitterOffset.x, info.jitterOffset.y);
+        }
         // Sample the camera state at the ACTUAL successful FSR dispatch,
         // not OnFrameStart, where the previous frame's camera is invalidated.
         // This is a per-scene result and makes the 180-frame summary truthful.
