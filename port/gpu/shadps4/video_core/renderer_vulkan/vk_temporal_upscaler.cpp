@@ -540,6 +540,13 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     // poisoning depth clipping, disocclusion and temporal accumulation.
     // Real near/far come from the native camera snapshot in RunScaled().
     create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED;
+    // In scaled ISS/Android the input is already tonemapped LDR, and the game
+    // supplies NO 1x1 exposure texture. FSR3 requires either explicit exposure
+    // or its auto-exposure flag; missing exposure corrupts the luminance-based
+    // accumulation and can suppress detail even with strong RCAS.
+    if (!hdr && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3) {
+        create_info.flags |= FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;
+    }
 #endif
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
@@ -2100,6 +2107,11 @@ void TemporalUpscaler::RunScaled() {
 
     FfxVkPortableUpscaleCreateInfo create_info{};
     create_info.structSize = sizeof(create_info);
+#ifdef ISS_ANDROID_BIONIC
+    // Match the actual pre-created LDR context for dispatch validation.
+    create_info.flags = FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED |
+                        FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;
+#endif
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     bool ok = false;
