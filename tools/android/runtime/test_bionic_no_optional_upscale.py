@@ -92,6 +92,10 @@ class BionicFsr3Tests(unittest.TestCase):
                     'redirected_samples', 'ui_only_copies'):
             self.assertIn(key, upscaler_h)
         self.assertIn('if (Active() && ++android_fsr_probe.frames >= 180)', renderer)
+        self.assertIn('native_camera_dispatches', upscaler_h)
+        self.assertIn('fallback_motion_dispatches', upscaler_h)
+        self.assertIn('if (camera_motion.IssNativeCameraReady()) {', renderer)
+        self.assertNotIn('camera_native=%u', renderer)
 
     def test_pc_zero_is_diagnosable(self):
         self.assertIn("arm->uc_mcontext.regs[30]", PROBE)
