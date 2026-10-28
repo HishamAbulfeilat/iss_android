@@ -314,6 +314,11 @@ private:
     vk::UniqueDescriptorSetLayout reactive_desc_layout;
     vk::UniquePipelineLayout reactive_pipeline_layout;
     vk::UniquePipeline reactive_pipeline;
+#ifdef ISS_ANDROID_BIONIC
+    vk::UniqueDescriptorSetLayout ldr_edge_desc_layout;
+    vk::UniquePipelineLayout ldr_edge_pipeline_layout;
+    vk::UniquePipeline ldr_edge_pipeline;
+#endif
     vk::UniqueDescriptorSetLayout merge_desc_layout;
     vk::UniquePipelineLayout merge_pipeline_layout;
     vk::UniquePipeline merge_pipeline;

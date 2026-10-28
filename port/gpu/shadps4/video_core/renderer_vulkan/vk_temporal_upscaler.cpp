@@ -19,6 +19,9 @@
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
 #include "video_core/host_shaders/upscale_reactive_comp.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "video_core/host_shaders/upscale_ldr_edges_comp.h"
+#endif
 #include "video_core/host_shaders/taa_comp.h"
 #include "video_core/host_shaders/taa_sharpen_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
@@ -890,6 +893,22 @@ void TemporalUpscaler::CreatePipelines() {
     merge_pipeline = compute(UPSCALE_MERGE_COMP, *merge_pipeline_layout);
     storage_layout(3, reactive_desc_layout, reactive_pipeline_layout, 3 * sizeof(float));
     reactive_pipeline = compute(UPSCALE_REACTIVE_COMP, *reactive_pipeline_layout);
+#ifdef ISS_ANDROID_BIONIC
+    const std::array<vk::DescriptorSetLayoutBinding, 2> edges{{
+        {.binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+    }};
+    ldr_edge_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .bindingCount = u32(edges.size()), .pBindings = edges.data(),
+    }));
+    ldr_edge_pipeline_layout = Check(device.createPipelineLayoutUnique({
+        .setLayoutCount = 1, .pSetLayouts = &*ldr_edge_desc_layout,
+    }));
+    ldr_edge_pipeline = compute(UPSCALE_LDR_EDGES_COMP, *ldr_edge_pipeline_layout);
+#endif
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
@@ -2188,7 +2207,57 @@ void TemporalUpscaler::RunScaled() {
                            FFX_VK_PORTABLE_RESOURCE_STATE_UNORDERED_ACCESS);
     info.exposure.structSize = sizeof(info.exposure);
     info.reactiveMask.structSize = sizeof(info.reactiveMask);
-    if (mask_ready && ReactiveOn()) {
+#ifdef ISS_ANDROID_BIONIC
+    // No validated native UI shader was found (ISS probe: ui_candidates=0).
+    // Do NOT re-enable the early UI pass that previously stopped FSR dispatch.
+    // Experimentally reduce history only on isolated bright LDR features.
+    bool ldr_edge_mask = false;
+    const char* edges_env = std::getenv("ISS_FSR3_UI_EDGES");
+    if (!mask_ready && edges_env && edges_env[0] == '1' &&
+        scaled_session && settings.upscaler == TlgSettings::UpscalerFsr3 &&
+        color.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+        (color.usage_flags & vk::ImageUsageFlagBits::eSampled)) {
+        const vk::ImageMemoryBarrier2 prepare{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(reactive_image),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &prepare});
+        const std::array<vk::DescriptorImageInfo, 2> views{{
+            {.sampler = *taa_sampler, .imageView = color_view,
+             .imageLayout = vk::ImageLayout::eGeneral},
+            {.imageView = *reactive_view, .imageLayout = vk::ImageLayout::eGeneral},
+        }};
+        const std::array<vk::WriteDescriptorSet, 2> writes{{
+            {.dstBinding = 0, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &views[0]},
+            {.dstBinding = 1, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageImage, .pImageInfo = &views[1]},
+        }};
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *ldr_edge_pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
+                                    *ldr_edge_pipeline_layout, 0, writes);
+        cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        auto ready = prepare;
+        ready.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        ready.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+        ready.dstStageMask = vk::PipelineStageFlagBits2::eAllCommands;
+        ready.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+        ready.oldLayout = vk::ImageLayout::eGeneral;
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ready});
+        ldr_edge_mask = true;
+    }
+#endif
+    if ((mask_ready && ReactiveOn())
+#ifdef ISS_ANDROID_BIONIC
+        || ldr_edge_mask
+#endif
+        ) {
         info.reactiveMask = Describe(vk::Image(reactive_image), vk::Format::eR8Unorm, w, h,
             vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
             vk::ImageAspectFlagBits::eColor, FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
