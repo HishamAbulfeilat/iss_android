@@ -94,7 +94,10 @@ class BionicFsr3Tests(unittest.TestCase):
         # two-phase projection jitter, not actual movement of the static scene.
         self.assertIn("result = object_motion.rg + previous_jitter;", shader)
         self.assertIn("const vec2 camera_motion =", shader)
-        self.assertIn("(prev_uv - scene_uv) * size - previous_jitter;", shader)
+        self.assertIn("const vec2 camera_motion = (prev_uv - scene_uv) * size;", shader)
+        self.assertNotIn("(prev_uv - scene_uv) * size - previous_jitter;", shader)
+        self.assertIn("ISS native camera does not double-subtract guest jitter", gpu_test)
+        self.assertIn("ISS native camera retains real displacement", gpu_test)
         # The same delta must be subtracted in native camera and object paths.
         self.assertIn("ISS removes positive-phase guest jitter", gpu_test)
         self.assertIn("ISS removes negative-phase guest jitter", gpu_test)
