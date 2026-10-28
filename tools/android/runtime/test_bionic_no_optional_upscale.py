@@ -102,6 +102,12 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("ISS removes positive-phase guest jitter", gpu_test)
         self.assertIn("ISS removes negative-phase guest jitter", gpu_test)
         self.assertIn("ISS preserves genuine object movement", gpu_test)
+        self.assertIn("const float threshold = max(2e-7, depth * 0.005);", shader)
+        self.assertIn("const vec2 disagreement = abs(candidate - result);", shader)
+        self.assertIn("const vec2 max_difference = size * 0.25;", shader)
+        self.assertIn("ISS rejects 609px stale object history", gpu_test)
+        self.assertIn("ISS rejects wrong-layer object depth", gpu_test)
+        self.assertIn("ISS keeps depth-matched object motion", gpu_test)
         # Preserve mode 1 non-ISS and mode 2's no-camera fallback behavior.
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
