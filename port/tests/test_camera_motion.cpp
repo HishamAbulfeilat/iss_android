@@ -148,6 +148,18 @@ int main() {
         distant,0,0,0,4,0.f,false,0.5f);
     run("ISS native camera retains real displacement",
         distant,0.1f,0,0,4,0.45f,false,0.5f);
+    // Real Redmagic capture: 609 pixels of object motion on a static
+    // doorway. With no camera motion the native mode-3 selector must
+    // reject mismatched mesh history and use the (zero) camera vector.
+    run("ISS rejects 609px stale object history",distant,0,0,distant,
+        3,0.f,false,0.f,609.f);
+    // Reversed-Z depth mismatch: old tolerance (1-depth)*0.01
+    // incorrectly accepted a 0.003 delta at depth=0.4.
+    run("ISS rejects wrong-layer object depth",0.4f,0,0,0.403f,
+        3,0.f,false,0.f,2.f);
+    // Preserve legitimate moving objects well within scene limits.
+    run("ISS keeps depth-matched object motion",distant,0,0,distant,
+        3,1.5f,false,0.f,1.5f);
     run("stale distant object vector",distant,0,0,0.9999f,1,0);
     vmaDestroyBuffer(instance.GetAllocator(),staging,allocation);
 }
