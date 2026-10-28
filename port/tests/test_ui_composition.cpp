@@ -16,6 +16,14 @@ int main() {
     assert(Choose(false, true, true, true) == Background::None);
     assert(NativeViewport(1920, -1080));
     assert(!NativeViewport(960, -540));
+    // Regression: PS4 HUD uses stencil and sometimes leaves depth-test
+    // enabled, but does not write 3D depth. Copy shader is not an overlay.
+    assert(IssOverlayDraw(true, false, false, false));
+    assert(IssOverlayDraw(false, true, false, false));
+    assert(IssOverlayDraw(true, true, false, false));
+    assert(!IssOverlayDraw(true, true, true, false));
+    assert(!IssOverlayDraw(true, false, false, true));
+    assert(!IssOverlayDraw(false, false, false, false));
     assert(MovieShader(0x34e8a281) && MovieShader(0x24042a9b));
     assert(!MovieShader(0x0b0acf50)); // fullscreen post/tonemap also has a native viewport
     assert(!MovieShader(0x6c62a79f)); // shadow geometry
