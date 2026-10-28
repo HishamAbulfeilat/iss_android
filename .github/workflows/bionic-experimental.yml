@@ -27,7 +27,7 @@ jobs:
       # cache remains available. Never generate an ephemeral key for releases.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || 'a66ae72c2efd81a118cfffa820358a7b7632bf0f' }}
+          ref: ${{ inputs.source_ref || github.sha }}
           submodules: recursive
       - name: Reject packages that cannot upgrade the installed Daedalus app
         run: |
@@ -126,12 +126,6 @@ jobs:
           test -s out/bionic/drivers/gen8/libvulkan_freedreno.so
           python3 tools/android/bionic/stage_driver.py --manifest tools/android/bionic/driver-gen7.json --output out/bionic/drivers/gen7
           test -s out/bionic/drivers/gen7/libvulkan_freedreno.so
-      - name: Stage Bloodborne PanVK v3.2 for Mali
-        shell: bash -el {0}
-        run: |
-          python3 tools/android/bionic/stage_panvk.py --output out/bionic/drivers/panvk
-          test -s out/bionic/drivers/panvk/libvulkan_panvk.so
-          test -s out/bionic/drivers/panvk/PINNED-DRIVER.json
       - name: Restore reusable Android Bionic dependency prefix
         id: bionic-deps-cache
         uses: actions/cache/restore@v4
