@@ -66,6 +66,26 @@ class BionicFsr3Tests(unittest.TestCase):
         build = (ROOT / 'tools/android/bionic/build_apk.sh').read_text()
         self.assertIn("package: name='com.daedalus.iss.bionic'", build)
 
+    def test_fsr3_user_requested_capture_is_bounded_and_exportable(self):
+        src = ROOT / "android/app/src/ro/cobrabm/fexdroid"
+        game = (src / "BionicGameActivity.java").read_text()
+        menu = (src / "BionicPlayerMenu.java").read_text()
+        launcher = (src / "BionicMainActivity.java").read_text()
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        self.assertIn('e.put("TLG_DUMP_FRAMES","2")', game)
+        self.assertIn('e.put("TLG_DUMP_TRIGGER"', game)
+        self.assertIn('e.put("TLG_DUMP_DIR"', game)
+        self.assertIn('FileOutputStream stream=new FileOutputStream(trigger,false)', menu)
+        self.assertIn('if(activity.getSharedPreferences("iss",0).getBoolean("fsr3",false))', menu)
+        self.assertIn('DumpImages(instance, scheduler, cmdbuf, dump,', renderer)
+        self.assertIn('if (const int dump = DumpFrame(); dump >= 0)', renderer)
+        self.assertIn('{vk::Image(ui_image), ow, oh, 4, "output", "rgba"}', renderer)
+        self.assertIn('new java.util.zip.ZipOutputStream(output)', launcher)
+        self.assertIn('EXPORT_FSR=12', launcher)
+        self.assertIn('new java.util.zip.ZipEntry("iss-android.log")', launcher)
+        # Different Android application IDs and ephemeral signatures are forbidden.
+        manifest = (ROOT / "android/app/BionicAndroidManifest.xml").read_text()
+        self.assertIn('package="com.daedalus.iss.bionic"', manifest)
     def test_bionic_keeps_ahardwarebuffer_and_fsr1_disabled(self):
         self.assertIn("#ifndef ISS_ANDROID_BIONIC", PRESENTER)
         self.assertIn("pp_pass.Render", PRESENTER)
