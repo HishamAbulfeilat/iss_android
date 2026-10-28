@@ -86,6 +86,22 @@ class BionicFsr3Tests(unittest.TestCase):
         # Different Android application IDs and ephemeral signatures are forbidden.
         manifest = (ROOT / "android/app/BionicAndroidManifest.xml").read_text()
         self.assertIn('package="com.daedalus.iss.bionic"', manifest)
+    def test_iss_fsr3_object_vectors_remove_guest_camera_jitter(self):
+        shader = (GPU / "shadps4/video_core/host_shaders/camera_motion.comp").read_text()
+        gpu_test = (ROOT / "port/tests/test_camera_motion.cpp").read_text()
+        # Capture showed both frames with healthy scene depth but nearly
+        # uniform +/-0.5-pixel motion. Game matrices show this is the native
+        # two-phase projection jitter, not actual movement of the static scene.
+        self.assertIn("result = object_motion.rg - previous_jitter;", shader)
+        self.assertIn("const vec2 camera_motion =", shader)
+        self.assertIn("(prev_uv - scene_uv) * size - previous_jitter;", shader)
+        # The same delta must be subtracted in native camera and object paths.
+        self.assertIn("ISS object motion removes guest projection jitter", gpu_test)
+        self.assertIn("ISS objects retain genuine motion after jitter removal", gpu_test)
+        # Preserve mode 1 non-ISS and mode 2's no-camera fallback behavior.
+        self.assertIn("if (mode == 2u)", shader)
+        self.assertIn("result = object_motion.rg;", shader)
+
     def test_iss_fsr3_snapshots_scene_depth_before_hud_reuse(self):
         src = GPU / "shadps4/video_core/renderer_vulkan"
         header = (src / "vk_temporal_upscaler.h").read_text()
