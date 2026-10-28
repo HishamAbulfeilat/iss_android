@@ -69,7 +69,8 @@ int main() {
         cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&b},d);
     };
     const auto run=[&](const char* label,float depth,float translation,float rotation,
-                       float object_depth,u32 mode,float expected,bool jitter=false) {
+                       float object_depth,u32 mode,float expected,bool jitter=false,
+                       float guest_jitter_delta=0.f) {
         auto* pixels=static_cast<float*>(ai.pMappedData);
         for (u32 p=0;p<N;++p) {
             pixels[p*4]=depth;
@@ -101,7 +102,7 @@ int main() {
         }
         Params params{{1,0,rotation,translation,0,1,0,0,0,0,1,0},
             {1,1,1,-0.05f},{1,1,1,-0.05f},{W,H},
-            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{0,0},mode};
+            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{guest_jitter_delta,0},mode};
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*pipeline,d);
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,*layout,0,writes,d);
         cmd.pushConstants(*layout,vk::ShaderStageFlagBits::eCompute,0,sizeof(params),&params,d);
@@ -130,6 +131,14 @@ int main() {
     run("sky ignores translation",1,1000,0,0,0,0);
     run("static camera cancels jitter",distant,0,0,0,0,0,true);
     run("matching object vector",distant,0,0,distant,1,2);
+    // ISS mode 3 uses native camera matrices and depth-matched object motion.
+    // The guest's +/-0.25-pixel projection jitter produces 0.5 pixel
+    // prev-current motion in otherwise static objects. The object override
+    // must remove it exactly as the native camera reprojection path does.
+    run("ISS object motion removes guest projection jitter",distant,0,0,distant,
+        3,1.5f,false,0.5f);
+    run("ISS objects retain genuine motion after jitter removal",distant,0,0,distant,
+        3,2.25f,false,-0.25f);
     run("stale distant object vector",distant,0,0,0.9999f,1,0);
     vmaDestroyBuffer(instance.GetAllocator(),staging,allocation);
 }
