@@ -92,12 +92,13 @@ class BionicFsr3Tests(unittest.TestCase):
         # Capture showed both frames with healthy scene depth but nearly
         # uniform +/-0.5-pixel motion. Game matrices show this is the native
         # two-phase projection jitter, not actual movement of the static scene.
-        self.assertIn("result = object_motion.rg - previous_jitter;", shader)
+        self.assertIn("result = object_motion.rg + previous_jitter;", shader)
         self.assertIn("const vec2 camera_motion =", shader)
         self.assertIn("(prev_uv - scene_uv) * size - previous_jitter;", shader)
         # The same delta must be subtracted in native camera and object paths.
-        self.assertIn("ISS object motion removes guest projection jitter", gpu_test)
-        self.assertIn("ISS objects retain genuine motion after jitter removal", gpu_test)
+        self.assertIn("ISS removes positive-phase guest jitter", gpu_test)
+        self.assertIn("ISS removes negative-phase guest jitter", gpu_test)
+        self.assertIn("ISS preserves genuine object movement", gpu_test)
         # Preserve mode 1 non-ISS and mode 2's no-camera fallback behavior.
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
