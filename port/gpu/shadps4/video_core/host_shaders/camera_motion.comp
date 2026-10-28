@@ -85,15 +85,16 @@ void main() {
                 abs(object_motion.a - depth) < threshold &&
                 !any(isnan(object_motion.rg)) &&
                 !any(isinf(object_motion.rg))) {
-                // ISS object's per-vertex projection still contains the
-                // native game's alternating +/-0.25-pixel TAA jitter.
-                // The camera fallback above removes prev-current jitter,
-                // but accepting raw object vectors reintroduced +/-0.5
-                // pixel phantom motion across static geometry (proven by
-                // two-frame on-device FSR capture and matrix comparison).
-                // Only native ISS mode 3 carries a validated guest jitter
-                // delta in previous_jitter; leave other titles untouched.
-                result = object_motion.rg - previous_jitter;
+                // The native ISS projection uses the opposite clip-space
+                // convention from the host's NDC camera jitter delta. The
+                // fragment per-object previous-current vector includes a
+                // *negative* guest jitter delta, so subtracting it doubled
+                // the phantom motion: 2026-10-28 real capture showed
+                // alternating (-1,-1) and (+1,+1) pixel, after the old
+                // (+/-0.5,+/-0.5) result. Add the converted delta here to
+                // cancel jitter while preserving real object movement.
+                // Mode 2 and the non-ISS camera paths remain unchanged.
+                result = object_motion.rg + previous_jitter;
             }
         }
         imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
