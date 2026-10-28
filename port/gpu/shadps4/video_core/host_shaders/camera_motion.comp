@@ -65,12 +65,15 @@ void main() {
             const vec2 prev_ndc = previous_clip.xy / previous_clip.w;
             const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5,
                                       0.5 - prev_ndc.y * 0.5);
-            // The native matrices contain inFAMOUS' own quarter-pixel
-            // projection jitter in addition to the Android viewport jitter.
-            // previous_jitter is the guest projection jitter delta (pixels)
-            // for mode 3/4. FSR motion vectors must not contain that delta.
-            const vec2 camera_motion =
-                (prev_uv - scene_uv) * size - previous_jitter;
+            // The native CURRENT->PREVIOUS composite reprojects positions
+            // in the guest game's stable camera space; its reconstructed
+            // motion does not include the +/-0.25-pixel projection jitter
+            // carried separately in previous_jitter. Removing that delta a
+            // second time created the ~+/-0.5-pixel ghost vectors visible on
+            // static parts of the 2026-10-28 capture even outside object
+            // overrides. Keep only genuine camera displacement here. The
+            // per-object path below needs the opposite guest-jitter correction.
+            const vec2 camera_motion = (prev_uv - scene_uv) * size;
             if (!any(isnan(camera_motion)) && !any(isinf(camera_motion)) &&
                 all(lessThan(abs(camera_motion), size * 0.5))) {
                 result = camera_motion;
