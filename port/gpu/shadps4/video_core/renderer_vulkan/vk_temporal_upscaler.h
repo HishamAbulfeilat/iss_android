@@ -92,7 +92,7 @@ public:
     /// After identifying this draw's targets, before drawing any UI pixels. Menus use
     /// spatial background copy and native UI, without needing scene depth or FSR history.
     void OnDraw(u64 vs_hash, VideoCore::ImageId color, VideoCore::ImageId depth,
-                bool native_viewport);
+                bool native_viewport, bool iss_ui_overlay = false);
 
     /// A pass's first color target: the last render-size RGBA8 target before the UI is the
     /// game's finished frame.
@@ -314,11 +314,6 @@ private:
     vk::UniqueDescriptorSetLayout reactive_desc_layout;
     vk::UniquePipelineLayout reactive_pipeline_layout;
     vk::UniquePipeline reactive_pipeline;
-#ifdef ISS_ANDROID_BIONIC
-    vk::UniqueDescriptorSetLayout ldr_edge_desc_layout;
-    vk::UniquePipelineLayout ldr_edge_pipeline_layout;
-    vk::UniquePipeline ldr_edge_pipeline;
-#endif
     vk::UniqueDescriptorSetLayout merge_desc_layout;
     vk::UniquePipelineLayout merge_pipeline_layout;
     vk::UniquePipeline merge_pipeline;

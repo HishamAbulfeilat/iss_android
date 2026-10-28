@@ -1154,7 +1154,13 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         const auto& viewport = Regs().viewports[0];
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                          cb_descs[0].first, db_desc.first,
-                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2));
+                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2),
+                         // Scene transparents use depth testing; HUD sprites do not.
+                         Regs().blend_control[0].enable &&
+                         !Regs().color_buffers[0].info.blend_bypass &&
+                         !Regs().depth_control.depth_enable &&
+                         !Regs().depth_control.depth_write_enable &&
+                         !Regs().depth_control.stencil_enable);
     }
     const PreparedDraw* draw_prepared = bind_prepared;
     // tlg: vertex and index buffers are resolved while the helper binds textures (their
@@ -1416,7 +1422,13 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         const auto& viewport = Regs().viewports[0];
         upscaler->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
                          cb_descs[0].first, db_desc.first,
-                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2));
+                         UiComposition::NativeViewport(viewport.xscale * 2, viewport.yscale * 2),
+                         // Scene transparents use depth testing; HUD sprites do not.
+                         Regs().blend_control[0].enable &&
+                         !Regs().color_buffers[0].info.blend_bypass &&
+                         !Regs().depth_control.depth_enable &&
+                         !Regs().depth_control.depth_write_enable &&
+                         !Regs().depth_control.stencil_enable);
     }
     if (!BindResources(pipeline)) {
         return;
