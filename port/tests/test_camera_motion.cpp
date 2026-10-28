@@ -70,11 +70,11 @@ int main() {
     };
     const auto run=[&](const char* label,float depth,float translation,float rotation,
                        float object_depth,u32 mode,float expected,bool jitter=false,
-                       float guest_jitter_delta=0.f) {
+                       float guest_jitter_delta=0.f,float raw_object_motion=2.f) {
         auto* pixels=static_cast<float*>(ai.pMappedData);
         for (u32 p=0;p<N;++p) {
             pixels[p*4]=depth;
-            pixels[N*4+p*4]=2.f; pixels[N*4+p*4+1]=0.f;
+            pixels[N*4+p*4]=raw_object_motion; pixels[N*4+p*4+1]=0.f;
             pixels[N*4+p*4+2]=1.f; pixels[N*4+p*4+3]=object_depth;
         }
         const auto cmd=scheduler.CommandBuffer();
@@ -131,14 +131,15 @@ int main() {
     run("sky ignores translation",1,1000,0,0,0,0);
     run("static camera cancels jitter",distant,0,0,0,0,0,true);
     run("matching object vector",distant,0,0,distant,1,2);
-    // ISS mode 3 uses native camera matrices and depth-matched object motion.
-    // The guest's +/-0.25-pixel projection jitter produces 0.5 pixel
-    // prev-current motion in otherwise static objects. The object override
-    // must remove it exactly as the native camera reprojection path does.
-    run("ISS object motion removes guest projection jitter",distant,0,0,distant,
-        3,1.5f,false,0.5f);
-    run("ISS objects retain genuine motion after jitter removal",distant,0,0,distant,
-        3,2.25f,false,-0.25f);
+    // On-device captures: the per-object clip motion is OPPOSITE the
+    // native camera push delta. The old subtract doubled an alternating
+    // +/-0.5-pixel static camera jitter into +/-1-pixel ghost motion.
+    run("ISS removes positive-phase guest jitter",distant,0,0,distant,
+        3,0.f,false,0.5f,-0.5f);
+    run("ISS removes negative-phase guest jitter",distant,0,0,distant,
+        3,0.f,false,-0.5f,0.5f);
+    run("ISS preserves genuine object movement",distant,0,0,distant,
+        3,2.f,false,0.5f,1.5f);
     run("stale distant object vector",distant,0,0,0.9999f,1,0);
     vmaDestroyBuffer(instance.GetAllocator(),staging,allocation);
 }
