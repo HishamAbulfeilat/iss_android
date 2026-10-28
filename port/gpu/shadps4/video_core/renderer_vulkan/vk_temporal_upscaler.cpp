@@ -2148,6 +2148,21 @@ void TemporalUpscaler::RunScaled() {
             ++android_fsr_probe.rcas_dispatches;
 #endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
+#ifdef ISS_ANDROID_BIONIC
+        // This is the real LDR FSR3 path (not the unrelated FSR4/HDR path).
+        // Capture a *user-requested*, bounded pair of frames, including exactly
+        // the images consumed by the SDK, so loss of detail can be located
+        // before vs. during temporal reconstruction. No GPU readback otherwise.
+        if (const int dump = DumpFrame(); dump >= 0) {
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{color_image, source_width, source_height, 4, "input", "rgba"},
+                        {vk::Image(motion_image), w, h, 4, "motion", "rg16f"},
+                        {vk::Image(ui_image), ow, oh, 4, "output", "rgba"}});
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{depth_image, source_width, source_height, 4, "depth", "f32",
+                         vk::ImageAspectFlagBits::eDepth}});
+        }
+#endif
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
