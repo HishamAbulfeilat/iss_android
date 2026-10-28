@@ -27,7 +27,7 @@ jobs:
       # cache remains available. Never generate an ephemeral key for releases.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref || github.sha }}
+          ref: ${{ inputs.source_ref || 'a66ae72c2efd81a118cfffa820358a7b7632bf0f' }}
           submodules: recursive
       - name: Reject packages that cannot upgrade the installed Daedalus app
         run: |
