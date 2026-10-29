@@ -188,6 +188,7 @@ struct BufferCache {
     WriteTickTracker write_ticks;
     std::map<vk::DeviceMemory,ResidencyMapping> residency_mappings;
     bool mapped_readbacks_enabled=true,residency_coherent=true;
+    bool release_idle=false; // TLG_RELEASE_IDLE_BUFFERS off, as in production by default
     u32 block_shift=14;
     u32 arena_memory_type_index=2;
     vk::DeviceMemory residency_chunk{};u64 residency_chunk_used=0,residency_allocations=0;
