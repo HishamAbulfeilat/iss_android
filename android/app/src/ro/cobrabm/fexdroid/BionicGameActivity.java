@@ -51,7 +51,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("inFAMOUS Second Son — Daedalus 0.2.1 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.2.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
@@ -69,6 +69,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   frame.post(this::updateVideoSize);
   surface.getHolder().addCallback(this);
   record("Activity initialized");
+  recordPreviousExit();
   thermal=new BionicThermal(this,this::record,this::updateDisplayRate);thermal.start();
  }
  private void applyFullscreen(){
@@ -224,12 +225,55 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  /** Low-memory kills leave no native error: keep the system's view of memory in iss.log. */
  private void recordMemory(String why){
   android.app.ActivityManager.MemoryInfo m=memory();if(m==null)return;
-  record("Memory: "+why+"; available "+(m.availMem>>20)+" of "+(m.totalMem>>20)+" MiB, low-memory threshold "+(m.threshold>>20)+" MiB"+(m.lowMemory?", LOW":""));
+  record("Memory: "+why+"; available "+(m.availMem>>20)+" of "+(m.totalMem>>20)+" MiB, low-memory threshold "+(m.threshold>>20)+" MiB"+(m.lowMemory?", LOW":"")+gameMemory());
+ }
+ /** Resident and swapped memory of the native game processes (same UID, not this process). */
+ private static String gameMemory(){
+  long rss=0,swap=0;int count=0;String uid=Integer.toString(android.os.Process.myUid()),self=Integer.toString(android.os.Process.myPid());
+  File[] procs=new File("/proc").listFiles();if(procs==null)return "";
+  for(File d:procs){
+   String pid=d.getName();if(pid.isEmpty()||!Character.isDigit(pid.charAt(0))||pid.equals(self))continue;
+   long r=0,w=0;boolean mine=false;
+   try(BufferedReader in=new BufferedReader(new FileReader(new File(d,"status")))){
+    for(String line;(line=in.readLine())!=null;){
+     if(line.startsWith("Uid:"))mine=line.split("\\s+").length>1&&line.split("\\s+")[1].equals(uid);
+     else if(line.startsWith("VmRSS:"))r=kb(line);else if(line.startsWith("VmSwap:"))w=kb(line);
+    }
+   }catch(Exception ignored){continue;}
+   if(mine&&r>0){rss+=r;swap+=w;count++;}
+  }
+  return count==0?"":"; game processes "+count+" RSS "+(rss>>10)+" MiB, swap "+(swap>>10)+" MiB";
+ }
+ private static long kb(String line){try{return Long.parseLong(line.replaceAll("[^0-9]",""));}catch(Exception e){return 0;}}
+ /** Android keeps why the app last ended: a low-memory kill otherwise leaves no trace in iss.log. */
+ private void recordPreviousExit(){
+  try{
+   android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE);if(am==null)return;
+   java.util.List<android.app.ApplicationExitInfo> exits=am.getHistoricalProcessExitReasons(getPackageName(),0,1);
+   if(exits.isEmpty())return;android.app.ApplicationExitInfo x=exits.get(0);
+   record("Previous exit: "+exitReason(x.getReason())+" status="+x.getStatus()+" importance="+x.getImportance()
+    +" pss="+(x.getPss()>>10)+" MiB rss="+(x.getRss()>>10)+" MiB at "+new java.util.Date(x.getTimestamp())
+    +(x.getDescription()!=null?" ("+x.getDescription()+")":""));
+  }catch(Exception e){record("Previous exit: unavailable ("+e+")");}
+ }
+ private static String exitReason(int r){
+  switch(r){
+   case android.app.ApplicationExitInfo.REASON_LOW_MEMORY:return "LOW_MEMORY (killed by Android to free RAM)";
+   case android.app.ApplicationExitInfo.REASON_CRASH:return "CRASH (Java)";
+   case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE:return "CRASH_NATIVE";
+   case android.app.ApplicationExitInfo.REASON_ANR:return "ANR";
+   case android.app.ApplicationExitInfo.REASON_SIGNALED:return "SIGNALED";
+   case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE:return "EXCESSIVE_RESOURCE_USAGE";
+   case android.app.ApplicationExitInfo.REASON_USER_REQUESTED:return "USER_REQUESTED";
+   case android.app.ApplicationExitInfo.REASON_EXIT_SELF:return "EXIT_SELF";
+   case android.app.ApplicationExitInfo.REASON_OTHER:return "OTHER";
+   default:return "reason "+r;
+  }
  }
  @Override public void onTrimMemory(int level){super.onTrimMemory(level);recordMemory("Android trim level "+level);}
  private void poll(){
   if(destroyed)return;
-  if(++memoryPolls%30==0)recordMemory("periodic");
+  if(++memoryPolls%10==0)recordMemory("periodic");
   float refresh=getWindowManager().getDefaultDisplay().getRefreshRate();
   if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
   showGraffitiGuideIfRequested();
