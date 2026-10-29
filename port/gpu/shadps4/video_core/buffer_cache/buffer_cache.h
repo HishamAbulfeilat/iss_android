@@ -65,7 +65,13 @@ public:
     /// tlg (shadPS4-Infamous-FixBuild a107bf06): uploads larger than this go through staging
     /// memory of this size, a part at a time. Loading a save in inFAMOUS Second Son one draw reads
     /// 2.4 GB the game wrote at once, and staging memory that large could not be allocated.
+    // tlg: 64 MiB parts on Android, where each part's staging buffer is phone RAM held during
+    // the open-world load burst (288-376 MiB uploads on the S25 Ultra).
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+    static constexpr u64 MAX_UPLOAD_PART_BYTES = 64_MB;
+#else
     static constexpr u64 MAX_UPLOAD_PART_BYTES = 256_MB;
+#endif
 
     explicit BufferCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                          Vulkan::Runtime& runtime, AmdGpu::Liverpool* liverpool,

@@ -4,6 +4,7 @@
 #include "tlg_toggles.h"
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -26,8 +27,27 @@ namespace {
 // ~2 ms per 16 MiB block. Streaming bursts a few seconds apart re-created the blocks trimmed
 // in between and copies into them ran at 0.3 GB/s (stutter). Blocks now live 30 s idle, the
 // upload ring keeps TLG_STAGING_KEEP_MB (512) and is populated at startup.
-constexpr u64 RING_IDLE_FRAMES = 3000;
-constexpr u64 LARGE_IDLE_FRAMES = 3000;
+// tlg: on Android staging memory is the phone's RAM. On a 12 GB Galaxy S25 Ultra the 512 MiB
+// ring plus 288-376 MiB upload buffers held for ~3000 frames peaked as the game loaded the open
+// world, and Android's low-memory killer closed the app there. Keep 128 MiB and free idle large
+// buffers after ~5-10 s instead. TLG_STAGING_KEEP_MB / TLG_STAGING_IDLE_FRAMES override.
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+constexpr u64 DEFAULT_KEEP_MB = 128;
+constexpr u64 DEFAULT_RING_IDLE_FRAMES = 600;
+constexpr u64 DEFAULT_LARGE_IDLE_FRAMES = 300;
+#else
+constexpr u64 DEFAULT_KEEP_MB = 512;
+constexpr u64 DEFAULT_RING_IDLE_FRAMES = 3000;
+constexpr u64 DEFAULT_LARGE_IDLE_FRAMES = 3000;
+#endif
+u64 EnvOr(const char* name, u64 fallback) {
+    const char* value = std::getenv(name);
+    const u64 parsed = value && *value ? std::strtoull(value, nullptr, 10) : 0;
+    return parsed ? parsed : fallback;
+}
+const u64 RING_IDLE_FRAMES = EnvOr("TLG_STAGING_IDLE_FRAMES", DEFAULT_RING_IDLE_FRAMES);
+const u64 LARGE_IDLE_FRAMES =
+    std::min(EnvOr("TLG_STAGING_IDLE_FRAMES", DEFAULT_LARGE_IDLE_FRAMES), RING_IDLE_FRAMES);
 constexpr u64 PREWARM_BLOCKS = 8;
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
@@ -42,7 +62,11 @@ u64 RoundAllocationSize(u64 size) {
 StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& scheduler_)
     : instance{instance_}, scheduler{scheduler_} {
     const char* env = std::getenv("TLG_STAGING_KEEP_MB");
-    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : 512) * 1_MB / BLOCK_SIZE;
+    keep_blocks = (env ? std::strtoull(env, nullptr, 10) : DEFAULT_KEEP_MB) * 1_MB / BLOCK_SIZE;
+    std::printf("GPU: staging keeps %llu MiB, idle buffers freed after %llu/%llu frames\n",
+                static_cast<unsigned long long>(keep_blocks * BLOCK_SIZE >> 20),
+                static_cast<unsigned long long>(LARGE_IDLE_FRAMES),
+                static_cast<unsigned long long>(RING_IDLE_FRAMES));
     Ring& ring = rings[u32(MemoryType::HostUncached)];
     for (u64 i = 0; i < PREWARM_BLOCKS; ++i) {
         auto& block = ring.blocks.emplace_back(Block{
