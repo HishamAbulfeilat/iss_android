@@ -51,7 +51,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("inFAMOUS Second Son — Daedalus 0.2.3 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.2.4 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
@@ -70,7 +70,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   surface.getHolder().addCallback(this);
   record("Activity initialized");
   recordPreviousExit();
-  thermal=new BionicThermal(this,this::record,this::updateDisplayRate);thermal.start();
+  thermal=new BionicThermal(this,this::record);thermal.start();
  }
  private void applyFullscreen(){
   // Fullscreen selects image fill, not the visibility of Android's system bars.
@@ -119,13 +119,9 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
   BionicRendererSettings.environment(prefs,e);
-  // Galaxy S25 Ultra (12 GB): Vulkan usage settled at ~6.1 GB above the driver's shrinking budget
-  // while the guest reserves ~5.3 GB, and Android's low-memory killer closed the whole app mid-game.
-  // Cap the texture collector's budget at 45% of RAM so images are evicted before that point.
-  if(!e.containsKey("TLG_GC_BUDGET_MB")){
-   android.app.ActivityManager.MemoryInfo m=memory();
-   if(m!=null&&m.totalMem>0){long mb=m.totalMem*45/100>>20;e.put("TLG_GC_BUDGET_MB",Long.toString(mb));record("Memory: "+(m.totalMem>>20)+" MiB RAM, GPU collector budget "+mb+" MiB");}
-  }
+  // The texture collector follows the driver's live budget, as upstream. A forced 45%-of-RAM budget
+  // (v0.2.1-v0.2.3) evicted nothing (buffers, not textures, fill memory) and kept it in pressure mode.
+  {android.app.ActivityManager.MemoryInfo m=memory();if(m!=null)record("Memory: "+(m.totalMem>>20)+" MiB RAM");}
   boolean fsr3=prefs.getBoolean("fsr3",false);
   e.put("TLG_UPSCALER",fsr3?"fsr3":"none");
   if(fsr3){

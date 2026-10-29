@@ -9,8 +9,6 @@ import java.nio.charset.StandardCharsets;
 final class BionicPerformanceSettings {
  static final int[] LIMITS={30,60,120,240};
  static int limit(SharedPreferences p){int n=p.getInt("fps_limit",60);for(int v:LIMITS)if(n==v)return n;return 60;}
- /** Thermal step-down applied by BionicThermal (0 = none); never stored in preferences. */
- static volatile int thermalSteps;
  /** Highest refresh rate the panel offers at its current resolution (120 Hz on Galaxy S25 Ultra). */
  static float maxRefresh(Activity a){
   android.view.Display d=a.getWindowManager().getDefaultDisplay();android.view.Display.Mode c=d.getMode();float best=c.getRefreshRate();
@@ -22,7 +20,6 @@ final class BionicPerformanceSettings {
  static int effective(Activity a){
   SharedPreferences p=a.getSharedPreferences("iss",0);int n=limit(p),m=p.getInt("fg_multiplier",0);
   if(m>=2&&m<=4){float hz=maxRefresh(a);int cap=LIMITS[0];for(int v:LIMITS)if(v*m<=hz+.5f)cap=v;n=Math.min(n,cap);}
-  for(int i=0;i<thermalSteps;i++){int lower=LIMITS[0];for(int v:LIMITS)if(v<n)lower=v;n=lower;}
   return n;
  }
  static String summary(Activity a){SharedPreferences p=a.getSharedPreferences("iss",0);return limit(p)+" FPS · VSync "+(p.getBoolean("vsync",true)?AppLanguage.text("on", "ligado"):AppLanguage.text("off", "desligado"));}
