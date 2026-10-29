@@ -17,7 +17,7 @@ Kept: the frame-generation cap (real FPS ≤ refresh / multiplier), the exit-rea
 ## Restore the settings the reinstall reset
 
 Uninstalling for the fork build wiped the app's settings and shader cache. The original setup
-in the logs used **Readbacks: Precise 2 (Hybrid)**; set it again under Renderer settings.
+in the logs used **Readbacks: Precise 2 (Hybrid)**; set it again under **Readback — smoke and powers**.
 Bloodframe **x2** (not x4) with a **60 FPS** limit. The first sessions rebuild shaders and stutter.
 
 ## Previous: v0.2.3
