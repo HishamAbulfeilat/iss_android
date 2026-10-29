@@ -755,7 +755,7 @@ static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
     // Mirror the game's own two "no AA" gates at 0x192c59/0x192c60.
     // Without these gates the DONE site also fires in menus and photo mode.
     const uintptr_t post = (uintptr_t)regs->gpr[GUEST_R14];
-    const bool aa_enabled = post > 0x10000 && post < (UINT64_C(1) << 40) &&
+    const int aa_enabled = post > 0x10000 && post < (UINT64_C(1) << 40) &&
         image[0xf1bcd0 + 0xdf0f05] == 0 &&
         *((const unsigned char *)(post + 0x1eb8d)) == 0;
     if (aa_enabled && context > 0x10000 && output > 0x10000 &&
