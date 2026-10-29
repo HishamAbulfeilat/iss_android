@@ -25,6 +25,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private TouchControllerOverlay controller;
  private BionicPlayerMenu menu;
  private BionicThermal thermal;
+ private BionicPerfHint perfHint;
  private boolean restarting,edgeGesture,swipeConsumed;
  private float edgeX,edgeY;
  private android.app.AlertDialog graffitiGuideDialog;
@@ -71,6 +72,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   record("Activity initialized");
   recordPreviousExit();
   thermal=new BionicThermal(this,this::record);thermal.start();
+  if(BionicPerfHint.enabled(getSharedPreferences("iss",0)))perfHint=new BionicPerfHint(this,this::record);else record("Performance hint: off (Renderer corrections)");
  }
  private void applyFullscreen(){
   // Fullscreen selects image fill, not the visibility of Android's system bars.
@@ -274,6 +276,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
   showGraffitiGuideIfRequested();
   long n=IssPresent.frames();
+  if(perfHint!=null)perfHint.tick(n,BionicPerformanceSettings.effective(this),getSharedPreferences("iss",0).getInt("fg_multiplier",0));
   if(!failed&&n>0)status.setVisibility(View.GONE);
   if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
   main.postDelayed(this::poll,1000);
@@ -327,6 +330,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   }
   if(menu!=null)menu.destroy();
   if(thermal!=null)thermal.stop();
+  if(perfHint!=null)perfHint.stop();
   IssPresent.stop();if(audio!=null)audio.stop();
   worker.shutdown();super.onDestroy();
  }

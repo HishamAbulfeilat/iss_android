@@ -190,6 +190,7 @@ final class LanguageCatalogTrPl {
   {"Imported: ","İçe aktarıldı: ","Zaimportowano: "},
   {"Changes apply on next game start. Disable a correction to compare rendering and stability.","Değişiklikler sonraki oyun açılışında uygulanır. Görüntü ve kararlılığı karşılaştırmak için düzeltmeyi kapatın.","Zmiany zostaną zastosowane po ponownym uruchomieniu gry. Wyłącz poprawkę, aby porównać obraz i stabilność."},
   {"Renderer corrections","İşleyici düzeltmeleri","Poprawki renderera"},
+  {"Android performance hint (keeps game threads clocked up)","Android performans ipucu (oyun iş parçacıklarını yüksek frekansta tutar)","Wskazówka wydajności Androida (utrzymuje wysokie taktowanie wątków gry)"},
   {"Experimental: hot pages (fewer write stalls; may lower FPS in some scenes)","Deneysel: sıcak sayfalar (daha az yazma takılması; bazı sahnelerde FPS düşebilir)","Eksperymentalne: gorące strony (mniej przestojów zapisu; w niektórych scenach FPS może spaść)"},
   {"Dynamic compute stride (smoke)","Dinamik hesaplama adımı (duman)","Dynamiczny krok obliczeń (dym)"},
   {"Real light occlusion","Gerçek ışık örtülmesi","Rzeczywista okluzja światła"},

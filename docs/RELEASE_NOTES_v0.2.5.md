@@ -11,6 +11,12 @@
     spent ~25% of its time in write faults on pages it rewrites every frame. Hot pages keeps
     such pages writable and uploads them on use. Upstream measured it slower in one PC scene,
     so compare FPS with it on and off.
+- **New, on by default — Android performance hint (ADPF).** The game thread waits on the GPU
+  for much of each frame, so the CPU governor sees it half idle and lowers clocks. The app now
+  opens an Android performance hint session for the game's main, GPU and job threads with the
+  frame-time target and reports real frame times once a second. The log shows
+  `Performance hint: session for N game threads` (or why Android refused it). Switch it off in
+  Renderer corrections to compare; it may make the phone warmer.
 - Readback: use **Relaxed 1**. The app itself marks Precise 2 as a major FPS cost.
 
 ## Previous: v0.2.4
