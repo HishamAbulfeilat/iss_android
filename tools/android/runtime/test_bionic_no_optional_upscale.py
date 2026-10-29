@@ -242,10 +242,12 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("const auto native_jitter_pixels = camera_motion.IssNativeJitterPixels(w, h);", renderer)
         self.assertIn("info.jitterOffset = {sign * jitter[0] + native_jitter_pixels[0],", renderer)
         self.assertIn("sign * jitter[1] + native_jitter_pixels[1]", renderer)
-        # inFAMOUS uses a native +/-0.25 pixel camera offset at 640x360.
-        # Halving the host Halton sample keeps the total within +/-0.5 pixel.
-        self.assertIn("0.5f * (Halton(jitter_index, 2) - 0.5f)", renderer)
-        self.assertIn("0.5f * (Halton(jitter_index, 3) - 0.5f)", renderer)
+        # The verified FXAA hook removes the game's +/-0.25 pixel SMAA
+        # jitter. FSR3 must then use full host Halton. Unsupported revisions
+        # retain the older 0.5x host + 0.25x guest behavior.
+        self.assertIn("const float amplitude = full_halton ? 1.0f : 0.5f;", renderer)
+        self.assertIn("amplitude * (Halton(jitter_index, 2) - 0.5f)", renderer)
+        self.assertIn("amplitude * (Halton(jitter_index, 3) - 0.5f)", renderer)
         for nx, ny in ((1 / 1280, -1 / 720), (-1 / 1280, 1 / 720)):
             guest_x, guest_y = nx * (640 / 2), -ny * (360 / 2)
             self.assertAlmostEqual(abs(guest_x), 0.25)
@@ -253,6 +255,8 @@ class BionicFsr3Tests(unittest.TestCase):
             for halton_x, halton_y in ((0.0, 0.0), (1.0, 1.0), (0.5, 0.5)):
                 self.assertLessEqual(abs(guest_x + 0.5 * (halton_x - 0.5)), 0.5)
                 self.assertLessEqual(abs(guest_y + 0.5 * (halton_y - 0.5)), 0.5)
+                self.assertLessEqual(abs(halton_x - 0.5), 0.5)
+                self.assertLessEqual(abs(halton_y - 0.5), 0.5)
 
     def test_pc_zero_is_diagnosable(self):
         self.assertIn("arm->uc_mcontext.regs[30]", PROBE)
