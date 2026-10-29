@@ -19,6 +19,9 @@
 #include "ffx_vk_portable.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
 #include "video_core/host_shaders/upscale_reactive_comp.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "video_core/host_shaders/upscale_iss_hud_comp.h"
+#endif
 #include "video_core/host_shaders/taa_comp.h"
 #include "video_core/host_shaders/taa_sharpen_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
@@ -890,6 +893,22 @@ void TemporalUpscaler::CreatePipelines() {
     merge_pipeline = compute(UPSCALE_MERGE_COMP, *merge_pipeline_layout);
     storage_layout(3, reactive_desc_layout, reactive_pipeline_layout, 3 * sizeof(float));
     reactive_pipeline = compute(UPSCALE_REACTIVE_COMP, *reactive_pipeline_layout);
+#ifdef ISS_ANDROID_BIONIC
+    const std::array<vk::DescriptorSetLayoutBinding, 2> hud_bindings{{
+        {.binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+        {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+    }};
+    iss_hud_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+        .bindingCount = u32(hud_bindings.size()), .pBindings = hud_bindings.data(),
+    }));
+    iss_hud_pipeline_layout = Check(device.createPipelineLayoutUnique({
+        .setLayoutCount = 1, .pSetLayouts = &*iss_hud_desc_layout,
+    }));
+    iss_hud_pipeline = compute(UPSCALE_ISS_HUD_COMP, *iss_hud_pipeline_layout);
+#endif
     storage_layout(2, taa_sharpen_desc_layout, taa_sharpen_pipeline_layout, sizeof(float));
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
@@ -2195,6 +2214,68 @@ void TemporalUpscaler::RunScaled() {
     }
 
     info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
+#ifdef ISS_ANDROID_BIONIC
+    // FSR3 runs at the proven late LDR boundary, never at the G-buffer.
+    // Unlike the failed early-UI attempts, this masks only non-jittered
+    // narrow HUD strokes AFTER the game's scene and postprocessing complete.
+    bool iss_hud_mask_ready = false;
+    const char* iss_hud_env = std::getenv("ISS_FSR3_HUD_STABILITY");
+    if (!mask_ready && !ReactiveOn() && iss_hud_env && iss_hud_env[0] == '1' &&
+        scaled_session && settings.upscaler == TlgSettings::UpscalerFsr3 &&
+        color.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
+        (color.usage_flags & vk::ImageUsageFlagBits::eSampled)) {
+        const vk::Image mask_image = vk::Image(reactive_image);
+        const vk::ImageMemoryBarrier2 to_write{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eNone,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = mask_image,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+        };
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1,
+                                 .pImageMemoryBarriers = &to_write});
+        const std::array<vk::DescriptorImageInfo, 2> views{{
+            {.sampler = *taa_sampler, .imageView = color_view,
+             .imageLayout = vk::ImageLayout::eGeneral},
+            {.imageView = *reactive_view, .imageLayout = vk::ImageLayout::eGeneral},
+        }};
+        const std::array<vk::WriteDescriptorSet, 2> writes{{
+            {.dstBinding = 0, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+             .pImageInfo = &views[0]},
+            {.dstBinding = 1, .descriptorCount = 1,
+             .descriptorType = vk::DescriptorType::eStorageImage,
+             .pImageInfo = &views[1]},
+        }};
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *iss_hud_pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
+                                    *iss_hud_pipeline_layout, 0, writes);
+        cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+        auto to_read = to_write;
+        to_read.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+        to_read.srcAccessMask = vk::AccessFlagBits2::eShaderWrite;
+        to_read.dstStageMask = vk::PipelineStageFlagBits2::eAllCommands;
+        to_read.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+        to_read.oldLayout = vk::ImageLayout::eGeneral;
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1,
+                                 .pImageMemoryBarriers = &to_read});
+        info.transparencyAndCompositionMask =
+            Describe(mask_image, vk::Format::eR8Unorm, w, h,
+                     vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+                     vk::ImageAspectFlagBits::eColor,
+                     FFX_VK_PORTABLE_RESOURCE_STATE_GENERIC_READ);
+        iss_hud_mask_ready = true;
+        static bool printed = false;
+        if (!printed) {
+            printed = true;
+            std::printf("FSR3 ISS: late LDR HUD T&C mask active (%ux%u), "
+                        "no early FSR or color target redirection\n", w, h);
+        }
+    }
+#endif
     const float sign = TlgToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
 #ifdef ISS_ANDROID_BIONIC
     // The rendered scene is displaced twice: by the game's native projection

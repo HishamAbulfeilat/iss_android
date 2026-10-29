@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Late-LDR, bounded FSR3 transparency/composition mask for non-jittered ISS
+// white HUD glyphs: no scene render redirection, depth or velocity changes.
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene;
+layout(binding = 1, r8) uniform writeonly image2D mask;
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float glyph(ivec2 p, ivec2 dim) {
+    vec3 c = texelFetch(scene, p, 0).rgb;
+    float y = luma(c);
+    float chroma = max(max(c.r,c.g),c.b)-min(min(c.r,c.g),c.b);
+    ivec2 a=clamp(p+ivec2(-1,0),ivec2(0),dim-1);
+    ivec2 b=clamp(p+ivec2( 1,0),ivec2(0),dim-1);
+    ivec2 d=clamp(p+ivec2(0,-1),ivec2(0),dim-1);
+    ivec2 e=clamp(p+ivec2(0, 1),ivec2(0),dim-1);
+    float neighbors=0.25*(luma(texelFetch(scene,a,0).rgb)+
+                          luma(texelFetch(scene,b,0).rgb)+
+                          luma(texelFetch(scene,d,0).rgb)+
+                          luma(texelFetch(scene,e,0).rgb));
+    return smoothstep(0.48,0.72,y) *
+           (1.0-smoothstep(0.22,0.34,chroma)) *
+           smoothstep(0.09,0.18,max(y-neighbors,0.0));
+}
+void main() {
+    ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dim=textureSize(scene,0);
+    if(any(greaterThanEqual(p,dim))) return;
+    float local_mask=0.0;
+    // Include thin strokes and their 1px antialias fringe.
+    for(int j=-1;j<=1;++j)
+        for(int i=-1;i<=1;++i)
+            local_mask=max(local_mask,
+              glyph(clamp(p+ivec2(i,j),ivec2(0),dim-1),dim));
+    imageStore(mask,p,vec4(min(local_mask*0.96,0.96),0.0,0.0,0.0));
+}

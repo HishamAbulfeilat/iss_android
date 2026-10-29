@@ -105,6 +105,13 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(fsrPreset);
+  CheckBox hudTemporal=new CheckBox(activity);
+  hudTemporal.setText(AppLanguage.text("Reduce FSR3 HUD temporal blur (experimental)",
+      "Reduzir borrado temporal da interface no FSR3 (experimental)"));
+  hudTemporal.setChecked(prefs.getBoolean("fsr3_hud_stability",true));
+  hudTemporal.setOnCheckedChangeListener((button,checked)->
+      prefs.edit().putBoolean("fsr3_hud_stability",checked).apply());
+  l.addView(hudTemporal);
   CheckBox sharpening=new CheckBox(activity);
   sharpening.setText(AppLanguage.text("Enable FSR sharpening","Ativar nitidez do FSR"));
   sharpening.setChecked(fsrSharpenEnabled(prefs));l.addView(sharpening);
@@ -158,6 +165,7 @@ final class BionicVideoSettings {
    boolean active=fsr.isChecked();
    fsrPreset.setEnabled(active);fsrPresetLabel.setEnabled(active);
    sharpening.setEnabled(active);
+   hudTemporal.setEnabled(active);
    sharpenSlider.setEnabled(active&&sharpening.isChecked());
    sharpenLabel.setEnabled(active&&sharpening.isChecked());
    sharpenHint.setEnabled(active);

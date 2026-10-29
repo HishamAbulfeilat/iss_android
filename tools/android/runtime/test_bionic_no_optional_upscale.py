@@ -112,6 +112,22 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
 
+    def test_iss_fsr3_late_ldr_hud_mask_is_not_early_ui(self):
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        shader = (GPU / "shadps4/video_core/host_shaders/upscale_iss_hud.comp").read_text()
+        video = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicVideoSettings.java").read_text()
+        game = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java").read_text()
+        self.assertIn("ISS_FSR3_HUD_STABILITY", renderer)
+        self.assertIn("info.transparencyAndCompositionMask =", renderer)
+        self.assertIn("iss_hud_mask_ready = true", renderer)
+        self.assertIn("color.info.pixel_format == vk::Format::eR8G8B8A8Unorm", renderer)
+        self.assertIn("r8) uniform writeonly image2D mask", shader)
+        self.assertIn("min(local_mask", shader)
+        self.assertIn('e.put("ISS_FSR3_HUD_STABILITY"', game)
+        self.assertIn('fsr3_hud_stability', video)
+        self.assertNotIn("ISS_FSR3_UI_COMPOSE", renderer)
+        self.assertNotIn("ldr_edge_mask", renderer)
+
     def test_iss_fsr3_snapshots_scene_depth_before_hud_reuse(self):
         src = GPU / "shadps4/video_core/renderer_vulkan"
         header = (src / "vk_temporal_upscaler.h").read_text()
