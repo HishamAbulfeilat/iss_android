@@ -4487,6 +4487,12 @@ void Rasterizer::UpdateColorBlendingState(const GraphicsPipeline* pipeline) cons
     dynamic_state.SetAttachmentFeedbackLoopEnabled(attachment_feedback_loop);
 }
 
+void Rasterizer::IssAaOutputMarker(u64 gpu_addr, u32 width, u32 height) {
+    // Respect the command stream order even with pipelined Vulkan draws.
+    DrainDrawPipe(5);
+    upscaler->OnIssAaOutputMarker(gpu_addr, width, height);
+}
+
 void Rasterizer::ScopeMarkerBegin(const std::string_view& str, bool from_guest) {
     DrainDrawPipe();
     if ((from_guest && !EmulatorSettings.IsVkGuestMarkersEnabled()) ||

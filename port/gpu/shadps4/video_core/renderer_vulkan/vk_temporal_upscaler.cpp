@@ -1961,6 +1961,51 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     ui_depth = depth_id;
 }
 
+void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height) {
+#ifndef ISS_ANDROID_BIONIC
+    (void)gpu_addr; (void)width; (void)height;
+#else
+    static u32 markers = 0, used = 0;
+    ++markers;
+    if (!Scaled() || !scaled_session || done_this_frame || failed || !Active() ||
+        TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3 ||
+        !camera_motion.Ready() || !camera_motion.Depth()) return;
+    if (width != render_width || height != render_height) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: dimensions %ux%u vs render %ux%u; fallback\\n",
+                                      width,height,render_width,render_height);
+        return;
+    }
+    const auto image_id = texture_cache.FindImageFromRange(gpu_addr, 4, false);
+    if (!image_id) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: no matching Vulkan target at 0x%llx; fallback\\n",
+            (unsigned long long)gpu_addr);
+        return;
+    }
+    auto& image = texture_cache.GetImage(image_id);
+    const auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    if (image.info.guest_address != gpu_addr ||
+        image.info.pixel_format != vk::Format::eR8G8B8A8Unorm ||
+        image.info.size.width != depth.info.size.width ||
+        image.info.size.height != depth.info.size.height ||
+        image.info.size.width != width || image.info.size.height != height ||
+        !(image.usage_flags & vk::ImageUsageFlagBits::eSampled) ||
+        FrameCapture::IsDisplayBuffer(gpu_addr)) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: unsuitable colour image at 0x%llx (fmt=%u, size=%ux%u); fallback\\n",
+            (unsigned long long)gpu_addr, unsigned(image.info.pixel_format),
+            image.info.size.width, image.info.size.height);
+        return;
+    }
+    // The game has FINISHED its AA composite at this exact marker. Do not run
+    // on the G-buffer or before colour tonemapping (the former cyan regression).
+    ldr_target = image_id;
+    RunScaled();
+    if (ui_phase && ++used <= 4) {
+        std::printf("FSR3 ISS AA marker: reconstructed at AA boundary, GPU=0x%llx, size=%ux%u\\n",
+                    (unsigned long long)gpu_addr,width,height);
+    }
+#endif
+}
+
 void TemporalUpscaler::RunScaled() {
     if (auto* profiler = GpuProfiler::Get()) {
         const char* label = TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa

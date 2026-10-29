@@ -884,6 +884,20 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     break;
                 }
 
+                // CUSA00004 AA completion NOP: the FEX hook writes this packet
+                // after the game's AA has completed its colour composite.
+                // Do not infer this point from stencil, transparency or UI draw hashes.
+                if (nop->header.count.Value() >= 5 &&
+                    nop->data_block[0] == 0x49534101u && nop->data_block[1] == 1u) {
+                    const u64 gpu_addr = u64(nop->data_block[2]) |
+                                         (u64(nop->data_block[3]) << 32);
+                    const u32 image_width = nop->data_block[4];
+                    const u32 image_height = nop->data_block[5];
+                    if (rasterizer) {
+                        rasterizer->IssAaOutputMarker(gpu_addr, image_width, image_height);
+                    }
+                    break;
+                }
                 switch (nop->data_block[0]) {
                 case PM4CmdNop::PayloadType::PatchedFlip: {
                     // There is no evidence that GPU CP drives flip events by parsing

@@ -739,6 +739,56 @@ static const unsigned char iss_aa_after_bytes[] = {
     0x41,0x0a,0x86,0x8d,0xeb,0x01,0x00,0x0f,0x85,0x99,0x00,0x00,0x00};
 static const unsigned char iss_aa_done_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
 static const unsigned char iss_aa_fx_target_bytes[] = {0x49,0x8b,0x06,0x48,0x3b,0x45,0xd0};
+static const unsigned char iss_aa_done_site_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
+static const unsigned char iss_aa_done_next_bytes[] = {0x4c,0x8d,0x3d,0xd3,0xe4,0xd7,0x07};
+
+/* Exact inFAMOUS AA marker. Unlike guessing stencil/UI shader states, this
+ * appears in the PM4 stream immediately after the game's AA/colour composite.
+ * Uses a compact NOP with [magic, version, GPU address lo/hi, width, height].
+ * If the command writer is full, skip the marker and retain the safe late FSR.
+ * If FSR is off or the eboot signature differs, this callback is not installed. */
+enum { ISS_AA_DONE_NEXT = 0x192d06 };
+static unsigned iss_aa_marker_wrote, iss_aa_marker_skipped;
+static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
+    const uintptr_t context = (uintptr_t)regs->gpr[GUEST_R13];
+    const uintptr_t output = (uintptr_t)regs->gpr[GUEST_R15];
+    if (context > 0x10000 && output > 0x10000 &&
+        context < (UINT64_C(1) << 40) && output < (UINT64_C(1) << 40)) {
+        uint32_t descriptor[8];
+        memcpy(descriptor, (const void *)(output + 0xb4), sizeof(descriptor));
+        const uint64_t gpu_address =
+            ((uint64_t)(descriptor[1] & 0x3f) << 32 | descriptor[0]) << 8;
+        const uint32_t width = (descriptor[2] & 0x3fff) + 1;
+        const uint32_t height = ((descriptor[2] >> 14) & 0x3fff) + 1;
+        if (gpu_address && width >= 320 && height >= 180 &&
+            width <= 8192 && height <= 8192) {
+            unsigned char *writer = (unsigned char *)context + 8;
+            unsigned char *end = NULL, *cursor = NULL;
+            memcpy(&end, writer + 8, sizeof(end));
+            memcpy(&cursor, writer + 0x10, sizeof(cursor));
+            if (end && cursor && end >= cursor && (size_t)(end-cursor) >= 28) {
+                const uint32_t marker[7] = {
+                    0xc0051000u, 0x49534101u, 1u,
+                    (uint32_t)gpu_address, (uint32_t)(gpu_address >> 32),
+                    width, height,
+                };
+                memcpy(cursor, marker, sizeof(marker));
+                cursor += sizeof(marker);
+                memcpy(writer + 0x10, &cursor, sizeof(cursor));
+                if (++iss_aa_marker_wrote <= 3) {
+                    fprintf(stderr, "FSR3 ISS AA marker written #%u: GPU=0x%llx %ux%u\n",
+                            iss_aa_marker_wrote, (unsigned long long)gpu_address, width, height);
+                }
+            } else if (++iss_aa_marker_skipped <= 3) {
+                fputs("FSR3 ISS AA marker: command writer has no room; late fallback\n", stderr);
+            }
+        }
+    }
+    /* The replaced instruction is lea rbx,[rip+0x7bb91a2]. */
+    regs->gpr[GUEST_RBX] = (uintptr_t)(image + 0x7d4bea8);
+    regs->rip = (uintptr_t)(image + ISS_AA_DONE_NEXT);
+}
+
 static unsigned iss_aa_reported;
 static void iss_fsr3_avoid_game_t2x(GuestRegs *regs) {
     /* This guest global is read at 0x192c66 and chooses the SMAA T2x
@@ -773,7 +823,8 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
         {ISS_AA_ENTRY, iss_aa_entry_bytes, sizeof(iss_aa_entry_bytes)},
         {ISS_AA_SITE, iss_aa_site_bytes, sizeof(iss_aa_site_bytes)},
         {ISS_AA_NEXT, iss_aa_after_bytes, sizeof(iss_aa_after_bytes)},
-        {ISS_AA_DONE, iss_aa_done_bytes, sizeof(iss_aa_done_bytes)}
+        {ISS_AA_DONE, iss_aa_done_bytes, sizeof(iss_aa_done_bytes)},
+        {ISS_AA_DONE_NEXT, iss_aa_done_next_bytes, sizeof(iss_aa_done_next_bytes)}
     };
     if (!mapped(segments,count,ISS_AA_MODE,1) || ISS_AA_MODE >= size) return;
     for (size_t i=0;i<sizeof(checks)/sizeof(checks[0]);++i) {
@@ -790,6 +841,15 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
         return;
     }
     puts("FSR3 ISS native AA: verified AA selection hook installed (FXAA + FSR3)");
+    const char *marker_off = getenv("ISS_FSR3_AA_MARKER");
+    if (!marker_off || marker_off[0] != '0') {
+        if (guest_cpu_hook((uintptr_t)(image + ISS_AA_DONE),
+                           sizeof(iss_aa_done_site_bytes), iss_fsr3_aa_done_marker)) {
+            puts("FSR3 ISS AA PM4 marker installed (after verified AA pass)");
+        } else {
+            puts("FSR3 ISS AA marker hook unavailable; keeping late FSR3 fallback");
+        }
+    }
 }
 #else
 static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,

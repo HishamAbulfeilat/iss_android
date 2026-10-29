@@ -112,6 +112,21 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
 
+    def test_iss_fsr3_guest_aa_pm4_marker_and_fallback(self):
+        probe = (ROOT / "port/src/probe.c").read_text()
+        liverpool = (GPU / "shadps4/video_core/amdgpu/liverpool.cpp").read_text()
+        raster = (GPU / "shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp").read_text()
+        upscaler = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        self.assertIn("iss_fsr3_aa_done_marker", probe)
+        self.assertIn("FSR3 ISS AA PM4 marker installed", probe)
+        self.assertIn("0x49534101u", probe)
+        self.assertIn("0x49534101u", liverpool)
+        self.assertIn("IssAaOutputMarker(gpu_addr, image_width, image_height)", liverpool)
+        self.assertIn("DrainDrawPipe(5)", raster)
+        self.assertIn("FindImageFromRange(gpu_addr, 4, false)", upscaler)
+        self.assertIn("FSR3 ISS AA marker: reconstructed at AA boundary", upscaler)
+        self.assertIn("FrameCapture::IsDisplayBuffer(gpu_addr)", upscaler)
+
     def test_iss_fsr3_snapshots_scene_depth_before_hud_reuse(self):
         src = GPU / "shadps4/video_core/renderer_vulkan"
         header = (src / "vk_temporal_upscaler.h").read_text()

@@ -68,6 +68,8 @@ public:
     // Bloodborne Android: complete a scaled scene before the display copy if no UI draw was identified.
     // No dispatch occurs until camera, depth and scene color were validated.
     void OnDisplayPassStart();
+    // Explicit CUSA00004 PM4 marker after the game's AA and colour composite.
+    void OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height);
     bool OnFrameStart();
     bool RasterScaling() const;
     /// tlg: LOD bias for scene materials, log2(render / output) while a reduced scene is
