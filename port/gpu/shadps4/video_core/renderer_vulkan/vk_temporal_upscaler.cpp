@@ -477,13 +477,24 @@ bool TemporalUpscaler::OnFrameStart() {
         : Motion::JitterPhases(scene_targets.Size().width, 1920);
     jitter_index = jitter_index % phases + 1;
 #ifdef ISS_ANDROID_BIONIC
-    // ISS has its own +/-0.25-pixel projection jitter, independently of the
-    // Vulkan viewport jitter. Use half-strength host Halton samples here so
-    // their sum stays within the FSR3 +/-0.5-pixel reconstruction footprint.
-    // The native component is added to FSR dispatch metadata in RunScaled().
+    // Prior to the verified FXAA hook, the guest added its own SMAA T2x
+    // +/-0.25 px projection jitter. We halved Vulkan's Halton sequence to
+    // prevent two jitters accumulating. The FXAA hook now bypasses the guest
+    // jitter function entirely (confirmed native=0 in the Oct 29 capture).
+    // Restore full subpixel Halton coverage when the hook installed, else
+    // keep the previous half-amplitude behavior for unpatched games.
     if (scaled_session && upscaler == TlgSettings::UpscalerFsr3) {
-        jitter = {0.5f * (Halton(jitter_index, 2) - 0.5f),
-                  0.5f * (Halton(jitter_index, 3) - 0.5f)};
+        const char* native_t2x_disabled = std::getenv("ISS_FSR3_NATIVE_T2X_DISABLED");
+        const bool full_halton = native_t2x_disabled && native_t2x_disabled[0] == '1';
+        const float amplitude = full_halton ? 1.0f : 0.5f;
+        jitter = {amplitude * (Halton(jitter_index, 2) - 0.5f),
+                  amplitude * (Halton(jitter_index, 3) - 0.5f)};
+        static bool reported_full_halton = false;
+        if (full_halton && !reported_full_halton) {
+            reported_full_halton = true;
+            std::printf("FSR3 ISS: guest SMAA T2x jitter disabled; native=0, "
+                        "full-strength Vulkan Halton phase enabled (1.0x)\\n");
+        }
     } else
 #endif
     {

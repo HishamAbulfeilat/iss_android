@@ -112,6 +112,15 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
 
+    def test_iss_fsr3_restores_full_halton_when_verified_guest_aa_disabled(self):
+        loader = (ROOT / "port/src/probe.c").read_text()
+        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
+        self.assertIn('setenv("ISS_FSR3_NATIVE_T2X_DISABLED", "1", 1)', loader)
+        self.assertIn('std::getenv("ISS_FSR3_NATIVE_T2X_DISABLED")', renderer)
+        self.assertIn("full_halton ? 1.0f : 0.5f", renderer)
+        self.assertIn("Halton(jitter_index, 2)", renderer)
+        self.assertIn("full-strength Vulkan Halton phase enabled", renderer)
+
     def test_iss_fsr3_guest_aa_pm4_marker_and_fallback(self):
         probe = (ROOT / "port/src/probe.c").read_text()
         liverpool = (GPU / "shadps4/video_core/amdgpu/liverpool.cpp").read_text()

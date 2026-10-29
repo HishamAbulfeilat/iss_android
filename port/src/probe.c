@@ -846,6 +846,10 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
         fputs("FSR3 ISS native AA: guest hook unavailable, no change\\n",stderr);
         return;
     }
+    // The verified guest hook skips FUN_00581a50, so the native SMAA T2x
+    // projection jitter is no longer applied. Tell the FSR renderer that it
+    // must use its FULL Halton sequence instead of the old 0.5x blend.
+    setenv("ISS_FSR3_NATIVE_T2X_DISABLED", "1", 1);
     puts("FSR3 ISS native AA: verified AA selection hook installed (FXAA + FSR3)");
     const char *marker_off = getenv("ISS_FSR3_AA_MARKER");
     if (!marker_off || marker_off[0] != '0') {
