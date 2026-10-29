@@ -9,10 +9,26 @@ import java.nio.charset.StandardCharsets;
 final class BionicPerformanceSettings {
  static final int[] LIMITS={30,60,120,240};
  static int limit(SharedPreferences p){int n=p.getInt("fps_limit",60);for(int v:LIMITS)if(n==v)return n;return 60;}
+ /** Thermal step-down applied by BionicThermal (0 = none); never stored in preferences. */
+ static volatile int thermalSteps;
+ /** Highest refresh rate the panel offers at its current resolution (120 Hz on Galaxy S25 Ultra). */
+ static float maxRefresh(Activity a){
+  android.view.Display d=a.getWindowManager().getDefaultDisplay();android.view.Display.Mode c=d.getMode();float best=c.getRefreshRate();
+  for(android.view.Display.Mode m:d.getSupportedModes())if(m.getPhysicalWidth()==c.getPhysicalWidth()&&m.getPhysicalHeight()==c.getPhysicalHeight())best=Math.max(best,m.getRefreshRate());
+  return best;
+ }
+ /** Real-frame limit sent to the game. With Bloodframe xN, real frames above refresh/N are
+  * generated but never shown (120 real x2 = 240 on a 120 Hz panel), so they only cost heat. */
+ static int effective(Activity a){
+  SharedPreferences p=a.getSharedPreferences("iss",0);int n=limit(p),m=p.getInt("fg_multiplier",0);
+  if(m>=2&&m<=4){float hz=maxRefresh(a);int cap=LIMITS[0];for(int v:LIMITS)if(v*m<=hz+.5f)cap=v;n=Math.min(n,cap);}
+  for(int i=0;i<thermalSteps;i++){int lower=LIMITS[0];for(int v:LIMITS)if(v<n)lower=v;n=lower;}
+  return n;
+ }
  static String summary(Activity a){SharedPreferences p=a.getSharedPreferences("iss",0);return limit(p)+" FPS · VSync "+(p.getBoolean("vsync",true)?AppLanguage.text("on", "ligado"):AppLanguage.text("off", "desligado"));}
  static synchronized void write(Activity a)throws IOException{
   SharedPreferences p=a.getSharedPreferences("iss",0);File dir=new File(a.getFilesDir(),"issport");dir.mkdirs();File tmp=new File(dir,"performance.state.tmp");
-  String data="fps_limit="+limit(p)+"\nvsync="+(p.getBoolean("vsync",true)?1:0)+"\ncomplete=1\n";
+  String data="fps_limit="+effective(a)+"\nvsync="+(p.getBoolean("vsync",true)?1:0)+"\ncomplete=1\n";
   try(FileOutputStream out=new FileOutputStream(tmp)){out.write(data.getBytes(StandardCharsets.US_ASCII));out.getFD().sync();}
   if(!tmp.renameTo(new File(dir,"performance.state")))throw new IOException(AppLanguage.text("Could not apply FPS and VSync.", "Não foi possível aplicar FPS e VSync."));
  }

@@ -24,6 +24,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  private TextView status;
  private TouchControllerOverlay controller;
  private BionicPlayerMenu menu;
+ private BionicThermal thermal;
  private boolean restarting,edgeGesture,swipeConsumed;
  private float edgeX,edgeY;
  private android.app.AlertDialog graffitiGuideDialog;
@@ -50,7 +51,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("inFAMOUS Second Son — Daedalus 0.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.2.1 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
@@ -68,6 +69,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   frame.post(this::updateVideoSize);
   surface.getHolder().addCallback(this);
   record("Activity initialized");
+  thermal=new BionicThermal(this,this::record,this::updateDisplayRate);thermal.start();
  }
  private void applyFullscreen(){
   // Fullscreen selects image fill, not the visibility of Android's system bars.
@@ -79,9 +81,11 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  }
  @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)applyFullscreen();}
  void updateDisplayRate(){
+  try{BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   float hz=BionicDisplayRate.apply(this);
   IssPresent.frameRate(hz);
-  record("Display: requested "+hz+" Hz; source limit="+BionicPerformanceSettings.limit(getSharedPreferences("iss",0)));
+  int chosen=BionicPerformanceSettings.limit(getSharedPreferences("iss",0)),applied=BionicPerformanceSettings.effective(this);
+  record("Display: requested "+hz+" Hz; source limit="+applied+(applied!=chosen?" (chosen "+chosen+")":""));
   if(surface!=null&&surface.getHolder().getSurface().isValid())try{surface.getHolder().getSurface().setFrameRate(hz,Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);}catch(Exception e){record("Display frame-rate hint: "+e.getMessage());}
  }
  private void updateVideoSize(){
@@ -114,6 +118,13 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
   BionicRendererSettings.environment(prefs,e);
+  // Galaxy S25 Ultra (12 GB): Vulkan usage settled at ~6.1 GB above the driver's shrinking budget
+  // while the guest reserves ~5.3 GB, and Android's low-memory killer closed the whole app mid-game.
+  // Cap the texture collector's budget at 45% of RAM so images are evicted before that point.
+  if(!e.containsKey("TLG_GC_BUDGET_MB")){
+   android.app.ActivityManager.MemoryInfo m=memory();
+   if(m!=null&&m.totalMem>0){long mb=m.totalMem*45/100>>20;e.put("TLG_GC_BUDGET_MB",Long.toString(mb));record("Memory: "+(m.totalMem>>20)+" MiB RAM, GPU collector budget "+mb+" MiB");}
+  }
   boolean fsr3=prefs.getBoolean("fsr3",false);
   e.put("TLG_UPSCALER",fsr3?"fsr3":"none");
   if(fsr3){
@@ -205,8 +216,20 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   graffitiGuideDialog.show();
   record("Native Android graffiti guide displayed (no ImGui Vulkan dependency)");
  }
+ private android.app.ActivityManager.MemoryInfo memory(){
+  android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE);if(am==null)return null;
+  android.app.ActivityManager.MemoryInfo m=new android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(m);return m;
+ }
+ private int memoryPolls;
+ /** Low-memory kills leave no native error: keep the system's view of memory in iss.log. */
+ private void recordMemory(String why){
+  android.app.ActivityManager.MemoryInfo m=memory();if(m==null)return;
+  record("Memory: "+why+"; available "+(m.availMem>>20)+" of "+(m.totalMem>>20)+" MiB, low-memory threshold "+(m.threshold>>20)+" MiB"+(m.lowMemory?", LOW":""));
+ }
+ @Override public void onTrimMemory(int level){super.onTrimMemory(level);recordMemory("Android trim level "+level);}
  private void poll(){
   if(destroyed)return;
+  if(++memoryPolls%30==0)recordMemory("periodic");
   float refresh=getWindowManager().getDefaultDisplay().getRefreshRate();
   if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
   showGraffitiGuideIfRequested();
@@ -263,6 +286,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    graffitiGuideDialog=null;
   }
   if(menu!=null)menu.destroy();
+  if(thermal!=null)thermal.stop();
   IssPresent.stop();if(audio!=null)audio.stop();
   worker.shutdown();super.onDestroy();
  }
