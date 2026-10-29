@@ -703,29 +703,29 @@ static void install_iss_camera_capture(const char *app0, Segment *segments,
 
 /* inFAMOUS native SMAA T2x vs FSR3: the verified CUSA00004 eboot has
  * the same post-processing instruction signatures as upstream iss_temporal_hook,
- * relocated +0x2dd0. In the SMAA branch FUN_004755e0 applies the game's own
+ * at the original offsets (verified against SELF SHA-256 2d1ca796...). In the SMAA branch FUN_00472810 applies the game's own
  * temporal camera window and its AA pass accumulates before Android FSR3.
  * FSR3 owns temporal reconstruction. Choose the game's FXAA/spatial branch,
  * WITHOUT skipping the AA pass (which also composites scene colour).
  *
- * On FEX the hook replaces cmp [rcx],0 ; je 0x4757b0 in one syscall trap.
+ * On FEX the hook replaces cmp [rcx],0 ; je 0x4729e0 in one syscall trap.
  * HandleSyscall clobbers RCX/R11, so we never read them. The original branch
- * when the AA mode byte is zero jumps to 0x4757b0. The next instruction
+ * when the AA mode byte is zero jumps to 0x4729e0. The next instruction
  * overwrites flags, so the jumped path has the same architectural inputs.
  *
  * No texture, depth, velocity, FSR timing, or HUD redirection changes.
  * Experimental disable: ISS_FSR3_DISABLE_NATIVE_T2X=0. */
 #if !defined(GUEST_CPU_NATIVE)
 enum {
-    ISS_AA_JITTER_BEFORE = 0x47570c,
-    ISS_AA_JITTER_SITE = 0x475714,
-    ISS_AA_JITTER_NEXT = 0x47571d,
-    ISS_AA_JITTER_FXAA = 0x4757b0,
-    ISS_AA_ENTRY = 0x195790,
-    ISS_AA_SITE = 0x195a1c,
-    ISS_AA_NEXT = 0x195a29,
-    ISS_AA_DONE = 0x195acf,
-    ISS_AA_MODE = 0xda35c9
+    ISS_AA_JITTER_BEFORE = 0x47293c,
+    ISS_AA_JITTER_SITE = 0x472944,
+    ISS_AA_JITTER_NEXT = 0x47294d,
+    ISS_AA_JITTER_FXAA = 0x4729e0,
+    ISS_AA_ENTRY = 0x1929c0,
+    ISS_AA_SITE = 0x192c4c,
+    ISS_AA_NEXT = 0x192c59,
+    ISS_AA_DONE = 0x192cff,
+    ISS_AA_MODE = 0xda07f9
 };
 static const unsigned char iss_aa_before_bytes[] = {0x41,0x88,0x9c,0x24,0x2c,0xdc,0x01,0x00};
 static const unsigned char iss_aa_jitter_bytes[] = {0x80,0x39,0x00,0x0f,0x84,0x93,0x00,0x00,0x00};
@@ -738,9 +738,10 @@ static const unsigned char iss_aa_site_bytes[] = {
 static const unsigned char iss_aa_after_bytes[] = {
     0x41,0x0a,0x86,0x8d,0xeb,0x01,0x00,0x0f,0x85,0x99,0x00,0x00,0x00};
 static const unsigned char iss_aa_done_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
+static const unsigned char iss_aa_fx_target_bytes[] = {0x49,0x8b,0x06,0x48,0x3b,0x45,0xd0};
 static unsigned iss_aa_reported;
 static void iss_fsr3_avoid_game_t2x(GuestRegs *regs) {
-    /* This guest global is read at 0x195a36 and chooses the SMAA T2x
+    /* This guest global is read at 0x192c66 and chooses the SMAA T2x
      * branch when nonzero. Zero chooses FXAA. Preserve all GPRs. */
     unsigned char *mode = image + ISS_AA_MODE;
     const unsigned char original = *mode;
@@ -768,6 +769,7 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
         {ISS_AA_JITTER_BEFORE, iss_aa_before_bytes, sizeof(iss_aa_before_bytes)},
         {ISS_AA_JITTER_SITE, iss_aa_jitter_bytes, sizeof(iss_aa_jitter_bytes)},
         {ISS_AA_JITTER_NEXT, iss_aa_next_bytes, sizeof(iss_aa_next_bytes)},
+        {ISS_AA_JITTER_FXAA, iss_aa_fx_target_bytes, sizeof(iss_aa_fx_target_bytes)},
         {ISS_AA_ENTRY, iss_aa_entry_bytes, sizeof(iss_aa_entry_bytes)},
         {ISS_AA_SITE, iss_aa_site_bytes, sizeof(iss_aa_site_bytes)},
         {ISS_AA_NEXT, iss_aa_after_bytes, sizeof(iss_aa_after_bytes)},
@@ -778,7 +780,7 @@ static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
         if (!mapped(segments,count,checks[i].address,checks[i].length) ||
             checks[i].address+checks[i].length > size ||
             memcmp(image+checks[i].address,checks[i].bytes,checks[i].length)) {
-            fputs("FSR3 ISS native AA: executable signature mismatch, no change\\n", stderr);
+            fprintf(stderr,"FSR3 ISS native AA: signature mismatch at guest offset 0x%llx, no change\\n", (unsigned long long)checks[i].address);
             return;
         }
     }
