@@ -34,8 +34,27 @@ static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
 // Memory is made resident in aligned granules of this size. Sparse binds get slower the more is
 // already bound on some drivers, so it pays to bind a little ahead in few larger operations
 // rather than a block at a time as the game streams data in.
-static constexpr u64 RESIDENCY_GRANULE_SIZE = 16_MB;
-static constexpr u64 RESIDENCY_CHUNK_SIZE = 256_MB;
+// tlg: on Android the arenas share the phone's RAM with the guest and the system. On a 12 GB
+// Galaxy S25 Ultra 16 MiB granules and 256 MiB chunks held ~2.4 GiB for scattered buffers while
+// Android swapped the game's own memory out and the frame rate fell to 11-30 FPS. Smaller
+// granules and chunks commit only what is touched, at the cost of more (batched) sparse binds.
+// TLG_RESIDENCY_GRANULE_MB / TLG_RESIDENCY_CHUNK_MB override both sizes on any platform.
+static u64 ResidencySizeMb(const char* name, u64 fallback_mb, u64 min_mb, u64 max_mb) {
+    const char* value = std::getenv(name);
+    const u64 mb = value && *value ? std::strtoull(value, nullptr, 10) : fallback_mb;
+    return std::clamp<u64>(mb ? mb : fallback_mb, min_mb, max_mb) << 20;
+}
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+static constexpr u64 DEFAULT_RESIDENCY_GRANULE_MB = 4;
+static constexpr u64 DEFAULT_RESIDENCY_CHUNK_MB = 64;
+#else
+static constexpr u64 DEFAULT_RESIDENCY_GRANULE_MB = 16;
+static constexpr u64 DEFAULT_RESIDENCY_CHUNK_MB = 256;
+#endif
+static const u64 RESIDENCY_GRANULE_SIZE =
+    ResidencySizeMb("TLG_RESIDENCY_GRANULE_MB", DEFAULT_RESIDENCY_GRANULE_MB, 1, 64);
+static const u64 RESIDENCY_CHUNK_SIZE =
+    ResidencySizeMb("TLG_RESIDENCY_CHUNK_MB", DEFAULT_RESIDENCY_CHUNK_MB, 16, 1024);
 
 static constexpr auto ARENA_USAGE =
     vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
@@ -100,6 +119,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     arena_page_size = u64{1} << arena_page_bits;
     max_arena_pages = std::clamp<u64>(max_buffer >> arena_page_bits, 2, 16);
     num_arena_pages = u64{1} << (ADDRESS_SPACE_BITS - arena_page_bits);
+    std::printf("GPU: buffer residency in %llu MiB granules from %llu MiB chunks\n",
+                static_cast<unsigned long long>(RESIDENCY_GRANULE_SIZE >> 20),
+                static_cast<unsigned long long>(RESIDENCY_CHUNK_SIZE >> 20));
     std::printf("GPU: buffer arenas of %llu MiB, up to %llu pages (driver buffer limit %llu MiB)\n",
                 static_cast<unsigned long long>(arena_page_size >> 20),
                 static_cast<unsigned long long>(max_arena_pages),
