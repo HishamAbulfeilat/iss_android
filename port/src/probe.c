@@ -752,7 +752,13 @@ static unsigned iss_aa_marker_wrote, iss_aa_marker_skipped;
 static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
     const uintptr_t context = (uintptr_t)regs->gpr[GUEST_R13];
     const uintptr_t output = (uintptr_t)regs->gpr[GUEST_R15];
-    if (context > 0x10000 && output > 0x10000 &&
+    // Mirror the game's own two "no AA" gates at 0x192c59/0x192c60.
+    // Without these gates the DONE site also fires in menus and photo mode.
+    const uintptr_t post = (uintptr_t)regs->gpr[GUEST_R14];
+    const bool aa_enabled = post > 0x10000 && post < (UINT64_C(1) << 40) &&
+        image[0xf1bcd0 + 0xdf0f05] == 0 &&
+        *((const unsigned char *)(post + 0x1eb8d)) == 0;
+    if (aa_enabled && context > 0x10000 && output > 0x10000 &&
         context < (UINT64_C(1) << 40) && output < (UINT64_C(1) << 40)) {
         uint32_t descriptor[8];
         memcpy(descriptor, (const void *)(output + 0xb4), sizeof(descriptor));
