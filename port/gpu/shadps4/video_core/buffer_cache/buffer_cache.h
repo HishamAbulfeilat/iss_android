@@ -179,6 +179,14 @@ private:
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
 public:
+    /// tlg: TLG_RELEASE_IDLE_BUFFERS=1 (opt-in): under memory pressure, residency granules the
+    /// GPU has not used for TLG_RELEASE_IDLE_TICKS submissions and did not write are unbound and
+    /// freed; the guest copy is the truth and is uploaded again on next use. Called per submit.
+    void ReleaseIdleResidency();
+    [[nodiscard]] bool ReleaseIdleEnabled() const noexcept {
+        return release_idle;
+    }
+
     /// tlg: TLG_WRITE_MERGE=1 (Precise, or native Bionic Relaxed without DMA): guest memcpy/memset into
     /// GPU-modified pages writes through the backing view without a buffer readback. The
     /// exact byte range is uploaded before the GPU next uses or downloads it. Bytes the GPU
@@ -381,6 +389,18 @@ private:
         bool failed = false;
     };
     std::map<vk::DeviceMemory, ResidencyMapping> residency_mappings;
+    // tlg: TLG_RELEASE_IDLE_BUFFERS state (see ReleaseIdleResidency).
+    bool release_idle = false;
+    u64 release_idle_ticks = 0;
+    u32 release_calls = 0;
+    std::unique_ptr<std::atomic<u64>[]> granule_use;
+    struct DeferredFree {
+        vk::DeviceMemory memory;
+        u64 tick;
+    };
+    std::vector<DeferredFree> deferred_frees;
+    void TouchGranules(VAddr device_addr, u64 size);
+    void DropPendingUnbinds(const Buffer* arena, u64 offset, u64 size);
     WriteTickTracker write_ticks;
     bool mapped_readbacks_enabled = false;
     bool residency_coherent = false;

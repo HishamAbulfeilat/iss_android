@@ -148,6 +148,26 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     mapped_readbacks_enabled = MappedReadbackPolicy() &&
         bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible) &&
         (residency_coherent || instance.NonCoherentAtomSize() <= 4096);
+    if (const char* release = std::getenv("TLG_RELEASE_IDLE_BUFFERS");
+        release && release[0] == '1') {
+        // Freed granules must not be read through a CPU mapping later, and with direct memory
+        // access shaders reach unbound blocks through the BDA table: keep both out of this mode.
+        if (EmulatorSettings.IsDirectMemoryAccessEnabled() ||
+            std::popcount(RESIDENCY_GRANULE_SIZE) != 1) {
+            std::printf("GPU: idle buffer release: off (needs no direct memory access and a "
+                        "power-of-two granule)\n");
+        } else {
+            release_idle = true;
+            mapped_readbacks_enabled = false;
+            const char* ticks = std::getenv("TLG_RELEASE_IDLE_TICKS");
+            release_idle_ticks = ticks && *ticks ? std::strtoull(ticks, nullptr, 10) : 1500;
+            granule_use = std::make_unique<std::atomic<u64>[]>(
+                std::size_t{1} << (ADDRESS_SPACE_BITS - (std::bit_width(RESIDENCY_GRANULE_SIZE) - 1)));
+            std::printf("GPU: idle buffer release: on (granules unused for %llu submissions, "
+                        "under memory pressure; mapped readback off)\n",
+                        static_cast<unsigned long long>(release_idle_ticks));
+        }
+    }
     std::printf("GPU: mapped arena readback: %s (host-visible=%d coherent=%d atom=%llu)\n",
                 mapped_readbacks_enabled ? "on" : "off",
                 bool(residency_flags & vk::MemoryPropertyFlagBits::eHostVisible),
@@ -667,6 +687,9 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
     const u64 last_block = (device_addr + size - 1) >> block_shift;
     const auto* arena = GetArena(first_block, last_block);
     EnsureResident(arena, first_block, last_block);
+    if (release_idle) {
+        TouchGranules(device_addr, size);
+    }
     const u64 uploaded_before = TlgStats::buffer_upload_bytes.load(std::memory_order_relaxed);
     SynchronizeMemory(arena, device_addr, size, is_written, is_texel_buffer);
     if (stats) {
@@ -826,20 +849,32 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             return;
         }
         TlgStats::Timer timer{TlgStats::t_resident};
+        // tlg: with TLG_RELEASE_IDLE_BUFFERS each granule is its own allocation, so an idle one
+        // can be unbound and freed alone (ReleaseIdleResidency).
+        boost::container::small_vector<Interval, 8> pieces;
+        for (const auto& range : bind_ranges) {
+            if (!release_idle) {
+                pieces.push_back(range);
+                continue;
+            }
+            for (u64 start = range.start; start < range.end; start += granule_blocks) {
+                pieces.push_back({start, std::min(range.end, start + granule_blocks)});
+            }
+        }
 
         // All memory is allocated before anything is recorded or bound: making room for it
         // submits, which sends the pending binds and runs pending operations (and so can make
         // some of these ranges resident: the gaps are looked up again after it).
         ResidencyAttempt state{.chunk = residency_chunk, .chunk_used = residency_chunk_used};
         boost::container::small_vector<std::pair<vk::DeviceMemory, u64>, 8> memories;
-        for (const auto& range : bind_ranges) {
+        for (const auto& range : pieces) {
             const auto memory = AllocateResidency((range.end - range.start) << block_shift, state);
             if (!memory) {
                 break;
             }
             memories.push_back(*memory);
         }
-        if (memories.size() != bind_ranges.Size()) {
+        if (memories.size() != pieces.size()) {
             UndoResidency(state);
             const u64 bytes = u64{resident_blocks} << block_shift;
             ASSERT_MSG(attempt == 0,
@@ -857,7 +892,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
         u64 offset = staging.offset;
         size_t index = 0;
-        for (const auto& range : bind_ranges) {
+        for (const auto& range : pieces) {
             const u64 range_size = (range.end - range.start) << block_shift;
             const auto [device_memory, memory_offset] = memories[index++];
 
@@ -872,6 +907,10 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             LOG_DEBUG(Render, "Making range start={}, end={} resident", backing.start,
                       backing.end);
 
+            if (release_idle) {
+                DropPendingUnbinds(arena, (range.start << block_shift) - arena->cpu_addr,
+                                   range_size);
+            }
             const auto& bind = binds->binds.emplace_back(vk::SparseMemoryBind{
                 .resourceOffset = (range.start << block_shift) - arena->cpu_addr,
                 .size = range_size,
@@ -917,7 +956,7 @@ std::optional<std::pair<vk::DeviceMemory, u64>> BufferCache::AllocateResidency(
     // Ranges keep coming as the game streams data in. Carving them out of large chunks keeps the
     // driver from allocating memory each time, which is slow and limited to a few thousand
     // allocations per process on Windows. Large ranges get their own.
-    if (size > RESIDENCY_CHUNK_SIZE / 4) {
+    if (release_idle || size > RESIDENCY_CHUNK_SIZE / 4) {
         const auto memory = allocate(size);
         return memory ? std::optional{Allocation{memory, 0}} : std::nullopt;
     }
@@ -954,6 +993,124 @@ void BufferCache::UndoResidency(const ResidencyAttempt& attempt) {
     residency_allocations -= attempt.allocated.size();
     residency_chunk = attempt.chunk;
     residency_chunk_used = attempt.chunk_used;
+}
+
+void BufferCache::TouchGranules(VAddr device_addr, u64 size) {
+    const u32 shift = std::bit_width(RESIDENCY_GRANULE_SIZE) - 1;
+    const u64 tick = scheduler.CurrentTick();
+    for (u64 g = device_addr >> shift; g <= (device_addr + size - 1) >> shift; ++g) {
+        granule_use[g].store(tick, std::memory_order_relaxed);
+    }
+}
+
+void BufferCache::DropPendingUnbinds(const Buffer* arena, u64 offset, u64 size) {
+    const auto it = std::ranges::find(pending_binds, arena, &ArenaBinds::arena);
+    if (it == pending_binds.end()) {
+        return;
+    }
+    auto& binds = it->binds;
+    binds.erase(std::remove_if(binds.begin(), binds.end(),
+                               [&](const vk::SparseMemoryBind& bind) {
+                                   return !bind.memory && bind.resourceOffset < offset + size &&
+                                          offset < bind.resourceOffset + bind.size;
+                               }),
+                binds.end());
+}
+
+void BufferCache::ReleaseIdleResidency() {
+    if (!release_idle) {
+        return;
+    }
+    // Memory unbound by an earlier pass is freed once the submission carrying the unbind is done.
+    std::erase_if(deferred_frees, [&](const DeferredFree& entry) {
+        if (!scheduler.IsFree(entry.tick)) {
+            return false;
+        }
+        instance.GetDevice().freeMemory(entry.memory);
+        --residency_allocations;
+        return true;
+    });
+    if (++release_calls % 32 != 0) {
+        return;
+    }
+    // Only under pressure: a released granule costs an upload when the game comes back to it.
+    static const bool always = [] {
+        const char* e = std::getenv("TLG_RELEASE_IDLE_ALWAYS");
+        return e && e[0] == '1';
+    }();
+    if (!always) {
+        const auto budget = instance.GetMemoryBudgetSnapshot();
+        if (budget.budget == 0 || budget.usage < budget.budget / 100 * 85) {
+            return;
+        }
+    }
+    const u64 now = scheduler.CurrentTick();
+    if (now <= release_idle_ticks) {
+        return;
+    }
+    const u32 shift = std::bit_width(RESIDENCY_GRANULE_SIZE) - 1;
+    constexpr u64 MaxBytesPerPass = 256_MB;
+    std::vector<Backing> candidates;
+    for (const Backing& backing : resident_ranges) {
+        const VAddr addr = backing.start << block_shift;
+        const u64 size = (backing.end - backing.start) << block_shift;
+        // Whole allocations only: a backing that does not start at its allocation is a piece of
+        // memory still bound elsewhere (allocations from before this mode, or chunk carving).
+        if (backing.offset != 0 || size > RESIDENCY_GRANULE_SIZE) {
+            continue;
+        }
+        const u64 last = granule_use[addr >> shift].load(std::memory_order_relaxed);
+        if (now - last < release_idle_ticks || !scheduler.IsFree(last)) {
+            continue;
+        }
+        if (memory_tracker->IsRegionGpuModified(addr, size) ||
+            gpu_modified_ranges.Intersects(addr, size)) {
+            continue; // the GPU's bytes exist only here
+        }
+        candidates.push_back(backing);
+        if (candidates.size() * RESIDENCY_GRANULE_SIZE >= MaxBytesPerPass) {
+            break;
+        }
+    }
+    if (candidates.empty()) {
+        return;
+    }
+    // The texture binding helper may obtain buffers for the draw being prepared: join it before
+    // residency changes (as ReleaseMemoryForResidency does before images go).
+    runtime.BeforeImageAccess();
+    u64 released = 0;
+    for (const Backing& backing : candidates) {
+        const VAddr addr = backing.start << block_shift;
+        const u64 size = (backing.end - backing.start) << block_shift;
+        const Buffer* arena = address_space[addr >> arena_page_bits];
+        if (!arena) {
+            continue;
+        }
+        BindsForArena(arena)->binds.push_back(vk::SparseMemoryBind{
+            .resourceOffset = addr - arena->cpu_addr,
+            .size = size,
+            .memory = {},
+            .memoryOffset = 0,
+        });
+        resident_ranges.Remove(backing.start, backing.end);
+        // The guest copy is current (the GPU did not write here): upload it again on next use.
+        memory_tracker->MarkRegionAsCpuModified(addr, size);
+        deferred_frees.push_back({backing.memory, now});
+        released += size;
+    }
+    if (released) {
+        u64 resident = 0;
+        for (const auto& range : resident_ranges) {
+            resident += (range.end - range.start) << block_shift;
+        }
+        static u32 reports = 0;
+        if (reports < 32 || reports % 64 == 0) {
+            std::printf("GPU: released %llu MiB of idle buffer memory (%llu MiB resident)\n",
+                        static_cast<unsigned long long>(released >> 20),
+                        static_cast<unsigned long long>(resident >> 20));
+        }
+        ++reports;
+    }
 }
 
 void BufferCache::ReleaseMemoryForResidency(u64 bytes) {

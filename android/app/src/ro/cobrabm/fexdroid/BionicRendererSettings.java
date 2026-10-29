@@ -39,6 +39,11 @@ final class BionicRendererSettings {
   // Opt-in experiment: pages the game writes every frame stop faulting and are re-uploaded on use.
   // On the S25 Ultra the main game thread spent ~25% of its time in such write faults.
   env.put("TLG_HOT_PAGES",p.getBoolean("renderer_hot_pages",false)?"1":"0");
+  // Opt-in memory experiments. Release: buffer memory the GPU has not used for a while and did
+  // not write is freed under memory pressure and re-uploaded on next use. No MSAA: guest
+  // multisampled targets are single-sampled (the tested AMD-on-PC workaround).
+  if(p.getBoolean("renderer_release_idle",false))env.put("TLG_RELEASE_IDLE_BUFFERS","1");
+  if(p.getBoolean("renderer_no_msaa",false))env.put("TLG_NO_MSAA","1");
  }
  static void show(Activity a){
   SharedPreferences p=a.getSharedPreferences("iss",0);
@@ -48,6 +53,8 @@ final class BionicRendererSettings {
   String[] names={AppLanguage.text("Dynamic compute stride (smoke)","Stride dinâmico de compute (fumaça)"),AppLanguage.text("Real light occlusion","Oclusão real das luzes"),AppLanguage.text("Batched texture write-backs","Gravação de texturas em lote"),AppLanguage.text("Smaller memory blocks","Blocos menores de memória")};
   for(int i=0;i<keys.length;i++){final String key=keys[i];CheckBox control=new CheckBox(a);control.setText(names[i]);control.setChecked(p.getBoolean(key,true));control.setOnCheckedChangeListener((b,on)->p.edit().putBoolean(key,on).apply());panel.addView(control);}
   CheckBox hint=new CheckBox(a);hint.setText(AppLanguage.text("Android performance hint (keeps game threads clocked up)","Dica de desempenho do Android (mantém as threads do jogo em alta frequência)"));hint.setChecked(BionicPerfHint.enabled(p));hint.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_perf_hint",on).apply());panel.addView(hint);
+  CheckBox release=new CheckBox(a);release.setText(AppLanguage.text("Experimental: free idle GPU buffer memory (fewer low-memory closes; may stutter or glitch)","Experimental: liberar memória ociosa de buffers da GPU (menos fechamentos por memória; pode travar ou falhar a imagem)"));release.setChecked(p.getBoolean("renderer_release_idle",false));release.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_release_idle",on).apply());panel.addView(release);
+  CheckBox msaa=new CheckBox(a);msaa.setText(AppLanguage.text("Disable multisampling (less memory and GPU work; softer edges)","Desligar multisampling (menos memória e trabalho da GPU; bordas mais suaves)"));msaa.setChecked(p.getBoolean("renderer_no_msaa",false));msaa.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_no_msaa",on).apply());panel.addView(msaa);
   CheckBox hot=new CheckBox(a);hot.setText(AppLanguage.text("Experimental: hot pages (fewer write stalls; may lower FPS in some scenes)","Experimental: páginas quentes (menos travas de escrita; pode reduzir FPS em algumas cenas)"));hot.setChecked(p.getBoolean("renderer_hot_pages",false));hot.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_hot_pages",on).apply());panel.addView(hot);
   new AlertDialog.Builder(a).setTitle(AppLanguage.text("Renderer corrections","Correções da renderização")).setView(panel).setPositiveButton(AppLanguage.text("Done","Concluir"),null).show();
  }
