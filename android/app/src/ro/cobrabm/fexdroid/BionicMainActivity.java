@@ -60,6 +60,7 @@ public final class BionicMainActivity extends Activity {
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
    button(video,AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes")+" · "+BionicReadbackSettings.summary(this),()->BionicReadbackSettings.show(this,()->showPage(0)));
    button(video,AppLanguage.text("Frame generation — Bloodframe", "Geração de quadros — Bloodframe"),()->FramegenSettings.show(this,null));
+   button(video,AppLanguage.text("Renderer corrections","Correções da renderização"),()->BionicRendererSettings.show(this));
   }else if(page==1){LinearLayout patches=card(content,AppLanguage.text("PATCHES — inFAMOUS SECOND SON","PATCHES — inFAMOUS SECOND SON"));patches.addView(BionicVideoSettings.content(this,2));
   }else if(page==2){
    LinearLayout language=card(content,AppLanguage.text("LANGUAGE","IDIOMA"));button(language,AppLanguage.summary(this),()->AppLanguage.show(this));language.addView(label(AppLanguage.text("Language changes apply on next game start. Missing game text or audio falls back to English.","O idioma muda no próximo início do jogo. Se faltarem textos ou áudio, será usado inglês."),14,0xffc7aba8));
