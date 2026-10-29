@@ -314,12 +314,6 @@ private:
     vk::UniqueDescriptorSetLayout reactive_desc_layout;
     vk::UniquePipelineLayout reactive_pipeline_layout;
     vk::UniquePipeline reactive_pipeline;
-#ifdef ISS_ANDROID_BIONIC
-    // Late LDR UI temporal composition mask (independent of scene velocity/depth).
-    vk::UniqueDescriptorSetLayout iss_hud_desc_layout;
-    vk::UniquePipelineLayout iss_hud_pipeline_layout;
-    vk::UniquePipeline iss_hud_pipeline;
-#endif
     vk::UniqueDescriptorSetLayout merge_desc_layout;
     vk::UniquePipelineLayout merge_pipeline_layout;
     vk::UniquePipeline merge_pipeline;

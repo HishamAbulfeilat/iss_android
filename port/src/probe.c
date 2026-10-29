@@ -701,6 +701,101 @@ static void install_iss_camera_capture(const char *app0, Segment *segments,
 }
 #endif
 
+/* inFAMOUS native SMAA T2x vs FSR3: the verified CUSA00004 eboot has
+ * the same post-processing instruction signatures as upstream iss_temporal_hook,
+ * relocated +0x2dd0. In the SMAA branch FUN_004755e0 applies the game's own
+ * temporal camera window and its AA pass accumulates before Android FSR3.
+ * FSR3 owns temporal reconstruction. Choose the game's FXAA/spatial branch,
+ * WITHOUT skipping the AA pass (which also composites scene colour).
+ *
+ * On FEX the hook replaces cmp [rcx],0 ; je 0x4757b0 in one syscall trap.
+ * HandleSyscall clobbers RCX/R11, so we never read them. The original branch
+ * when the AA mode byte is zero jumps to 0x4757b0. The next instruction
+ * overwrites flags, so the jumped path has the same architectural inputs.
+ *
+ * No texture, depth, velocity, FSR timing, or HUD redirection changes.
+ * Experimental disable: ISS_FSR3_DISABLE_NATIVE_T2X=0. */
+#if !defined(GUEST_CPU_NATIVE)
+enum {
+    ISS_AA_JITTER_BEFORE = 0x47570c,
+    ISS_AA_JITTER_SITE = 0x475714,
+    ISS_AA_JITTER_NEXT = 0x47571d,
+    ISS_AA_JITTER_FXAA = 0x4757b0,
+    ISS_AA_ENTRY = 0x195790,
+    ISS_AA_SITE = 0x195a1c,
+    ISS_AA_NEXT = 0x195a29,
+    ISS_AA_DONE = 0x195acf,
+    ISS_AA_MODE = 0xda35c9
+};
+static const unsigned char iss_aa_before_bytes[] = {0x41,0x88,0x9c,0x24,0x2c,0xdc,0x01,0x00};
+static const unsigned char iss_aa_jitter_bytes[] = {0x80,0x39,0x00,0x0f,0x84,0x93,0x00,0x00,0x00};
+static const unsigned char iss_aa_next_bytes[] = {0x41,0xc7,0x84,0x24,0x10,0xcd,0x01,0x00,0x00,0x00,0x00,0x00};
+static const unsigned char iss_aa_entry_bytes[] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
+    0x48,0x81,0xec,0x18,0x08,0x00,0x00};
+static const unsigned char iss_aa_site_bytes[] = {
+    0x48,0x8d,0x05,0x7d,0x90,0xd8,0x00,0x8a,0x80,0x05,0x0f,0xdf,0x00};
+static const unsigned char iss_aa_after_bytes[] = {
+    0x41,0x0a,0x86,0x8d,0xeb,0x01,0x00,0x0f,0x85,0x99,0x00,0x00,0x00};
+static const unsigned char iss_aa_done_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
+static unsigned iss_aa_reported;
+static void iss_fsr3_avoid_game_t2x(GuestRegs *regs) {
+    /* This guest global is read at 0x195a36 and chooses the SMAA T2x
+     * branch when nonzero. Zero chooses FXAA. Preserve all GPRs. */
+    unsigned char *mode = image + ISS_AA_MODE;
+    const unsigned char original = *mode;
+    *mode = 0;
+    if (!iss_aa_reported++) {
+        fprintf(stderr,
+                "FSR3 ISS native AA: original game mode=%u (%s), forcing FXAA "
+                "instead of SMAA T2x; FSR3 still owns temporal upscale\\n",
+                (unsigned)original, original ? "SMAA T2x" : "already FXAA");
+    }
+    regs->rip = (uintptr_t)(image + ISS_AA_JITTER_FXAA);
+}
+static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
+                                      uint64_t count, uint64_t size) {
+    const char *upscaler = getenv("TLG_UPSCALER");
+    if (!upscaler || strcmp(upscaler,"fsr3")) return;
+    const char *disable = getenv("ISS_FSR3_DISABLE_NATIVE_T2X");
+    if (disable && disable[0] == '0') return;
+    char path[4096], serial[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    if (strcmp(serial,"CUSA00004") && strcmp(serial,"CUSA00223") &&
+        strcmp(serial,"CUSA00263")) return;
+    struct { uint64_t address; const unsigned char *bytes; size_t length; } checks[] = {
+        {ISS_AA_JITTER_BEFORE, iss_aa_before_bytes, sizeof(iss_aa_before_bytes)},
+        {ISS_AA_JITTER_SITE, iss_aa_jitter_bytes, sizeof(iss_aa_jitter_bytes)},
+        {ISS_AA_JITTER_NEXT, iss_aa_next_bytes, sizeof(iss_aa_next_bytes)},
+        {ISS_AA_ENTRY, iss_aa_entry_bytes, sizeof(iss_aa_entry_bytes)},
+        {ISS_AA_SITE, iss_aa_site_bytes, sizeof(iss_aa_site_bytes)},
+        {ISS_AA_NEXT, iss_aa_after_bytes, sizeof(iss_aa_after_bytes)},
+        {ISS_AA_DONE, iss_aa_done_bytes, sizeof(iss_aa_done_bytes)}
+    };
+    if (!mapped(segments,count,ISS_AA_MODE,1) || ISS_AA_MODE >= size) return;
+    for (size_t i=0;i<sizeof(checks)/sizeof(checks[0]);++i) {
+        if (!mapped(segments,count,checks[i].address,checks[i].length) ||
+            checks[i].address+checks[i].length > size ||
+            memcmp(image+checks[i].address,checks[i].bytes,checks[i].length)) {
+            fputs("FSR3 ISS native AA: executable signature mismatch, no change\\n", stderr);
+            return;
+        }
+    }
+    if (!guest_cpu_hook((uintptr_t)(image+ISS_AA_JITTER_SITE),
+                        sizeof(iss_aa_jitter_bytes),iss_fsr3_avoid_game_t2x)) {
+        fputs("FSR3 ISS native AA: guest hook unavailable, no change\\n",stderr);
+        return;
+    }
+    puts("FSR3 ISS native AA: verified AA selection hook installed (FXAA + FSR3)");
+}
+#else
+static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
+                                      uint64_t count, uint64_t size) {
+    (void)app0; (void)segments; (void)count; (void)size;
+}
+#endif
+
 static void install_infamous_menu_watch(const char *app0,Segment *segments,uint64_t count,uint64_t size){
     char path[4096],serial[32]="";
     snprintf(path,sizeof(path),"%s/sce_sys/param.sfo",app0?app0:".");
@@ -1520,6 +1615,7 @@ int main(int argc, char **argv) {
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     install_infamous_menu_watch(app0,segments,ns,size);
     if (gpu_enabled) install_iss_camera_capture(app0, segments, ns, size);
+    if (gpu_enabled) install_iss_fsr3_native_aa(app0, segments, ns, size);
     if (gpu_enabled) install_orb_multiplier(app0, segments, ns, size);
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
