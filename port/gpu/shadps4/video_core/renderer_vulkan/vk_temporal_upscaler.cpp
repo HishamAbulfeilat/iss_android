@@ -1609,8 +1609,7 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
 }
 
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
-                              VideoCore::ImageId depth, bool native_viewport,
-                              bool iss_ui_overlay) {
+                              VideoCore::ImageId depth, bool native_viewport) {
 #ifdef ISS_ANDROID_BIONIC
     ++android_fsr_probe.ui_draws;
     if (native_viewport) ++android_fsr_probe.native_viewport_draws;
@@ -1664,40 +1663,13 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
 #endif
     const bool movie = vs_hash == ui_trigger_vs || UiComposition::MovieShader(vs_hash) ||
                        (scaled_session && native_viewport);
-#ifdef ISS_ANDROID_BIONIC
-    // The previous edge mask could not restore text already rasterized at 360p.
-    // Only real alpha-blended, depth-free ISS LDR overlays may now trigger
-    // FSR before their draws; the existing display-boundary fallback remains.
-    static const bool native_ui_compose = [] {
-        const char* value = std::getenv("ISS_FSR3_UI_COMPOSE");
-        return value && value[0] == '1';
-    }();
-    // Only execute the overlay before its original draw, with this frame's
-    // already captured camera and the tonemapped LDR scene as inputs.
-    const bool iss_ui_draw = native_ui_compose && scaled_session &&
-        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
-        iss_ui_overlay && ldr_target == color && camera_motion.Ready();
-#else
-    const bool iss_ui_draw = false;
-#endif
-    const bool ui_draw = (movie || iss_ui_draw) &&
+    const bool ui_draw = movie &&
         (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm ||
          image.info.pixel_format == vk::Format::eR8G8B8A8Srgb) &&
         RenderTarget(image.info.size.width, image.info.size.height) &&
-        (iss_ui_draw || !FrameCapture::IsDisplayBuffer(image.info.guest_address));
+        !FrameCapture::IsDisplayBuffer(image.info.guest_address);
 #ifdef ISS_ANDROID_BIONIC
-    if (ui_draw) {
-        ++android_fsr_probe.rgba_ui_candidates;
-        static bool reported_iss_hud = false;
-        if (!reported_iss_hud && iss_ui_draw) {
-            reported_iss_hud = true;
-            std::printf("FSR3 ISS HUD: eligible LDR overlay vs=%016llx target=%ux%u "
-                        "display=%u, dispatch before overlay\n",
-                        static_cast<unsigned long long>(vs_hash),
-                        image.info.size.width, image.info.size.height,
-                        unsigned(FrameCapture::IsDisplayBuffer(image.info.guest_address)));
-        }
-    }
+    if (ui_draw) ++android_fsr_probe.rgba_ui_candidates;
 #endif
     switch (UiComposition::Choose(Scaled(), ui_draw,
                                   camera_motion.Ready() && ldr_target == color,

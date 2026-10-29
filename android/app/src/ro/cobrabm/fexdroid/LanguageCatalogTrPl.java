@@ -49,7 +49,6 @@ final class LanguageCatalogTrPl {
   {"Internal patches — verified executable","Dahili yamalar — doğrulanmış yürütülebilir dosya","Wbudowane patche — zweryfikowany plik wykonywalny"},
   {"Enable FSR 3.1 (720p output, restart required)","FSR 3.1'i etkinleştir (720p çıkış, oyunu yeniden başlatın)","Włącz FSR 3.1 (wyjście 720p, uruchom grę ponownie)"},
   {"FSR 3.1 mode","FSR 3.1 modu","Tryb FSR 3.1"},
-  {"Render game HUD after FSR3 (experimental)","Oyun arayüzünü FSR3 sonrasında çiz (deneysel)","Renderuj interfejs gry po FSR3 (eksperymentalne)"},
   {"Enable FSR sharpening","FSR keskinleştirmesini etkinleştir","Włącz wyostrzanie FSR"},
   {"Sharpening strength","Keskinleştirme gücü","Siła wyostrzania"},
   {"0–100%: FSR RCAS sharpening. Above 100%: extra pass before the game HUD. High values can cause halos. Restart the game to apply.","0–100%: FSR RCAS keskinleştirmesi. 100% üzeri: oyun HUD'undan önce ek geçiş. Yüksek değerler kenar halelerine neden olabilir. Uygulamak için oyunu yeniden başlatın.","0–100%: wyostrzanie FSR RCAS. Powyżej 100%: dodatkowy przebieg przed interfejsem gry. Wysokie wartości mogą powodować obwódki. Uruchom grę ponownie, aby zastosować."},

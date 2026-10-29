@@ -17,13 +17,6 @@ constexpr Background Choose(bool scaled, bool ui_draw, bool scene_ready, bool fs
     return scene_ready && fsr_active ? Background::Temporal : Background::Copy;
 }
 
-// PS4 Scaleform/HUD can use stencil and leave the depth-test bit set.
- // Reject depth-writing 3D geometry and fullscreen copy passes instead.
-constexpr bool IssOverlayDraw(bool alpha_blend, bool stencil, bool depth_write,
-                              bool fullscreen_copy) {
-    return (alpha_blend || stencil) && !depth_write && !fullscreen_copy;
-}
-
 inline bool NativeViewport(float width, float height) {
     return std::abs(std::abs(width) - 1920.0f) < 0.5f &&
            std::abs(std::abs(height) - 1080.0f) < 0.5f;

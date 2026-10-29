@@ -105,12 +105,6 @@ final class BionicVideoSettings {
    }
    public void onNothingSelected(android.widget.AdapterView<?> parent){}
   });l.addView(fsrPreset);
-  CheckBox edgeMask=new CheckBox(activity);
-  edgeMask.setText(AppLanguage.text("Render game HUD after FSR3 (experimental)","Renderizar interface após FSR3 (experimental)"));
-  edgeMask.setChecked(prefs.getBoolean("fsr3_ui_compose",true));
-  edgeMask.setOnCheckedChangeListener((button,checked)->
-    prefs.edit().putBoolean("fsr3_ui_compose",checked).apply());
-  l.addView(edgeMask);
   CheckBox sharpening=new CheckBox(activity);
   sharpening.setText(AppLanguage.text("Enable FSR sharpening","Ativar nitidez do FSR"));
   sharpening.setChecked(fsrSharpenEnabled(prefs));l.addView(sharpening);
@@ -164,7 +158,6 @@ final class BionicVideoSettings {
    boolean active=fsr.isChecked();
    fsrPreset.setEnabled(active);fsrPresetLabel.setEnabled(active);
    sharpening.setEnabled(active);
-   edgeMask.setEnabled(active);
    sharpenSlider.setEnabled(active&&sharpening.isChecked());
    sharpenLabel.setEnabled(active&&sharpening.isChecked());
    sharpenHint.setEnabled(active);

@@ -125,7 +125,6 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
    e.put("TLG_FSR_SHARPNESS",BionicVideoSettings.fsrSharpnessValue(prefs));
    e.put("TLG_FSR_SHARPEN",BionicVideoSettings.fsrSharpenEnabled(prefs)?"1":"0");
    e.put("TLG_REACTIVE","0");
-    e.put("ISS_FSR3_UI_COMPOSE",prefs.getBoolean("fsr3_ui_compose",true)?"1":"0");
    e.put("TLG_JITTER","1");
    e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
    // Raw input/depth/motion and output capture is armed from the in-game menu.

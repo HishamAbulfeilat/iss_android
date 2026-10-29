@@ -112,24 +112,6 @@ class BionicFsr3Tests(unittest.TestCase):
         self.assertIn("if (mode == 2u)", shader)
         self.assertIn("result = object_motion.rg;", shader)
 
-    def test_iss_fsr3_ui_is_composited_after_upscale_when_eligible(self):
-        renderer = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp").read_text()
-        raster = (GPU / "shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp").read_text()
-        header = (GPU / "shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.h").read_text()
-        game = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicGameActivity.java").read_text()
-        video = (ROOT / "android/app/src/ro/cobrabm/fexdroid/BionicVideoSettings.java").read_text()
-        self.assertIn("ISS_FSR3_UI_COMPOSE", renderer)
-        self.assertIn("iss_ui_overlay && ldr_target == color && camera_motion.Ready()", renderer)
-        self.assertIn("(movie || iss_ui_draw)", renderer)
-        self.assertIn("bool iss_ui_overlay = false", header)
-        self.assertEqual(raster.count("UiComposition::IssOverlayDraw("), 2)
-        self.assertIn("(iss_ui_draw || !FrameCapture::IsDisplayBuffer", renderer)
-        self.assertIn("FSR3 ISS HUD: eligible LDR overlay", renderer)
-        self.assertIn('e.put("ISS_FSR3_UI_COMPOSE"', game)
-        self.assertIn('prefs.getBoolean("fsr3_ui_compose",true)', video)
-        self.assertNotIn("ldr_edge_mask", renderer)
-        self.assertIn("void TemporalUpscaler::OnDisplayPassStart()", renderer)
-    
     def test_iss_fsr3_snapshots_scene_depth_before_hud_reuse(self):
         src = GPU / "shadps4/video_core/renderer_vulkan"
         header = (src / "vk_temporal_upscaler.h").read_text()

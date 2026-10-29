@@ -92,7 +92,7 @@ public:
     /// After identifying this draw's targets, before drawing any UI pixels. Menus use
     /// spatial background copy and native UI, without needing scene depth or FSR history.
     void OnDraw(u64 vs_hash, VideoCore::ImageId color, VideoCore::ImageId depth,
-                bool native_viewport, bool iss_ui_overlay = false);
+                bool native_viewport);
 
     /// A pass's first color target: the last render-size RGBA8 target before the UI is the
     /// game's finished frame.
