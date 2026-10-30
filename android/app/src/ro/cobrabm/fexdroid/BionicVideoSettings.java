@@ -44,7 +44,13 @@ final class BionicVideoSettings {
  static String outputResolution(android.content.SharedPreferences prefs){
   String patch=prefs.getString("internal_res","native");
   if(prefs.getBoolean("fsr3",false))return "1280x720";
-  return "720p".equals(patch)?"1280x720":"900p".equals(patch)?"1600x900":"1920x1080";
+  // Renders at or below 720p go out at 1280x720: a 1080p output only adds memory (Bloodframe's
+  // context and five present buffers at 1080p) to a 640x360 or 960x540 image.
+  switch(patch){
+   case "720p":case "540p":case "480p":case "360p":return "1280x720";
+   case "900p":return "1600x900";
+   default:return "1920x1080";
+  }
  }
  static String internalPatchName(String key){
   switch(key){

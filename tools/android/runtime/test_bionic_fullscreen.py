@@ -94,7 +94,7 @@ class FullscreenCase {
   p.fsr3=false;
   assert BionicVideoSettings.effectiveResolutionPatch(p).equals("720p");
   for(String key:new String[]{"540p","480p","360p"}){
-   p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1920x1080");
+   p.resolution=key;assert BionicVideoSettings.outputResolution(p).equals("1280x720");
   }
   assert BionicVideoSettings.internalPatchName("540p").equals("Render resolution 960x540");
   assert BionicVideoSettings.internalPatchName("480p").equals("Render resolution 854x480");
