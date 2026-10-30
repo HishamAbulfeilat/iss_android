@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include <filesystem>
 #include <xxhash.h>
 #include "video_core/amdgpu/liverpool.h"
@@ -1802,6 +1803,34 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers<false>(addr, size);
 }
 
+#ifdef __ANDROID__
+// tlg: Android's MemAvailable in bytes, read at most every 250 ms (0 when unreadable). The
+// driver's budget does not shrink as Android runs out of RAM, so the low-memory killer ends the
+// game while the collector still sees room.
+static u64 AndroidAvailableMemory() {
+    static std::chrono::steady_clock::time_point last{};
+    static u64 available = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::milliseconds(250)) {
+        return available;
+    }
+    last = now;
+    available = 0;
+    if (std::FILE* f = std::fopen("/proc/meminfo", "r")) {
+        char line[128];
+        unsigned long long kb = 0;
+        while (std::fgets(line, sizeof(line), f)) {
+            if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+                available = u64(kb) << 10;
+                break;
+            }
+        }
+        std::fclose(f);
+    }
+    return available;
+}
+#endif
+
 void TextureCache::GarbageCollectImages() {
     TlgStats::Timer gc_timer{TlgStats::t_gc};
     if (instance.CanReportMemoryUsage()) {
@@ -1831,6 +1860,33 @@ void TextureCache::GarbageCollectImages() {
             }
         }
     }
+#ifdef __ANDROID__
+    // tlg: TLG_GC_ANDROID_FREE_MB (default 1500, 0 = off): below this much free RAM, the
+    // collector treats the missing amount as over its critical mark, so images unused for the
+    // last submissions go before Android kills the game. Images it cannot evict stay.
+    static const u64 android_free_mark = [] {
+        const char* env = std::getenv("TLG_GC_ANDROID_FREE_MB");
+        const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 1500;
+        if (mb) {
+            std::printf("Texture cache: old images are freed when Android has under %llu MiB "
+                        "free (TLG_GC_ANDROID_FREE_MB, 0 = off)\n",
+                        static_cast<unsigned long long>(mb));
+        }
+        return mb << 20;
+    }();
+    bool android_low = false;
+    if (android_free_mark != 0 && instance.CanReportMemoryUsage() && instance.IsIntegrated()) {
+        const u64 available = AndroidAvailableMemory();
+        if (available != 0 && available < android_free_mark) {
+            const u64 deficit = android_free_mark - available;
+            const u64 target = total_used_memory > deficit ? total_used_memory - deficit : 0;
+            critical_gc_memory = std::min(critical_gc_memory, target);
+            pressure_gc_memory = std::min(pressure_gc_memory, critical_gc_memory);
+            trigger_gc_memory = std::min(trigger_gc_memory, pressure_gc_memory);
+            android_low = true;
+        }
+    }
+#endif
     if (total_used_memory < trigger_gc_memory) {
         return;
     }
@@ -1967,9 +2023,14 @@ void TextureCache::GarbageCollectImages() {
     if (pressured || gc_downloads != 0) {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
-            std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
+#ifdef __ANDROID__
+            const char* reason = android_low ? " (Android low on free RAM)" : "";
+#else
+            const char* reason = "";
+#endif
+            std::printf("Texture cache: memory pressure%s, %llu of %llu MiB (critical %llu): "
                         "%llu images evicted, %llu written back since the last report\n",
-                        (unsigned long long)(total_used_memory >> 20),
+                        reason, (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads);
