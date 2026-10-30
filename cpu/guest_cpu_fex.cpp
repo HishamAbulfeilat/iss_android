@@ -321,8 +321,9 @@ void guest_cpu_init(void* (*map)(size_t size, int prot)) {
     }();
     FEXCore::Config::Set(FEXCore::Config::CONFIG_DYNAMICL1CACHE,
                          dynamic_l1 ? "1" : "0");
-    std::printf("ISS_FEX_CACHE dynamic_l1=%d disk_cache=unchanged tso=unchanged\n",
-                int(dynamic_l1));
+    std::printf("ISS_FEX_CACHE dynamic_l1=%d disk_cache=unchanged tso=unchanged multiblock=%d "
+                "(FEX_MULTIBLOCK)\n",
+                int(dynamic_l1), int(FEXCore::Config::Get_MULTIBLOCK()()));
     const auto features = FEX::FetchHostFeatures();
     wide_xmm = features.SupportsAVX && features.SupportsSVE256;
     ctx = FEXCore::Context::Context::CreateNewContext(features).release();
