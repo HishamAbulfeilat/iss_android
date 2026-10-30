@@ -462,6 +462,11 @@ bool Instance::CreateDevice() {
         }
     }
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    // tlg: shared heaps (TLG_SHARED_HEAPS) export guest memory to the runtime as dma-bufs.
+    if (const char* shared = std::getenv("TLG_SHARED_HEAPS"); shared && shared[0] == '1') {
+        dma_buf_export = add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) &&
+                         add_extension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    }
     // tlg: from shadPS4-Infamous-FixBuild e35e04dc. Lets the driver move device memory out to
     // system memory instead of failing an allocation when the card is full.
     const bool memory_priority = add_extension(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);

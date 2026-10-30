@@ -123,6 +123,7 @@ struct BufferCache {
     Queue* liverpool;Scheduler scheduler;Tracker* memory_tracker;Memory* memory;
     Buffer arena;std::shared_ptr<DeferredReadback> pending=std::make_shared<DeferredReadback>();
     bool CaptureMappedReadback(DeferredReadback&) {assert(false);return false;}
+    void WriteGpuData(VAddr a,const u8* d,u64 n) {memory->TryWriteBacking(reinterpret_cast<void*>(a),d,n);}
     bool empty=false,replace_stale=false,replace_partial=false,empty_on_retry=false;unsigned downloads=0;std::atomic<unsigned> starts{0};
     std::mutex starts_mutex;std::condition_variable starts_cv;
     BufferCache(Queue* q,Tracker* t,Memory* m):liverpool(q),memory_tracker(t),memory(m) {

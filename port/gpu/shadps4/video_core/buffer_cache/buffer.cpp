@@ -11,6 +11,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "tlg_shared_heaps.h"
 
 #include <vk_mem_alloc.h>
 
@@ -150,6 +151,10 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
     } else {
         buffer_ci.flags |=
             vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
+        // tlg: shared heaps bind exported (dma-buf) memory into the arenas.
+        if (const auto* external = TlgSharedHeaps::ArenaExternal(); external && !buffer_ci.pNext) {
+            buffer_ci.pNext = external;
+        }
         buffer = Vulkan::Check(device.createBuffer(buffer_ci));
     }
 

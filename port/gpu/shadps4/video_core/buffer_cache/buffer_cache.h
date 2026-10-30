@@ -176,6 +176,9 @@ private:
     /// for residency failed for lack of device memory.
     void ReleaseMemoryForResidency(u64 bytes);
 
+    /// tlg: writes GPU data (a readback) into guest memory, except into shared heaps.
+    void WriteGpuData(VAddr address, const u8* data, u64 size);
+
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
 public:

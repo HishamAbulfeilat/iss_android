@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 #include "tlg_copy.h"
+#include "tlg_shared_heaps.h"
 #include "tlg_toggles.h"
 #include "common/alignment.h"
 #include "core/memory.h"
@@ -19,6 +20,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -142,6 +144,8 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    // tlg: before the first arena: shared heaps change how arenas are created.
+    TlgSharedHeaps::Init(instance, block_size, ARENA_USAGE, Storage::GameCacheDir() / "heap_binds.txt");
     const auto residency_flags =
         instance.GetMemoryProperties().memoryTypes[arena_memory_type_index].propertyFlags;
     residency_coherent = bool(residency_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -526,6 +530,15 @@ u64 BufferCache::CollectDownloads(const Buffer* arena, VAddr device_addr, u64 si
     return total_size_bytes;
 }
 
+void BufferCache::WriteGpuData(VAddr address, const u8* data, u64 size) {
+    // tlg: a shared heap's arena memory is the game's own: the GPU's bytes are already there, and
+    // writing this (older) snapshot over it could undo the game's writes since (they are not tracked
+    // there).
+    TlgSharedHeaps::ForEachOutside(address, address + size, [&](u64 lo, u64 hi) {
+        memory->TryWriteBacking(reinterpret_cast<void*>(lo), data + (lo - address), hi - lo);
+    });
+}
+
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
     // Copies back in flight over this memory took their ranges out of gpu_modified_ranges:
     // applied, or put back when stale, before those are looked at.
@@ -555,9 +568,8 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
 
     download.buffer->Invalidate(download.offset, download.size);
     for (const auto& copy : copies) {
-        auto* dst_addr = std::bit_cast<u8*>(arena_base + copy.srcOffset);
-        memory->TryWriteBacking(dst_addr, download.mapped + (copy.dstOffset - download.offset),
-                                copy.size);
+        WriteGpuData(arena_base + copy.srcOffset,
+                     download.mapped + (copy.dstOffset - download.offset), copy.size);
     }
     memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
 }
@@ -851,14 +863,43 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         TlgStats::Timer timer{TlgStats::t_resident};
         // tlg: with TLG_RELEASE_IDLE_BUFFERS each granule is its own allocation, so an idle one
         // can be unbound and freed alone (ReleaseIdleResidency).
-        boost::container::small_vector<Interval, 8> pieces;
+        boost::container::small_vector<Interval, 8> split;
         for (const auto& range : bind_ranges) {
             if (!release_idle) {
-                pieces.push_back(range);
+                split.push_back(range);
                 continue;
             }
             for (u64 start = range.start; start < range.end; start += granule_blocks) {
-                pieces.push_back({start, std::min(range.end, start + granule_blocks)});
+                split.push_back({start, std::min(range.end, start + granule_blocks)});
+            }
+        }
+        // tlg: the parts in shared heaps are bound to the shared memory itself (`preset`).
+        boost::container::small_vector<Interval, 8> pieces;
+        boost::container::small_vector<std::optional<std::pair<vk::DeviceMemory, u64>>, 8> preset;
+        for (const auto& range : split) {
+            const VAddr lo = range.start << block_shift, hi = range.end << block_shift;
+            if (!TlgSharedHeaps::Overlaps(lo, hi)) {
+                pieces.push_back(range);
+                preset.emplace_back();
+                continue;
+            }
+            for (VAddr at = lo; at < hi;) {
+                VAddr next = hi;
+                std::optional<std::pair<vk::DeviceMemory, u64>> memory;
+                for (std::size_t i = 0, n = TlgSharedHeaps::Count(); i < n; ++i) {
+                    const auto piece = TlgSharedHeaps::At(i);
+                    if (piece.start <= at && at < piece.end) {
+                        next = std::min<VAddr>(hi, piece.end);
+                        memory.emplace(piece.memory, at - piece.start);
+                        break;
+                    }
+                    if (piece.start > at) {
+                        next = std::min<VAddr>(next, piece.start);
+                    }
+                }
+                pieces.push_back({at >> block_shift, next >> block_shift});
+                preset.push_back(memory);
+                at = next;
             }
         }
 
@@ -867,7 +908,12 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         // some of these ranges resident: the gaps are looked up again after it).
         ResidencyAttempt state{.chunk = residency_chunk, .chunk_used = residency_chunk_used};
         boost::container::small_vector<std::pair<vk::DeviceMemory, u64>, 8> memories;
-        for (const auto& range : pieces) {
+        for (std::size_t i = 0; i < pieces.size(); ++i) {
+            if (preset[i]) {
+                memories.push_back(*preset[i]);
+                continue;
+            }
+            const auto& range = pieces[i];
             const auto memory = AllocateResidency((range.end - range.start) << block_shift, state);
             if (!memory) {
                 break;
@@ -1056,7 +1102,8 @@ void BufferCache::ReleaseIdleResidency() {
         const u64 size = (backing.end - backing.start) << block_shift;
         // Whole allocations only: a backing that does not start at its allocation is a piece of
         // memory still bound elsewhere (allocations from before this mode, or chunk carving).
-        if (backing.offset != 0 || size > RESIDENCY_GRANULE_SIZE) {
+        if (backing.offset != 0 || size > RESIDENCY_GRANULE_SIZE ||
+            TlgSharedHeaps::Overlaps(addr, addr + size)) {
             continue;
         }
         const u64 last = granule_use[addr >> shift].load(std::memory_order_relaxed);
@@ -1344,9 +1391,8 @@ bool BufferCache::TryEagerRead(VAddr addr, u64 size) {
     // (Unmapped memory has no backing to write, as for DownloadMemory.)
     const bool applied = memory_tracker->ApplyGpuCopyIf(
         page_addr, EagerPageSize, [] { return true; }, [&](VAddr start, VAddr end) {
-            memory->TryWriteBacking(reinterpret_cast<void*>(start),
-                                    eager_buffer->mapped_data.data() + offset + (start - page_addr),
-                                    end - start);
+            WriteGpuData(start, eager_buffer->mapped_data.data() + offset + (start - page_addr),
+                         end - start);
         });
     if (!applied) {
         return false;
@@ -1793,8 +1839,8 @@ bool BufferCache::FinishDeferredReadback(DeferredReadback& readback, bool wait) 
                         const VAddr lo = std::max<VAddr>(copy_start, write_start);
                         const VAddr hi = std::min<VAddr>(copy_start + copy.size, write_end);
                         if (lo < hi) {
-                            memory->TryWriteBacking(reinterpret_cast<void*>(lo),
-                                mapped + copy.dstOffset + (lo - copy_start), hi - lo);
+                            WriteGpuData(lo, mapped + copy.dstOffset + (lo - copy_start),
+                                         hi - lo);
                         }
                     }
                 });
@@ -2171,8 +2217,11 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     memory_tracker->ForEachUploadRange(
         device_addr, size, is_written,
         [&](u64 addr, u64 size) {
-            copies.emplace_back(total_size_bytes, addr, size);
-            total_size_bytes += size;
+            // tlg: shared heaps need no upload: the arena there is the game's memory.
+            TlgSharedHeaps::ForEachOutside(addr, addr + size, [&](u64 lo, u64 hi) {
+                copies.emplace_back(total_size_bytes, lo, hi - lo);
+                total_size_bytes += hi - lo;
+            });
         },
         [&] { src_buffer = UploadCopies(arena, copies, total_size_bytes); });
 

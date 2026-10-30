@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 
+#include "tlg_shared_heaps.h"
 #include "tlg_toggles.h"
 #include "common/div_ceil.h"
 #include "common/logging/log.h"
@@ -259,6 +260,22 @@ private:
             readable = ~gpu;
         } else {
             writeable = cpu;
+            // tlg: shared heaps are never write-protected: the GPU reads the game's memory itself,
+            // so there is nothing to upload and the game's stores there cost no faults.
+            if (TlgSharedHeaps::Overlaps(cpu_addr, cpu_addr + TRACKER_HIGHER_PAGE_SIZE)) {
+                for (std::size_t i = 0, n = TlgSharedHeaps::Count(); i < n; ++i) {
+                    const auto piece = TlgSharedHeaps::At(i);
+                    const u64 lo = std::max<u64>(piece.start, cpu_addr);
+                    const u64 hi = std::min<u64>(piece.end, cpu_addr + TRACKER_HIGHER_PAGE_SIZE);
+                    if (lo < hi) {
+                        mask.UnsetRange((lo - cpu_addr) / TRACKER_BYTES_PER_PAGE,
+                                        (hi - cpu_addr) / TRACKER_BYTES_PER_PAGE);
+                    }
+                }
+                if (mask.None()) {
+                    return;
+                }
+            }
         }
         tracker->UpdatePageWatchersForRegion<track, is_read>(cpu_addr, mask);
     }

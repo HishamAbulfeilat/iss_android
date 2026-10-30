@@ -189,6 +189,8 @@ struct BufferCache {
     std::map<vk::DeviceMemory,ResidencyMapping> residency_mappings;
     bool mapped_readbacks_enabled=true,residency_coherent=true;
     bool release_idle=false; // TLG_RELEASE_IDLE_BUFFERS off, as in production by default
+    // Shared heaps off (no pieces), as in production by default: every byte goes to the guest.
+    void WriteGpuData(VAddr a,const u8* d,u64 n){memory->TryWriteBacking(reinterpret_cast<void*>(a),d,n);}
     u32 block_shift=14;
     u32 arena_memory_type_index=2;
     vk::DeviceMemory residency_chunk{};u64 residency_chunk_used=0,residency_allocations=0;
