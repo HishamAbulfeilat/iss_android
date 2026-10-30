@@ -13,7 +13,7 @@ import java.util.function.Consumer;
 final class BionicPerfHint {
  private static final String[] HOT={"iss-probe","GpuComm","VkRecorder","tlg:Present","shadPS4:Present","JobWorker"};
  private final Activity activity;private final Consumer<String> log;
- private PerformanceHintManager.Session session;private boolean failed;private long target,lastFrames=-1,lastTime;private int tries;
+ private PerformanceHintManager.Session session;private boolean failed;private long target,lastFrames=-1,lastTime;private int tries,threads,sinceScan;
  BionicPerfHint(Activity a,Consumer<String> log){activity=a;this.log=log;}
  static boolean enabled(android.content.SharedPreferences p){return p.getBoolean("renderer_perf_hint",true);}
  /** Called about once a second with the presented-frame counter and the real-frame target. */
@@ -29,7 +29,17 @@ final class BionicPerfHint {
     session=m==null?null:m.createHintSession(tids,want);
    }catch(Exception e){failed=true;log.accept("Performance hint: not allowed ("+e.getMessage()+")");return;}
    if(session==null){failed=true;log.accept("Performance hint: not supported on this device");return;}
-   target=want;lastFrames=frames;lastTime=now;log.accept("Performance hint: session for "+tids.length+" game threads, target "+(want/1000000.0)+" ms");return;
+   target=want;lastFrames=frames;lastTime=now;threads=tids.length;sinceScan=0;log.accept("Performance hint: session for "+tids.length+" game threads, target "+(want/1000000.0)+" ms");return;
+  }
+  // The session can start before the game has made its threads (a frame shown early): rescan
+  // every ~10 s and take the new ones in.
+  if(++sinceScan>=10){
+   sinceScan=0;int[] tids=gameThreads();
+   if(tids.length>threads){
+    if(Build.VERSION.SDK_INT>=34){
+     try{session.setThreads(tids);threads=tids.length;log.accept("Performance hint: now "+threads+" game threads");}catch(Exception e){log.accept("Performance hint: threads not updated ("+e.getMessage()+")");threads=tids.length;}
+    }else{stop();return;}
+   }
   }
   if(want!=target){session.updateTargetWorkDuration(want);target=want;}
   long shown=frames-lastFrames,elapsed=now-lastTime;lastFrames=frames;lastTime=now;

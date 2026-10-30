@@ -383,12 +383,23 @@ bool PipelinedComputeOpcode(PM4ItOpcode opcode) {
     }
 }
 
-// tlg: shared GPU writes (TlgSharedHeaps::GpuWrites): the game reads what the GPU wrote straight
-// from its memory once a fence says the GPU is done, so the fence must wait for the GPU. A GDS
-// store needs the command buffer and stays immediate. Returns true when the signal was deferred.
+// tlg: shared GPU writes: compute and end-of-shader fences may wait for the GPU too
+// (TLG_SHARED_COMPUTE_FENCES=1). Off: each such fence then submitted the work so far, hundreds
+// per second (v0.4.2: 4x the submissions, 16 FPS in the open world); the end-of-frame fence,
+// which the game's CPU writes depend on, always waits.
+bool ComputeFencesWaitForGpu() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("TLG_SHARED_COMPUTE_FENCES");
+        return env && env[0] == '1';
+    }();
+    return enabled && TlgSharedHeaps::GpuWrites();
+}
+
+// The game reads what the GPU wrote straight from its memory once a fence says the GPU is done.
+// A GDS store needs the command buffer and stays immediate. Returns true when deferred.
 bool SignalReleaseMemWhenGpuDone(Vulkan::Rasterizer& rasterizer, const u32* packet, u32 pipe_id) {
     const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(packet);
-    if (!TlgSharedHeaps::GpuWrites() || release_mem->data_sel == DataSelect::GdsMemStore) {
+    if (!ComputeFencesWaitForGpu() || release_mem->data_sel == DataSelect::GdsMemStore) {
         return false;
     }
     std::array<u32, sizeof(PM4CmdReleaseMem) / sizeof(u32)> copy;
@@ -452,8 +463,8 @@ void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
             memcpy(address, &value, num_bytes);
         }
     };
-    // tlg: shared GPU writes: as for ReleaseMem, the fence waits for the GPU.
-    if (TlgSharedHeaps::GpuWrites() &&
+    // tlg: shared GPU writes: as for ReleaseMem, the fence may wait for the GPU.
+    if (ComputeFencesWaitForGpu() &&
         event_eos.command == PM4CmdEventWriteEos::Command::SignalFence) {
         rasterizer.SignalWhenGpuDone(
             [event_eos, write_fence] { event_eos.SignalFence(write_fence); });

@@ -370,7 +370,7 @@ void Init(const Vulkan::Instance& instance, std::uint64_t block_size, vk::Buffer
                 "use one copy (TLG_SHARED_HEAPS=0 turns it off)\n",
                 shared.size(), static_cast<unsigned long long>(total >> 20), memory_type);
     std::printf("GPU: shared heaps: GPU writes %s (TLG_SHARED_GPU_WRITES)\n",
-                gpu_writes ? "shared too, no read faults or readback waits there; fences wait for the GPU"
+                gpu_writes ? "shared too, no read faults or readback waits there; end-of-frame fences wait for the GPU"
                            : "off: GPU results are copied back as before");
 #endif
 }
