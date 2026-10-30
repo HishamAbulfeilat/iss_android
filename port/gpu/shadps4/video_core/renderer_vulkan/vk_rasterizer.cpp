@@ -1942,6 +1942,14 @@ void Rasterizer::Finish(std::source_location caller) {
     scheduler.Finish(caller);
 }
 
+void Rasterizer::SignalWhenGpuDone(Common::UniqueFunction<void>&& signal) {
+    DrainDrawPipe();
+    // Deferred to the tick being recorded, which the flush then submits.
+    scheduler.DeferPriorityOperation(std::move(signal));
+    SubmitInfo info{};
+    scheduler.Flush(info);
+}
+
 // tlg (i3-pc 25f247c): a game that binds a heap whole and read-only (inFAMOUS: 0.5 and 2.5 GB
 // geometry heaps, indexed by a per-instance offset, so no part can be left out) uploaded all of it
 // in the frame of the first bind (a freeze of 2 to 3 seconds). The ranges are remembered per title

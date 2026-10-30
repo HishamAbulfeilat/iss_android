@@ -181,6 +181,9 @@ public:
 
     u64 Flush();
     void Finish(std::source_location caller = std::source_location::current());
+    /// tlg: shared heaps: submits the work recorded so far and runs `signal` once the GPU has
+    /// finished it (on the scheduler's pending-operations thread, in order with the others).
+    void SignalWhenGpuDone(Common::UniqueFunction<void>&& signal);
     void OnSubmit();
 
     PipelineCache& GetPipelineCache() {

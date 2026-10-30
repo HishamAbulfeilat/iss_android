@@ -26,6 +26,7 @@
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "tlg_write_log.h"
+#include "tlg_shared_heaps.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_frame_record.h"
@@ -282,7 +283,15 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
         const char* env = std::getenv("TLG_ASYNC_FENCES");
         return env && env[0] == '1';
     }();
-    if (async_fences && !TlgToggle::Disabled(TlgToggle::AsyncFences)) {
+    if (TlgSharedHeaps::Active()) {
+        // Shared heaps: the GPU reads the game's own memory, with no copy made at recording.
+        // The guest takes this fence as "the GPU is done with the frame" and rewrites what it
+        // drew (skinned and streamed geometry), so it must not see it before the GPU really is,
+        // or the GPU draws half-rewritten geometry (flicker, stretched or missing polygons).
+        rasterizer.WaitHostCopies();
+        rasterizer.WaitDeferredSignals();
+        rasterizer.SignalWhenGpuDone([eop] { SignalEop(eop); });
+    } else if (async_fences && !TlgToggle::Disabled(TlgToggle::AsyncFences)) {
         TlgCopy::AfterCopies([eop] { SignalEop(eop); });
     } else if (Vulkan::DrawPipe::OnStageB() && !TlgToggle::Disabled(TlgToggle::RecorderFences)) {
         // The draw recording thread does not wait: the Vulkan recording thread signals the
