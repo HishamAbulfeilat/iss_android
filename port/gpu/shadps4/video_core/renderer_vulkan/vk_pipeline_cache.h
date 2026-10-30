@@ -222,6 +222,9 @@ private:
     /// tlg: BP08, the driver's VkPipelineCache blob kept between sessions (see the .cpp).
     void StartDriverCacheSaver();
     void StopDriverCacheSaver();
+    /// tlg: wakes the BP08 saver now (after the warm-up), so the driver's work is kept even if
+    /// Android ends the game before the next periodic save.
+    void RequestDriverCacheSave();
     bool SaveDriverCache();
     bool SaveDriverCacheUnchecked();
     void SeedWorkerCaches();

@@ -434,6 +434,7 @@ struct PipelineCache::DriverCacheSaver {
     std::mutex mutex;
     std::condition_variable cv;
     bool stop = false;
+    bool save_now = false; ///< RequestDriverCacheSave: save without waiting for the period
     u64 saved_hash = 0; ///< XXH3 of the last blob written (or loaded): unchanged data is not rewritten
     /// g_tlg_driver_pipelines_created at the last save: nothing new means nothing to merge, copy
     /// or hash (a whole-game blob is ~300 MB, and the save ran every minute regardless).
@@ -468,11 +469,16 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
     for (const auto& cache : worker_pipeline_caches) {
         sources.push_back(*cache);
     }
-    if (device.mergePipelineCaches(*scratch, sources) != vk::Result::eSuccess) {
+    if (const auto merged = device.mergePipelineCaches(*scratch, sources);
+        merged != vk::Result::eSuccess) {
+        std::printf("GPU: driver pipeline cache not saved: merge failed (%s)\n",
+                    vk::to_string(merged).c_str());
         return false;
     }
     auto [result, blob] = device.getPipelineCacheData(*scratch);
     if (result != vk::Result::eSuccess || blob.size() < sizeof(VkPipelineCacheHeaderVersionOne)) {
+        std::printf("GPU: driver pipeline cache not saved: driver returned %s, %zu bytes\n",
+                    vk::to_string(result).c_str(), blob.size());
         return false;
     }
     // tlg: TLG_DRIVER_CACHE_MAX_MB (default 1024, 0 = no limit): a bigger blob is not written,
@@ -515,15 +521,18 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
         std::filesystem::rename(temp, path, ec);
     }
     if (!written || ec) {
+        const std::string reason = ec ? ec.message() : std::string{"write failed"};
         std::filesystem::remove(temp, ec);
-        LOG_ERROR(Render_Vulkan, "tlg: driver pipeline cache not written to {}", path.string());
+        std::printf("GPU: driver pipeline cache not written to %s (%s)\n", path.string().c_str(),
+                    reason.c_str());
         return false;
     }
     if (driver_saver) {
         driver_saver->saved_hash = hash;
         driver_saver->saved_created = created;
     }
-    LOG_INFO(Render_Vulkan, "tlg: driver pipeline cache saved ({} bytes)", blob.size());
+    std::printf("GPU: driver pipeline cache saved (%zu KiB, %llu pipelines built this run)\n",
+                blob.size() >> 10, static_cast<unsigned long long>(created));
     return true;
 }
 
@@ -535,20 +544,34 @@ void PipelineCache::StartDriverCacheSaver() {
         auto* saver = driver_saver;
         std::unique_lock lock{saver->mutex};
         while (!saver->stop) {
-            // tlg: TLG_DRIVER_CACHE_SAVE_S (default 60, was 180): a crash loses at most this much of what
-            // the driver learned.
+            // tlg: TLG_DRIVER_CACHE_SAVE_S (default 30, was 60 and 180): a crash or a low-memory
+            // kill loses at most this much of what the driver learned.
             static const int save_seconds = [] {
                 const char* v = std::getenv("TLG_DRIVER_CACHE_SAVE_S");
-                return v && *v ? std::clamp(std::atoi(v), 10, 3600) : 60;
+                return v && *v ? std::clamp(std::atoi(v), 10, 3600) : 30;
             }();
-            if (saver->cv.wait_for(lock, std::chrono::seconds(save_seconds), [&] { return saver->stop; })) {
+            saver->cv.wait_for(lock, std::chrono::seconds(save_seconds),
+                               [&] { return saver->stop || saver->save_now; });
+            if (saver->stop) {
                 break;
             }
+            saver->save_now = false;
             lock.unlock();
             SaveDriverCache();
             lock.lock();
         }
     });
+}
+
+void PipelineCache::RequestDriverCacheSave() {
+    if (!driver_saver) {
+        return;
+    }
+    {
+        std::scoped_lock lock{driver_saver->mutex};
+        driver_saver->save_now = true;
+    }
+    driver_saver->cv.notify_all();
 }
 
 void PipelineCache::StopDriverCacheSaver() {

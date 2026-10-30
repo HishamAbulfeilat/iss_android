@@ -1490,6 +1490,7 @@ void PipelineCache::PumpWarmUp() {
                 g_tlg_pipeline_total_ns / 1e9);
     // The idle threads stay parked (StopWarmUp).
     warm.finished = true;
+    RequestDriverCacheSave();
     TlgOverlay::SetBackgroundLoading(0, 0);
     Storage::DataBase::Instance().FinishPreload();
 }
