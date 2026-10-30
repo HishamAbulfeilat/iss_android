@@ -52,7 +52,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("inFAMOUS Second Son — Daedalus 0.2.7 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.2.8 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
@@ -220,6 +220,10 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   android.app.ActivityManager.MemoryInfo m=new android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(m);return m;
  }
  private int memoryPolls;
+ /** /proc scans and binder calls for the memory log and the performance hint stay off the UI
+  * thread: while the game process is stalled they can block, and Android then reports an ANR. */
+ private final android.os.HandlerThread monitor=new android.os.HandlerThread("iss-monitor");
+ private Handler monitorHandler;
  /** Low-memory kills leave no native error: keep the system's view of memory in iss.log. */
  private void recordMemory(String why){
   android.app.ActivityManager.MemoryInfo m=memory();if(m==null)return;
@@ -271,12 +275,18 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
  @Override public void onTrimMemory(int level){super.onTrimMemory(level);recordMemory("Android trim level "+level);}
  private void poll(){
   if(destroyed)return;
-  if(++memoryPolls%10==0)recordMemory("periodic");
+  if(monitorHandler==null){monitor.start();monitorHandler=new Handler(monitor.getLooper());}
+  final boolean memoryDue=++memoryPolls%10==0;final long shown=IssPresent.frames();
+  final int realLimit=BionicPerformanceSettings.effective(this),multiplier=getSharedPreferences("iss",0).getInt("fg_multiplier",0);
+  monitorHandler.post(()->{
+   if(destroyed)return;
+   if(memoryDue)recordMemory("periodic");
+   if(perfHint!=null)perfHint.tick(shown,realLimit,multiplier);
+  });
   float refresh=getWindowManager().getDefaultDisplay().getRefreshRate();
   if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
   showGraffitiGuideIfRequested();
   long n=IssPresent.frames();
-  if(perfHint!=null)perfHint.tick(n,BionicPerformanceSettings.effective(this),getSharedPreferences("iss",0).getInt("fg_multiplier",0));
   if(!failed&&n>0)status.setVisibility(View.GONE);
   if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
   main.postDelayed(this::poll,1000);
@@ -330,7 +340,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   }
   if(menu!=null)menu.destroy();
   if(thermal!=null)thermal.stop();
-  if(perfHint!=null)perfHint.stop();
+  if(monitorHandler!=null)monitorHandler.post(()->{if(perfHint!=null)perfHint.stop();});
+  monitor.quitSafely();
   IssPresent.stop();if(audio!=null)audio.stop();
   worker.shutdown();super.onDestroy();
  }

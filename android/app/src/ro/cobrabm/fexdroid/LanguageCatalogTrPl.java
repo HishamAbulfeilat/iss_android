@@ -193,7 +193,6 @@ final class LanguageCatalogTrPl {
   {"Experimental: free idle GPU buffer memory (fewer low-memory closes; may stutter or glitch)","Deneysel: boşta kalan GPU arabellek belleğini serbest bırak (daha az bellek kapanması; takılma veya görüntü hatası olabilir)","Eksperymentalne: zwalniaj bezczynną pamięć buforów GPU (mniej zamknięć z braku pamięci; możliwe przycięcia lub błędy obrazu)"},
   {"Disable multisampling (less memory and GPU work; softer edges)","Çoklu örneklemeyi kapat (daha az bellek ve GPU işi; daha yumuşak kenarlar)","Wyłącz wielopróbkowanie (mniej pamięci i pracy GPU; łagodniejsze krawędzie)"},
   {"Android performance hint (keeps game threads clocked up)","Android performans ipucu (oyun iş parçacıklarını yüksek frekansta tutar)","Wskazówka wydajności Androida (utrzymuje wysokie taktowanie wątków gry)"},
-  {"Experimental: hot pages (fewer write stalls; may lower FPS in some scenes)","Deneysel: sıcak sayfalar (daha az yazma takılması; bazı sahnelerde FPS düşebilir)","Eksperymentalne: gorące strony (mniej przestojów zapisu; w niektórych scenach FPS może spaść)"},
   {"Dynamic compute stride (smoke)","Dinamik hesaplama adımı (duman)","Dynamiczny krok obliczeń (dym)"},
   {"Real light occlusion","Gerçek ışık örtülmesi","Rzeczywista okluzja światła"},
   {"Batched texture write-backs","Toplu doku geri yazımı","Zbiorczy zapis tekstur"},
