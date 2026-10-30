@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <pthread.h>
 #ifndef _WIN32
 #include <sys/resource.h>
@@ -381,6 +383,26 @@ bool PipelinedComputeOpcode(PM4ItOpcode opcode) {
     }
 }
 
+// tlg: shared GPU writes (TlgSharedHeaps::GpuWrites): the game reads what the GPU wrote straight
+// from its memory once a fence says the GPU is done, so the fence must wait for the GPU. A GDS
+// store needs the command buffer and stays immediate. Returns true when the signal was deferred.
+bool SignalReleaseMemWhenGpuDone(Vulkan::Rasterizer& rasterizer, const u32* packet, u32 pipe_id) {
+    const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(packet);
+    if (!TlgSharedHeaps::GpuWrites() || release_mem->data_sel == DataSelect::GdsMemStore) {
+        return false;
+    }
+    std::array<u32, sizeof(PM4CmdReleaseMem) / sizeof(u32)> copy;
+    std::memcpy(copy.data(), packet, sizeof(PM4CmdReleaseMem));
+    rasterizer.SignalWhenGpuDone([copy, pipe_id] {
+        reinterpret_cast<const PM4CmdReleaseMem*>(copy.data())->SignalFence(
+            [pipe_id] {
+                Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(pipe_id));
+            },
+            [](VAddr, u16, u16) {});
+    });
+    return true;
+}
+
 struct ComputeReleaseMem {
     u32 packet[sizeof(PM4CmdReleaseMem) / sizeof(u32)];
     u32 pipe_id;
@@ -393,6 +415,9 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
     rasterizer.EagerCopyAtFence();
+    if (SignalReleaseMemWhenGpuDone(rasterizer, task.packet, task.pipe_id)) {
+        return;
+    }
     reinterpret_cast<const PM4CmdReleaseMem*>(task.packet)->SignalFence(
         [pipe_id = task.pipe_id] {
             Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(pipe_id));
@@ -420,13 +445,21 @@ void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
-    event_eos.SignalFence([](void* address, u64 value, u32 num_bytes) {
+    const auto write_fence = [](void* address, u64 value, u32 num_bytes) {
         auto* memory = Core::Memory::Instance();
         TlgWriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes, TlgWriteLog::Fence);
         if (!memory->TryWriteBacking(address, &value, num_bytes)) {
             memcpy(address, &value, num_bytes);
         }
-    });
+    };
+    // tlg: shared GPU writes: as for ReleaseMem, the fence waits for the GPU.
+    if (TlgSharedHeaps::GpuWrites() &&
+        event_eos.command == PM4CmdEventWriteEos::Command::SignalFence) {
+        rasterizer.SignalWhenGpuDone(
+            [event_eos, write_fence] { event_eos.SignalFence(write_fence); });
+        return;
+    }
+    event_eos.SignalFence(write_fence);
     if (event_eos.command == PM4CmdEventWriteEos::Command::GdsStore) {
         ASSERT(event_eos.size == 1);
         rasterizer.Finish();
@@ -1859,6 +1892,10 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             if (rasterizer) {
                 rasterizer->ProcessDownloadImages();
                 rasterizer->EagerCopyAtFence();
+                if (SignalReleaseMemWhenGpuDone(*rasterizer, reinterpret_cast<const u32*>(header),
+                                                queue.pipe_id)) {
+                    break;
+                }
             }
             release_mem->SignalFence(
                 [pipe_id = queue.pipe_id] {

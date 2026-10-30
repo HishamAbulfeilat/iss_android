@@ -260,8 +260,13 @@ private:
             readable = ~gpu;
         } else {
             writeable = cpu;
-            // tlg: shared heaps are never write-protected: the GPU reads the game's memory itself,
-            // so there is nothing to upload and the game's stores there cost no faults.
+        }
+        // tlg: shared heaps are never write-protected: the GPU reads the game's memory itself,
+        // so there is nothing to upload and the game's stores there cost no faults. With shared
+        // GPU writes they are never read-protected either: the GPU wrote the game's memory, so
+        // there is nothing to copy back, and the game waits on its fences (which wait for the
+        // GPU) as on a PS4.
+        if (!is_read || TlgSharedHeaps::GpuWrites()) {
             if (TlgSharedHeaps::Overlaps(cpu_addr, cpu_addr + TRACKER_HIGHER_PAGE_SIZE)) {
                 for (std::size_t i = 0, n = TlgSharedHeaps::Count(); i < n; ++i) {
                     const auto piece = TlgSharedHeaps::At(i);

@@ -37,6 +37,7 @@ const Vulkan::Instance* instance_ptr = nullptr;
 std::uint64_t arena_block = 0;
 std::uint32_t memory_type = ~0u;
 bool active = false;
+bool gpu_writes = false;
 
 const vk::ExternalMemoryBufferCreateInfo arena_external{
     .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eDmaBufEXT,
@@ -335,23 +336,51 @@ void Init(const Vulkan::Instance& instance, std::uint64_t block_size, vk::Buffer
         off(why);
         return;
     }
+    // tlg: GPU writes. Between the heaps lie the buffers the GPU writes and the game then reads
+    // and writes (inFAMOUS: 0x106d150100, a fault on the game's main thread every frame that
+    // waits for the GPU, 2-3 s of every 5 s). Shared, the GPU writes the game's memory itself:
+    // the holes between recorded ranges (under 256 MiB) are shared too, and shared pages are
+    // never read-protected; the game syncs on its fences, which then mean the GPU is done.
+    const char* writes_env = std::getenv("TLG_SHARED_GPU_WRITES");
+    gpu_writes = !(writes_env && writes_env[0] == '0');
+    auto shared = ranges;
+    if (gpu_writes) {
+        std::sort(shared.begin(), shared.end());
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
+        for (const auto& [base, size] : shared) {
+            if (!merged.empty() && base <= merged.back().first + merged.back().second + MinHeapBytes) {
+                auto& last = merged.back();
+                last.second = std::max(last.first + last.second, base + size) - last.first;
+            } else {
+                merged.emplace_back(base, size);
+            }
+        }
+        shared = std::move(merged);
+    }
     std::vector<std::uint64_t> flat;
     std::uint64_t total = 0;
-    for (const auto& [base, size] : ranges) {
+    for (const auto& [base, size] : shared) {
         flat.push_back(base);
         flat.push_back(size);
         total += size;
     }
     active = true;
-    runtime_memory_set_share_provider(&Provide, flat.data(), ranges.size());
+    runtime_memory_set_share_provider(&Provide, flat.data(), shared.size());
     std::printf("GPU: shared heaps: on, %zu ranges (%llu MiB) in memory type %u; the game and the GPU "
                 "use one copy (TLG_SHARED_HEAPS=0 turns it off)\n",
-                ranges.size(), static_cast<unsigned long long>(total >> 20), memory_type);
+                shared.size(), static_cast<unsigned long long>(total >> 20), memory_type);
+    std::printf("GPU: shared heaps: GPU writes %s (TLG_SHARED_GPU_WRITES)\n",
+                gpu_writes ? "shared too, no read faults or readback waits there; fences wait for the GPU"
+                           : "off: GPU results are copied back as before");
 #endif
 }
 
 bool Active() {
     return active;
+}
+
+bool GpuWrites() {
+    return active && gpu_writes;
 }
 
 const vk::ExternalMemoryBufferCreateInfo* ArenaExternal() {

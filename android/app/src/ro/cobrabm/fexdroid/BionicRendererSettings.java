@@ -45,6 +45,7 @@ final class BionicRendererSettings {
   if(p.getBoolean("renderer_release_idle",false))env.put("TLG_RELEASE_IDLE_BUFFERS","1");
   if(p.getBoolean("renderer_no_msaa",false))env.put("TLG_NO_MSAA","1");
   env.put("TLG_SHARED_HEAPS",p.getBoolean("renderer_shared_heaps",true)?"1":"0");
+  env.put("TLG_SHARED_GPU_WRITES",p.getBoolean("renderer_shared_gpu_writes",true)?"1":"0");
  }
  static void show(Activity a){
   SharedPreferences p=a.getSharedPreferences("iss",0);
@@ -57,6 +58,7 @@ final class BionicRendererSettings {
   CheckBox release=new CheckBox(a);release.setText(AppLanguage.text("Experimental: free idle GPU buffer memory (fewer low-memory closes; may stutter or glitch)","Experimental: liberar memória ociosa de buffers da GPU (menos fechamentos por memória; pode travar ou falhar a imagem)"));release.setChecked(p.getBoolean("renderer_release_idle",false));release.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_release_idle",on).apply());panel.addView(release);
   CheckBox msaa=new CheckBox(a);msaa.setText(AppLanguage.text("Disable multisampling (less memory and GPU work; softer edges)","Desligar multisampling (menos memória e trabalho da GPU; bordas mais suaves)"));msaa.setChecked(p.getBoolean("renderer_no_msaa",false));msaa.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_no_msaa",on).apply());panel.addView(msaa);
   CheckBox shared=new CheckBox(a);shared.setText(AppLanguage.text("Unified memory: the game and the GPU share the geometry heaps (much less RAM; turn off if you see glitches)","Memória unificada: o jogo e a GPU compartilham os heaps de geometria (muito menos RAM; desligue se aparecerem falhas)"));shared.setChecked(p.getBoolean("renderer_shared_heaps",true));shared.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_shared_heaps",on).apply());panel.addView(shared);
+  CheckBox sharedWrites=new CheckBox(a);sharedWrites.setText(AppLanguage.text("Unified memory: GPU results too (higher FPS, no waits for GPU data; turn off if you see glitches)","Memória unificada: resultados da GPU também (mais FPS, sem esperar dados da GPU; desligue se aparecerem falhas)"));sharedWrites.setChecked(p.getBoolean("renderer_shared_gpu_writes",true));sharedWrites.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_shared_gpu_writes",on).apply());panel.addView(sharedWrites);
   new AlertDialog.Builder(a).setTitle(AppLanguage.text("Renderer corrections","Correções da renderização")).setView(panel).setPositiveButton(AppLanguage.text("Done","Concluir"),null).show();
  }
 }

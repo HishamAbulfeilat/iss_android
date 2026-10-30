@@ -17,7 +17,9 @@ class MenuSwipepad(unittest.TestCase):
         sources = {
             'ro/cobrabm/fexdroid/PadBridge.java': bridge,
             'android/os/Looper.java': 'package android.os; public class Looper { public static Looper getMainLooper(){return new Looper();} }',
-            'android/os/Handler.java': 'package android.os; public class Handler { public Handler(Looper l){} public boolean postDelayed(Runnable r,long ms){r.run();return true;} }',
+            'android/os/Handler.java': 'package android.os; public class Handler { public Handler(Looper l){} public boolean post(Runnable r){r.run();return true;} public boolean postDelayed(Runnable r,long ms){r.run();return true;} }',
+            'android/os/HandlerThread.java': 'package android.os; public class HandlerThread extends Thread { public HandlerThread(String n,int p){} public Looper getLooper(){return null;} }',
+            'android/os/Process.java': 'package android.os; public class Process { public static final int THREAD_PRIORITY_URGENT_DISPLAY=-8; }',
             'android/util/Log.java': 'package android.util; public class Log {public static int e(String t,String m,Throwable x){throw new AssertionError(x);} }',
             'android/view/InputDevice.java': 'package android.view; public class InputDevice {public static final int SOURCE_JOYSTICK=1;}',
             'android/view/KeyEvent.java': '''package android.view; public class KeyEvent {

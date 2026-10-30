@@ -49,13 +49,11 @@ final class PadBridge {
         touchDown=down;touchX=Math.max(0,Math.min(1919,x));touchY=Math.max(0,Math.min(942,y));
     }
     void setDpadSwipe(boolean enabled){dpadSwipe=enabled;write();}
-    private final Handler handler = new Handler(Looper.getMainLooper());
     private final Set<String> keys = new LinkedHashSet<>();
     private final Set<String> virtualKeys = new LinkedHashSet<>();
     private int lx=128, ly=128, rx=128, ry=128, l2, r2, hatX, hatY;
     private int virtualLx=128, virtualLy=128, virtualRx=128, virtualRy=128, virtualL2, virtualR2;
     private boolean virtualLeftActive, virtualRightActive;
-    private boolean queued;
 
     PadBridge(File state) { this.state=state; reset(); }
 
@@ -103,7 +101,7 @@ final class PadBridge {
         if (e.getAction()==KeyEvent.ACTION_DOWN) keys.add(name);
         else if (e.getAction()==KeyEvent.ACTION_UP) keys.remove(name);
         sensorChord(keys.contains("l3")&&keys.contains("r3"),false);
-        // Publish button transitions immediately; the runtime samples at 20 ms intervals.
+        // Publish button transitions immediately; the runtime checks every 2 ms.
         write();
         return true;
     }
@@ -118,7 +116,7 @@ final class PadBridge {
         r2=trigger(Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER),e.getAxisValue(MotionEvent.AXIS_GAS)));
         hatX=Math.round(e.getAxisValue(MotionEvent.AXIS_HAT_X));
         hatY=Math.round(e.getAxisValue(MotionEvent.AXIS_HAT_Y));
-        if (!queued) { queued=true; handler.postDelayed(() -> { queued=false; write(); },8); }
+        write();
         return true;
     }
 
@@ -164,11 +162,33 @@ final class PadBridge {
             .append(" rx=").append(virtualRightActive ? virtualRx : rx)
             .append(" ry=").append(virtualRightActive ? virtualRy : ry)
             .append(" l2=").append(leftTrigger).append(" r2=").append(rightTrigger).append('\n');
+        // The file is written on its own thread: a slow write never holds input on the UI
+        // thread, and a burst of stick events writes only the newest state.
+        synchronized (this) {
+            boolean idle=pending==null;
+            pending=text.toString();
+            if (idle) writer.post(this::flush);
+        }
+    }
+
+    private final android.os.HandlerThread writerThread=startWriter();
+    private final Handler writer=new Handler(writerThread.getLooper());
+    private String pending;
+    private static android.os.HandlerThread startWriter() {
+        android.os.HandlerThread thread=new android.os.HandlerThread("pad-writer",android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        thread.start();
+        return thread;
+    }
+
+    private void flush() {
+        String text;
+        synchronized (this) { text=pending; pending=null; }
+        if (text==null) return;
         File temp=new File(state.getPath()+".tmp");
         try {
             state.getParentFile().mkdirs();
             try (FileOutputStream out=new FileOutputStream(temp)) {
-                out.write(text.toString().getBytes(StandardCharsets.US_ASCII));
+                out.write(text.getBytes(StandardCharsets.US_ASCII));
             }
             if (!temp.renameTo(state)) throw new java.io.IOException("Cannot publish controller state");
         } catch (java.io.IOException ex) { android.util.Log.e("inFAMOUS Second Son", "Controller bridge",ex); }

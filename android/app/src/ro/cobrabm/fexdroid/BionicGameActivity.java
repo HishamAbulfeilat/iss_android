@@ -52,7 +52,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
   new File(base,"framegen.stats").delete();
   try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
-   out.write("inFAMOUS Second Son — Daedalus 0.4.1 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+   out.write("inFAMOUS Second Son — Daedalus 0.4.2 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
   }catch(Exception ignored){}
   pad=new PadBridge(new File(base,"android-pad.state"));
   audio=new AudioBridge(new File(base,"audio.fifo"));
@@ -66,6 +66,8 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   frame.addView(status);
   menu=new BionicPlayerMenu(this,frame,controller,pad,this::restartGame);
   setContentView(frame);
+  // Controller sticks are delivered as they arrive, not batched to the next display frame.
+  frame.requestUnbufferedDispatch(InputDevice.SOURCE_JOYSTICK|InputDevice.SOURCE_GAMEPAD);
   frame.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or_,ob)->updateVideoSize());
   frame.post(this::updateVideoSize);
   surface.getHolder().addCallback(this);

@@ -831,7 +831,7 @@ static void read_inject(void) {
     if (!checked) { path=getenv("TLG_PAD_FILE"); checked=1; }
     if (!path || !*path) return;
     uint64_t now=now_us();
-    if (now-last_check<20000) return;
+    if (now-last_check<2000) return; /* 2 ms: a pad change reaches the next game read */
     last_check=now;
     struct stat st;
     if (stat(path,&st)!=0) return;

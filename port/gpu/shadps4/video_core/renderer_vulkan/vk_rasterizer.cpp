@@ -1944,6 +1944,8 @@ void Rasterizer::Finish(std::source_location caller) {
 
 void Rasterizer::SignalWhenGpuDone(Common::UniqueFunction<void>&& signal) {
     DrainDrawPipe();
+    // What the GPU wrote must be visible to the game once the signal runs (shared GPU writes).
+    scheduler.RequireHostReadBarrier();
     // Deferred to the tick being recorded, which the flush then submits.
     scheduler.DeferPriorityOperation(std::move(signal));
     SubmitInfo info{};

@@ -41,6 +41,10 @@ void Init(const Vulkan::Instance& instance, std::uint64_t block_size, vk::Buffer
 /// True when shared heaps are on (probe passed and the runtime has the ranges).
 bool Active();
 
+/// True when GPU writes to shared pages are shared as well (TLG_SHARED_GPU_WRITES, on unless 0):
+/// those pages are never read-protected, and guest fences wait for the GPU.
+bool GpuWrites();
+
 /// What sparse arenas must chain into their create info when Active() (null otherwise): memory
 /// exported as a dma-buf may only be bound to buffers created for that handle type.
 const vk::ExternalMemoryBufferCreateInfo* ArenaExternal();
