@@ -1,0 +1,196 @@
+package ro.cobrabm.fexdroid;
+
+import android.os.Handler;
+import android.os.Looper;
+import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
+/** Android gamepad events -> issport's atomic pad-state file, without /dev/input permissions. */
+final class PadBridge {
+    private final File state;
+    private boolean swapFaceButtons;
+    private boolean dpadSwipe;
+    private boolean mobileControls=true;
+    void setMobileControls(boolean enabled){mobileControls=enabled;write();}
+    private boolean sensorMode,virtualSensorHeld,physicalSensorHeld;
+    boolean isSensorMode(){return sensorMode;}
+    void toggleSensorMode(){sensorMode=!sensorMode;write();}
+    private void sensorChord(boolean held,boolean virtual){
+        if(held&&!(virtual?virtualSensorHeld:physicalSensorHeld))sensorMode=!sensorMode;
+        if(virtual)virtualSensorHeld=held;else physicalSensorHeld=held;
+    }
+    // Start/Options opens/closes the game menu; the explicit override handles other exits.
+    private boolean menuMode;
+    private boolean automaticMode=true;
+    private Runnable modeChanged;
+    void onModeChanged(Runnable listener){modeChanged=listener;}
+    private boolean touchDown;
+    private int touchX=960,touchY=471,touchId;
+    boolean isMenuMode(){return menuMode;}
+    boolean isAutomaticMode(){return automaticMode;}
+    void setMenuMode(boolean enabled){reset();automaticMode=false;menuMode=enabled;write();if(modeChanged!=null)modeChanged.run();}
+    void cycleInputMode(){
+        if(automaticMode)setMenuMode(true);
+        else if(menuMode)setMenuMode(false);
+        else {reset();automaticMode=true;write();if(modeChanged!=null)modeChanged.run();}
+    }
+    void gameMenuButton(){
+        boolean next=!menuMode;reset();menuMode=next;automaticMode=true;write();
+        if(modeChanged!=null)modeChanged.run();
+    }
+    void touch(boolean down,int x,int y){
+        if(down&&!touchDown)touchId=(touchId+1)&127;
+        touchDown=down;touchX=Math.max(0,Math.min(1919,x));touchY=Math.max(0,Math.min(942,y));
+    }
+    void setDpadSwipe(boolean enabled){dpadSwipe=enabled;write();}
+    private final Set<String> keys = new LinkedHashSet<>();
+    private final Set<String> virtualKeys = new LinkedHashSet<>();
+    private int lx=128, ly=128, rx=128, ry=128, l2, r2, hatX, hatY;
+    private int virtualLx=128, virtualLy=128, virtualRx=128, virtualRy=128, virtualL2, virtualR2;
+    private boolean virtualLeftActive, virtualRightActive;
+
+    PadBridge(File state) { this.state=state; reset(); }
+
+    void setSwapFaceButtons(boolean enabled) { reset(); swapFaceButtons=enabled; }
+
+    private String name(KeyEvent e) {
+        // Thor's Linux scancodes were verified against its printed Nintendo positions.
+        switch (e.getScanCode()) {
+            case 304: return "cross"; case 305: return "circle";
+            case 307: return swapFaceButtons ? "triangle" : "square";
+            case 308: return swapFaceButtons ? "square" : "triangle";
+            case 310: return "l1"; case 311: return "r1";
+            case 312: return "l2"; case 313: return "r2";
+            case 314: return "touchpad_both"; case 315: return "options";
+            case 317: return "l3"; case 318: return "r3";
+        }
+        switch (e.getKeyCode()) {
+            case KeyEvent.KEYCODE_BUTTON_A: return "cross";
+            case KeyEvent.KEYCODE_BUTTON_B: return "circle";
+            case KeyEvent.KEYCODE_BUTTON_X: return swapFaceButtons ? "triangle" : "square";
+            case KeyEvent.KEYCODE_BUTTON_Y: return swapFaceButtons ? "square" : "triangle";
+            case KeyEvent.KEYCODE_BUTTON_L1: return "l1";
+            case KeyEvent.KEYCODE_BUTTON_R1: return "r1";
+            case KeyEvent.KEYCODE_BUTTON_L2: return "l2";
+            case KeyEvent.KEYCODE_BUTTON_R2: return "r2";
+            case KeyEvent.KEYCODE_BUTTON_THUMBL: return "l3";
+            case KeyEvent.KEYCODE_BUTTON_THUMBR: return "r3";
+            case KeyEvent.KEYCODE_BUTTON_START: return "options";
+            case KeyEvent.KEYCODE_BUTTON_SELECT: return "touchpad_both";
+            case KeyEvent.KEYCODE_DPAD_UP: return "up";
+            case KeyEvent.KEYCODE_DPAD_DOWN: return "down";
+            case KeyEvent.KEYCODE_DPAD_LEFT: return "left";
+            case KeyEvent.KEYCODE_DPAD_RIGHT: return "right";
+            default: return null;
+        }
+    }
+
+    boolean key(KeyEvent e) {
+        String name=name(e);
+        if (name==null) return false;
+        if(name.equals("options")&&e.getAction()==KeyEvent.ACTION_DOWN&&e.getRepeatCount()==0){
+            if(keys.contains("l1")&&keys.contains("r1")){cycleInputMode();return true;}
+            gameMenuButton();
+        }
+        if (e.getAction()==KeyEvent.ACTION_DOWN) keys.add(name);
+        else if (e.getAction()==KeyEvent.ACTION_UP) keys.remove(name);
+        sensorChord(keys.contains("l3")&&keys.contains("r3"),false);
+        // Publish button transitions immediately; the runtime checks every 2 ms.
+        write();
+        return true;
+    }
+
+    boolean motion(MotionEvent e) {
+        if (!e.isFromSource(InputDevice.SOURCE_JOYSTICK)) return false;
+        lx=stick(e.getAxisValue(MotionEvent.AXIS_X));
+        ly=stick(e.getAxisValue(MotionEvent.AXIS_Y));
+        rx=stick(e.getAxisValue(MotionEvent.AXIS_Z));
+        ry=stick(e.getAxisValue(MotionEvent.AXIS_RZ));
+        l2=trigger(Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER),e.getAxisValue(MotionEvent.AXIS_BRAKE)));
+        r2=trigger(Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER),e.getAxisValue(MotionEvent.AXIS_GAS)));
+        hatX=Math.round(e.getAxisValue(MotionEvent.AXIS_HAT_X));
+        hatY=Math.round(e.getAxisValue(MotionEvent.AXIS_HAT_Y));
+        write();
+        return true;
+    }
+
+    private static int stick(float v) { return Math.abs(v)<0.06f ? 128 : Math.max(0,Math.min(255,Math.round((v+1)*127.5f))); }
+    private static int trigger(float v) { return Math.max(0,Math.min(255,Math.round(v*255))); }
+
+    void virtual(Set<String> buttons, int leftX, int leftY, int rightX, int rightY,
+                 boolean leftActive, boolean rightActive, int leftTrigger, int rightTrigger) {
+        virtualKeys.clear(); for(String key:buttons)virtualKeys.add(swapFaceButtons && key.equals("square")?"triangle":swapFaceButtons && key.equals("triangle")?"square":key);
+        sensorChord(buttons.contains("l3")&&buttons.contains("r3"),true);
+        virtualLx=leftX; virtualLy=leftY; virtualRx=rightX; virtualRy=rightY;
+        virtualLeftActive=leftActive; virtualRightActive=rightActive;
+        virtualL2=leftTrigger; virtualR2=rightTrigger;
+        write();
+    }
+
+    void reset() {
+        touchDown=false;virtualSensorHeld=physicalSensorHeld=false;
+        keys.clear(); lx=ly=rx=ry=128; l2=r2=hatX=hatY=0;
+        virtualKeys.clear(); virtualLx=virtualLy=virtualRx=virtualRy=128;
+        virtualL2=virtualR2=0; virtualLeftActive=virtualRightActive=false;
+        write();
+    }
+
+    private void write() {
+        StringBuilder text=new StringBuilder();
+        text.append("input_mobile=").append(mobileControls?1:0).append(' ');
+        text.append("sensor_mode=").append(sensorMode?1:0).append(' ');
+        text.append("dpad_swipe=").append(dpadSwipe?1:0).append(' ');
+        text.append("input_menu=").append(menuMode?1:0).append(' ');
+        text.append("input_auto=").append(automaticMode?1:0).append(' ');
+        if(touchDown&&(automaticMode||!menuMode))text.append("finger=1 tx=").append(touchX).append(" ty=").append(touchY).append(" tid=").append(touchId).append(' ');
+        Set<String> all=new LinkedHashSet<>(keys); all.addAll(virtualKeys);
+        int leftTrigger=Math.max(l2,virtualL2), rightTrigger=Math.max(r2,virtualR2);
+        for (String key:all) {
+            if ((key.equals("l2") && leftTrigger>0) || (key.equals("r2") && rightTrigger>0)) continue;
+            text.append(key).append(' ');
+        }
+        if (hatX<0) text.append("left "); if (hatX>0) text.append("right ");
+        if (hatY<0) text.append("up "); if (hatY>0) text.append("down ");
+        text.append("lx=").append(virtualLeftActive ? virtualLx : lx)
+            .append(" ly=").append(virtualLeftActive ? virtualLy : ly)
+            .append(" rx=").append(virtualRightActive ? virtualRx : rx)
+            .append(" ry=").append(virtualRightActive ? virtualRy : ry)
+            .append(" l2=").append(leftTrigger).append(" r2=").append(rightTrigger).append('\n');
+        // The file is written on its own thread: a slow write never holds input on the UI
+        // thread, and a burst of stick events writes only the newest state.
+        synchronized (this) {
+            boolean idle=pending==null;
+            pending=text.toString();
+            if (idle) writer.post(this::flush);
+        }
+    }
+
+    private final android.os.HandlerThread writerThread=startWriter();
+    private final Handler writer=new Handler(writerThread.getLooper());
+    private String pending;
+    private static android.os.HandlerThread startWriter() {
+        android.os.HandlerThread thread=new android.os.HandlerThread("pad-writer",android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        thread.start();
+        return thread;
+    }
+
+    private void flush() {
+        String text;
+        synchronized (this) { text=pending; pending=null; }
+        if (text==null) return;
+        File temp=new File(state.getPath()+".tmp");
+        try {
+            state.getParentFile().mkdirs();
+            try (FileOutputStream out=new FileOutputStream(temp)) {
+                out.write(text.getBytes(StandardCharsets.US_ASCII));
+            }
+            if (!temp.renameTo(state)) throw new java.io.IOException("Cannot publish controller state");
+        } catch (java.io.IOException ex) { android.util.Log.e("inFAMOUS Second Son", "Controller bridge",ex); }
+    }
+}

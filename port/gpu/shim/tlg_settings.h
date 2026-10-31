@@ -13,6 +13,8 @@
 #include <cstdint>
 
 namespace TlgSettings {
+// Called on the VideoOut thread only; publishes validated Android FPS/VSync atomics.
+void PollAndroidPerformance();
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
                       UpscalerTaa = 4, UpscalerDlss = 5, UpscalerCount };
@@ -75,6 +77,7 @@ struct Values {
     std::atomic<int> display_mode{0};
     std::atomic<bool> vsync{true};
     std::atomic<int> fps_limit{0};
+    std::atomic<int> android_vblank_hz{60};
     /// Off by default (2026-10-16): a draw whose pipeline was still compiling was skipped, and the
     /// object vanished for a frame (grey flashes when the camera turns). Measured in the city with the
     /// first-run cache: 0 skipped draws against 85, same FPS, better worst frame (67 ms against 117).
@@ -87,7 +90,14 @@ struct Values {
     std::atomic<bool> rcas_applied{false};
     /// Set by the presenter: the game's image and the window it is shown in, in pixels.
     std::atomic<int> image_width{0}, image_height{0}, window_width{0}, window_height{0};
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+    // Allow the Android CPU/FEX command thread to overlap another frame
+    // with the GPU. TLG_FRAMES_AHEAD and persisted frames_queued still override.
+    // A maximum of two GPU frames in flight retains backpressure.
+    std::atomic<int> frames_queued{2};
+#else
     std::atomic<int> frames_queued{1};
+#endif
     // Startup: run.py turns them into patches and environment variables; "Apply and restart".
     std::atomic<int> render_resolution{0};
     std::atomic<int> engine_fps{120};

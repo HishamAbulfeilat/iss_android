@@ -33,6 +33,7 @@
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/libs.h"
 #include "core/memory.h"
+#include "core/emulator_settings.h"
 #include "core/signals.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -41,6 +42,8 @@ extern "C" {
 // runtime_memory.c
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
+int runtime_memory_write_backing_cpu(uintptr_t address, const void* data, uint64_t size);
+int runtime_memory_cpu_write_can_queue(void);
 int runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
 int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped);
@@ -48,6 +51,7 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 // runtime_kernel.c: one clock for guest and GPU timestamps
 uint64_t runtime_process_time_us(void);
+void runtime_prepare_short_sleep(uint64_t ns);
 uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 uint64_t runtime_read_tsc(void);
@@ -153,6 +157,9 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     }
     return written;
 }
+bool MemoryManager::TryCpuWriteBacking(void* address, const void* data, u64 size) {
+    return runtime_memory_write_backing_cpu(reinterpret_cast<uintptr_t>(address), data, size) != 0;
+}
 void AddressSpace::Protect(VAddr virtual_addr, u64 size, MemoryPermission perms) {
     TlgStats::Timer timer{TlgStats::t_protect};
     const u64 pages = (size + 4095) / 4096;
@@ -186,6 +193,7 @@ s32 PS4_SYSV_ABI sceKernelGetCompiledSdkVersion(s32* ver) {
     return ORBIS_OK;
 }
 s32 PS4_SYSV_ABI sceKernelUsleep(u32 microseconds) {
+    runtime_prepare_short_sleep(uint64_t{microseconds} * 1000);
     std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
     return ORBIS_OK;
 }
@@ -394,6 +402,29 @@ extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
     out->faults_handled = TlgFreeze::faults_handled.load(std::memory_order_relaxed);
 }
 
+// FEX pushes a completed camera snapshot here from the guest update routine.
+// No address survives the call: the four matrices and scalar fields are copied.
+// The reader takes one frame-consistent snapshot under the same short lock.
+namespace {
+std::mutex iss_camera_mutex;
+TlgIssCameraSnapshot iss_camera_latest{};
+}
+
+extern "C" void tlggpu_iss_camera_publish(const TlgIssCameraSnapshot* sample) {
+    if (!sample) return;
+    std::lock_guard lock{iss_camera_mutex};
+    const uint64_t next = iss_camera_latest.sequence + 1;
+    iss_camera_latest = *sample;
+    iss_camera_latest.sequence = next;
+}
+
+extern "C" uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot* sample) {
+    if (!sample) return 0;
+    std::lock_guard lock{iss_camera_mutex};
+    *sample = iss_camera_latest;
+    return sample->sequence;
+}
+
 extern "C" unsigned tlggpu_symbol_count(void) {
     return unsigned(g_symbols.size());
 }
@@ -449,8 +480,33 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+extern "C" int tlggpu_cpu_store(void* dst, const void* bytes, uint64_t size) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    auto* r = Core::Memory::Instance()->GetRasterizer();
+    if (!r || size != 16 || (reinterpret_cast<VAddr>(dst) & 15) ||
+        reinterpret_cast<VAddr>(dst) >= (1ULL << 40) ||
+        EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Relaxed ||
+        EmulatorSettings.IsDirectMemoryAccessEnabled()) return 0;
+    if (!r->GetBufferCache().IsRegionGpuModified(reinterpret_cast<VAddr>(dst), size) ||
+        r->IsGpuSideThread() || !runtime_memory_cpu_write_can_queue()) return 0;
+    return r->GetBufferCache().CpuStoreOverwrite(reinterpret_cast<VAddr>(dst), bytes, size);
+#else
+    return 0;
+#endif
+}
+
 extern "C" int tlggpu_cpu_write(void* dst, const void* src, int fill, uint64_t size) {
     auto* rasterizer = Core::Memory::Instance()->GetRasterizer();
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    if (rasterizer && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed) {
+        const auto address = reinterpret_cast<VAddr>(dst);
+        // The tracker indexes only the guest 40-bit VA space. Validate before querying it.
+        if (!size || address >= (1ULL << 40) || size > (1ULL << 40) - address) return 0;
+        // Most libc writes are ordinary RAM. Avoid a thread-id syscall for those.
+        if (!rasterizer->GetBufferCache().IsRegionGpuModified(address, size)) return 0;
+        if (rasterizer->IsGpuSideThread() || !runtime_memory_cpu_write_can_queue()) return 0;
+    }
+#endif
     return rasterizer && rasterizer->GetBufferCache().CpuWriteMerge(
                              reinterpret_cast<VAddr>(dst), src, fill, size)
                ? 1

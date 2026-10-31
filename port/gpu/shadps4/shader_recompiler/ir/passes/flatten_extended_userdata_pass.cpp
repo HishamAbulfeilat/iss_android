@@ -1,3 +1,5 @@
+#include "common/arch.h"
+#ifdef ARCH_X86_64
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -893,5 +895,7 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
 } // namespace Optimization
 
 } // namespace Shader
+
+#endif
 
 #endif

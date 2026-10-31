@@ -1,0 +1,53 @@
+{
+  "host_elf_sha256": "96a31d08f6cc12446f4245e96e6da34072df4cdcb2665979e54bc6a50998e3d2",
+  "host_elf_bytes": 75323616,
+  "serial": "CUSA00004",
+  "serial_branch": {
+    "at": "0x13ae91c",
+    "target": "0x13ae9b4"
+  },
+  "feature_flag_enabled_for_serial": true,
+  "feature_block_offset": 3124,
+  "flag_offset_in_block": 17,
+  "cache_flag_offset": 13921,
+  "per_page_tracking_max_buffer_bytes": 67108864,
+  "mapped_readback_requires": [
+    "last write tick < current tick",
+    "successful mapping"
+  ],
+  "actual_mapping_or_fps_observed": false,
+  "short_sleep": {
+    "enabled_for_serial": true,
+    "feature_flag_offset": 24,
+    "settings_offset": 3148,
+    "max_duration_ns": 999999,
+    "timer_slack_ns": 1,
+    "once_per_thread": true,
+    "independent_of_shader_dma_setting": true
+  },
+  "fragment_contraction": {
+    "enabled_for_serial": true,
+    "feature_flag_offset": 9,
+    "settings_offset": 3133,
+    "profile_flag_offset": 56,
+    "requires": [
+      "fragment stage",
+      "no depth export",
+      "at most one color export target"
+    ],
+    "omitted_decoration": "NoContraction (42)",
+    "color_target_weights": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128
+    ],
+    "independent_of_shader_dma_setting": true,
+    "device_fps_measured": false
+  },
+  "instructions_checked": 73
+}

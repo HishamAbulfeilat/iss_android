@@ -49,6 +49,12 @@ public:
 
     void InlineData(VideoCore::Buffer* dst, u64 offset, u32 value);
 
+    /// tlg: results of a guest occlusion query (TLG_OCCLUSION_MODE=4): num_pairs counter pairs
+    /// at offset, every counter valid with begin counters 0; the end counter of pair i holds the
+    /// samples counted by queries[i] (0 for the pairs without a query).
+    void WriteOcclusionResults(const VideoCore::Buffer* dst, u64 offset, u32 num_pairs,
+                               vk::QueryPool pool, std::span<const u32> queries);
+
     bool Transit(VideoCore::Image* image, vk::ImageLayout dst_layout,
                  vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,
                  std::optional<VideoCore::SubresourceRange> subres_range = {});
@@ -99,6 +105,15 @@ public:
 
     void FlushBarriers();
 
+    // Native mapped readback observes actual recorded arena writes, not just shader
+    // declarations. Copy/upload/clear/image tiling and draw/dispatch all reach AccessBuffer.
+    void SetBufferWriteHook(void (*hook)(void*, VAddr, u64, u64), void* context,
+                            bool needs_host_read_barrier = true) {
+        buffer_write_hook = hook;
+        buffer_write_context = context;
+        buffer_write_needs_host_barrier = needs_host_read_barrier;
+    }
+
     /// tlg: runs before this thread changes image state (layouts, pending image
     /// barriers): the rasterizer joins its texture binding helper there (BindHelper).
     void SetImageAccessHook(void (*hook)(void*), void* context) {
@@ -112,6 +127,14 @@ public:
     }
 
 private:
+    void NoteBufferWrite(const VideoCore::Buffer* handle, u64 offset, u64 size,
+                         vk::PipelineStageFlags2 stage, vk::AccessFlags2 access);
+    void AccessBufferImpl(const VideoCore::Buffer* handle, u64 offset, u64 size,
+                          vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                          bool notify_write);
+    void (*buffer_write_hook)(void*, VAddr, u64, u64) = nullptr;
+    void* buffer_write_context = nullptr;
+    bool buffer_write_needs_host_barrier = true;
     void (*image_access_hook)(void*) = nullptr;
     void* image_access_context = nullptr;
     const Instance& instance;

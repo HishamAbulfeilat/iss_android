@@ -1,0 +1,15 @@
+<resources>
+ <style name="InfamousTheme" parent="android:style/Theme.Material.NoActionBar">
+  <item name="android:fontFamily">sans</item><item name="android:colorAccent">#FF642D</item>
+  <item name="android:colorBackground">#150B0E</item><item name="android:windowBackground">#150B0E</item>
+  <item name="android:textColorPrimary">#FFF1E9</item><item name="android:textColorSecondary">#C7ABA8</item>
+  <item name="android:statusBarColor">#150B0E</item><item name="android:navigationBarColor">#150B0E</item>
+  <item name="android:alertDialogTheme">@style/InfamousDialog</item>
+ </style>
+ <style name="InfamousDialog" parent="android:style/Theme.Material.Dialog.Alert">
+  <item name="android:colorAccent">#FF642D</item><item name="android:colorBackground">#251015</item>
+  <item name="android:windowBackground">@drawable/infamous_dialog</item>
+  <item name="android:textColorPrimary">#FFF1E9</item><item name="android:textColorSecondary">#C7ABA8</item>
+  <item name="android:windowMinWidthMajor">70%</item><item name="android:windowMinWidthMinor">92%</item>
+ </style>
+</resources>

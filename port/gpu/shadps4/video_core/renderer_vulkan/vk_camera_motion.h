@@ -29,7 +29,12 @@ public:
     CameraMotion(const Instance& instance, Scheduler& scheduler,
                  VideoCore::TextureCache& texture_cache, Runtime& runtime);
     ~CameraMotion();
-    void InvalidateHistory() { current.valid = previous.valid = false; }
+    void InvalidateHistory() {
+        current.valid = previous.valid = false;
+#ifdef ISS_ANDROID_BIONIC
+        native_previous_valid = native_motion_valid = false;
+#endif
+    }
     void SetObjectMotion(ObjectMotion* motion) noexcept {
         object_motion = motion;
     }
@@ -50,6 +55,29 @@ public:
     [[nodiscard]] bool Ready() const noexcept {
         return current.valid && previous.valid && depth_id;
     }
+#ifdef ISS_ANDROID_BIONIC
+    // ISS may have per-pixel object motion before the game's camera layout is known.
+    // This is deliberately separate from Ready(): object vectors do not make a valid camera.
+    [[nodiscard]] bool IssObjectMotionReady(u32 width, u32 height) const noexcept {
+        return depth_id && bool(ObjectMotionImage(width, height));
+    }
+    // Latch the completed game-camera matrix and the preceding scene-frame
+    // matrix BEFORE the display pass starts the temporal upscale.
+    void PrepareIssNativeCamera();
+    [[nodiscard]] bool IssNativeCameraReady() const noexcept {
+        return native_motion_valid && Ready();
+    }
+    [[nodiscard]] float IssNativeFar() const noexcept { return native_far; }
+    // inFAMOUS already offsets its scene projection by a native 2-phase TAA jitter.
+    // The FSR dispatch must report that displacement as well as the host viewport
+    // jitter, or temporal accumulation samples the wrong subpixel positions.
+    // Native projection indices 8/9 are NDC shifts: x right, y up.
+    [[nodiscard]] std::array<float, 2> IssNativeJitterPixels(u32 width, u32 height) const noexcept {
+        if (!native_previous_valid || !frame_has_camera) return {};
+        return {native_previous_jitter_ndc[0] * (0.5f * float(width)),
+                -native_previous_jitter_ndc[1] * (0.5f * float(height))};
+    }
+#endif
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
     }
@@ -71,6 +99,15 @@ public:
 
     /// A bound constant buffer of 864 bytes: checks the scene constant signature.
     void OnConstants(const float* data);
+#ifdef ISS_ANDROID_BIONIC
+    // Capture only a handful of distinct source-buffer layouts, once per gameplay session.
+    // Never copy from guest pointers: callers supply the CPU-owned constant ring.
+    [[nodiscard]] bool NeedGBufferSamples() const noexcept {
+        return for_upscaler && !android_binding_samples_done &&
+               android_binding_sample_count < android_binding_samples.size();
+    }
+    void ObserveGBufferBinding(u64 stage_hash, u32 slot, u32 bytes, const void* ring_copy);
+#endif
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
     void OnGBufferPass(VideoCore::ImageId depth);
@@ -101,6 +138,45 @@ private:
 
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
+#ifdef ISS_ANDROID_BIONIC
+    // Counters identify which inFAMOUS camera-signature prerequisite is absent.
+    u32 android_probe_frames = 0;
+    u32 android_probe_gbuffer = 0;
+    u32 android_probe_constants = 0;
+    u32 android_probe_signature = 0;
+    u32 android_probe_ready = 0;
+    // Independent snapshots from the game's native camera update; never set
+    // current.valid here without depth/frame correspondence validation.
+    u64 android_camera_last_sequence = 0;
+    u32 android_camera_log_count = 0;
+    u32 android_camera_frame_updates = 0;
+    // Native inFAMOUS camera matrices are x86 row-major 4x4 float matrices,
+    // copied from the verified guest update; no guest pointers retained.
+    std::array<float, 16> native_previous_composite{};
+    std::array<float, 16> native_reprojection{};
+    // Game-native projection's subpixel NDC shift (row-vector, row 2).
+    // The guest's built-in jitter must not appear as camera-object motion.
+    std::array<float, 2> native_previous_jitter_ndc{};
+    std::array<float, 2> native_jitter_delta_ndc{};
+    u64 native_previous_object = 0;
+    u64 native_previous_sequence = 0;
+    bool native_previous_valid = false;
+    bool native_motion_valid = false;
+    float native_near = 10.0f;
+    float native_far = 10000000.0f;
+    float native_vertical_fov = 1.0f;
+    u32 native_frames_valid = 0;
+    u32 native_frames_rejected = 0;
+    struct BindingSample {
+        u64 shader_hash = 0;
+        u32 slot = 0;
+        u32 size = 0;
+        std::array<float, 64> first{};
+    };
+    std::array<BindingSample, 24> android_binding_samples{};
+    u32 android_binding_sample_count = 0;
+    bool android_binding_samples_done = false;
+#endif
     bool frame_has_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};

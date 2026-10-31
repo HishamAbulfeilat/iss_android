@@ -122,6 +122,9 @@ static unsigned char *backing_base; /* second view of the pool: host writes bypa
 static uint64_t flex_bitmap[FLEX_SPAN/PAGE/64];
 /* GPU hooks (tlggpu): notified outside the lock, in order, after each operation. */
 typedef void (*GpuRange)(uintptr_t address, uint64_t size);
+/* Shared heaps: the GPU allocates `size` bytes of memory for guest address `address` (physical
+ * `phys`) and returns a dma-buf of it, or -1. Called with the table lock held. */
+typedef int (*RuntimeShareProvider)(uintptr_t address, uint64_t phys, uint64_t size);
 static GpuRange hook_map, hook_unmap, hook_invalidate;
 enum { HOOK_MAP, HOOK_UNMAP, HOOK_INVALIDATE };
 typedef struct { int kind; uintptr_t address; uint64_t size; } PendingHook;
@@ -297,16 +300,102 @@ static int pool(void) {
 }
 void runtime_memory_reserve(void) {}
 static int system_window_reserved(void) { return 1; }
+/* tlg: shared heaps (TLG_SHARED_HEAPS, runtime_memory_set_share_provider). Direct memory under the
+ * guest ranges the GPU names (inFAMOUS: the geometry heaps it binds whole every frame) lives in
+ * dma-bufs the GPU allocates and binds as that range's buffer memory, instead of the memfd plus a GPU
+ * copy: one copy, no uploads. A piece is made when a mapping first covers its range, before the game
+ * can have written it; every mapping of its physical range (aliases, the backing view) maps the
+ * dma-buf. Pieces are never given back: released memory is cleared, as the memfd's holes read. */
+#define SHARE_PIECE (UINT64_C(256) << 20)
+#define SHARE_ALIGN (UINT64_C(2) << 20)
+typedef struct { uintptr_t start, end; } ShareWant;
+typedef struct { uint64_t phys, size; int fd; } SharePiece;
+static RuntimeShareProvider share_provider;
+static ShareWant share_wants[16]; static size_t share_want_count;
+static SharePiece shares[64]; static size_t share_count;
+static uint64_t shared_bytes;
+static int share_covers(uint64_t phys) {
+    for (size_t i=0;i<share_count;++i) if (phys>=shares[i].phys && phys<shares[i].phys+shares[i].size) return 1;
+    return 0;
+}
+/* Pieces for the wanted ranges in [address,address+size) at physical `phys`. */
+static void share_create(uintptr_t address, uint64_t size, uint64_t phys) {
+    if (!share_provider || phys>=POOL_SIZE) return;
+    for (size_t w=0;w<share_want_count;++w) {
+        uintptr_t a=share_wants[w].start>address ? share_wants[w].start : address;
+        uintptr_t b=share_wants[w].end<address+size ? share_wants[w].end : address+size;
+        a=(a+SHARE_ALIGN-1)&~(SHARE_ALIGN-1); b&=~(SHARE_ALIGN-1);
+        for (uintptr_t at=a; at<b && share_count<sizeof(shares)/sizeof(*shares);) {
+            uint64_t p=phys+(at-address);
+            uint64_t n=b-at<SHARE_PIECE ? b-at : SHARE_PIECE;
+            if (p+n>POOL_SIZE || share_covers(p) || share_covers(p+n-1)) { at+=n; continue; }
+            int fd=share_provider(at,p,n);
+            if (fd<0) return; /* the GPU refused: the rest stays in the memfd */
+            unsigned char *view=backing_base+p;
+            void *piece=mmap(NULL,n,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0);
+            if (piece==MAP_FAILED) { close(fd); return; }
+            /* What the memfd already holds there (released and reused memory), then its RAM back. */
+            off_t data=lseek(pool_fd,(off_t)p,SEEK_DATA);
+            if (data>=0 && (uint64_t)data<p+n) memcpy(piece,view,n);
+            munmap(piece,n);
+            if (mmap(view,n,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,fd,0)==MAP_FAILED) {
+                fprintf(stderr,"STOP: shared heap %#" PRIx64 ": the backing view cannot map it\n",p);
+                exit(21);
+            }
+            fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)p,(off_t)n);
+            shares[share_count++]=(SharePiece){p,n,fd};
+            shared_bytes+=n;
+            printf("Runtime: shared heap %#" PRIxPTR "+%" PRIu64 " MiB (%" PRIu64 " MiB shared with the GPU)\n",
+                   at,n>>20,shared_bytes>>20);
+            at+=n;
+        }
+    }
+}
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
-    void *mapped = !reserved
-        ? mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
-        : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
-    return mapped==MAP_FAILED ? -1 : 0;
+    if (reserved) {
+        void *mapped=mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
+        return mapped==MAP_FAILED ? -1 : 0;
+    }
+    if (share_want_count) share_create(address,size,phys);
+    void *mapped=mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys);
+    if (mapped==MAP_FAILED) return -1;
+    for (size_t i=0;i<share_count;++i) {
+        uint64_t lo=shares[i].phys>phys ? shares[i].phys : phys;
+        uint64_t hi=shares[i].phys+shares[i].size<phys+size ? shares[i].phys+shares[i].size : phys+size;
+        if (lo>=hi) continue;
+        if (mmap((void *)(address+(lo-phys)),hi-lo,prot,MAP_SHARED|MAP_FIXED,shares[i].fd,
+                 (off_t)(lo-shares[i].phys))==MAP_FAILED) {
+            fprintf(stderr,"STOP: shared heap %#" PRIx64 ": mapping it at %#" PRIxPTR " failed\n",lo,
+                    address+(uintptr_t)(lo-phys));
+            exit(21);
+        }
+    }
+    return 0;
 }
 static int host_unmap(uintptr_t address, uint64_t size) { return munmap((void *)address,size); }
 static int host_protect(uintptr_t address, uint64_t size, int prot) { return mprotect((void *)address,size,prot); }
 static void host_discard(uint64_t phys, uint64_t size) {
     fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+    /* A dma-buf cannot be punched: released shared memory is cleared instead. */
+    for (size_t i=0;i<share_count;++i) {
+        uint64_t lo=shares[i].phys>phys ? shares[i].phys : phys;
+        uint64_t hi=shares[i].phys+shares[i].size<phys+size ? shares[i].phys+shares[i].size : phys+size;
+        if (lo<hi) memset(backing_base+lo,0,hi-lo);
+    }
+}
+#endif
+#ifndef _WIN32
+void runtime_memory_set_share_provider(RuntimeShareProvider provider, const uint64_t *ranges, size_t count) {
+    write_lock();
+    share_provider=provider;
+    share_want_count=0;
+    for (size_t i=0;i<count && share_want_count<sizeof(share_wants)/sizeof(*share_wants);++i)
+        share_wants[share_want_count++]=(ShareWant){(uintptr_t)ranges[2*i],(uintptr_t)(ranges[2*i]+ranges[2*i+1])};
+    write_unlock();
+}
+#else
+void runtime_memory_set_share_provider(RuntimeShareProvider provider, const uint64_t *ranges, size_t count) {
+    (void)provider; (void)ranges; (void)count;
 }
 #endif
 static void queue_hook(int kind, uintptr_t address, uint64_t size) {
@@ -798,6 +887,41 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
         uint64_t n=(vmas[i].end<end ? vmas[i].end : end)-at;
         memcpy(backing_base+vmas[i].phys+(at-vmas[i].start),(const unsigned char *)data+(at-address),n);
         at+=n;
+    }
+    read_unlock();
+    return ok;
+}
+/* A queued CPU write must not run while its caller owns the VMA write lock. */
+int runtime_memory_cpu_write_can_queue(void) { return exclusive_depth == 0; }
+
+/* CPU merge bypasses GPU protection, not guest permissions or physical aliases.
+ * Validate the ENTIRE destination before writing, under the same table lock.
+ * A second VA for these physical bytes could have independent GPU/cache state. */
+int runtime_memory_write_backing_cpu(uintptr_t address, const void *data, uint64_t size) {
+    if (!size || address + size < address) return 0;
+    read_lock();
+    int ok = 1;
+    for (uintptr_t at = address, end = address + size; at < end && ok;) {
+        size_t i = vma_index(at);
+        if (i == vma_count || vmas[i].start > at || vmas[i].kind == KIND_RESERVED ||
+            !(host_prot(vmas[i].prot) & PROT_WRITE)) { ok = 0; break; }
+        const uint64_t n = (vmas[i].end < end ? vmas[i].end : end) - at;
+        const uint64_t phys = vmas[i].phys + at - vmas[i].start;
+        for (size_t j = 0; j < vma_count; ++j) {
+            if (j == i || vmas[j].kind == KIND_RESERVED) continue;
+            if (phys < vmas[j].phys + vmas[j].end - vmas[j].start &&
+                vmas[j].phys < phys + n) { ok = 0; break; }
+        }
+        at += n;
+    }
+    if (ok) {
+        for (uintptr_t at = address, end = address + size; at < end;) {
+            const size_t i = vma_index(at);
+            const uint64_t n = (vmas[i].end < end ? vmas[i].end : end) - at;
+            memcpy(backing_base + vmas[i].phys + at - vmas[i].start,
+                   (const unsigned char *)data + at - address, n);
+            at += n;
+        }
     }
     read_unlock();
     return ok;

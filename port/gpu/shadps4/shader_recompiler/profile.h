@@ -62,6 +62,9 @@ struct Profile {
     bool block1d_as_2d{};
     /// tlg: tiny BC textures decoded to plain images (video_core/amdgpu/tlg_bc_tiny.h).
     bool bc_tiny_decode{};
+    // 0: preserve NoContraction, 1: guarded release-025 rule. A full word also
+    // changes the cache profile size instead of reusing old uninitialized padding.
+    u32 fragment_contraction_policy{};
 
     bool operator==(const Profile&) const = default;
 };

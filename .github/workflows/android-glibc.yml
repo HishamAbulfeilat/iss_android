@@ -1,0 +1,133 @@
+name: inFAMOUS Android glibc ARM64
+
+on:
+  push:
+    branches: [android-glibc]
+    paths-ignore: ['**/*.md']
+  workflow_dispatch:
+
+concurrency:
+  group: iss-glibc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Validate Java Android launcher against API 35
+        run: |
+          set -euo pipefail
+          mkdir -p out/android-classes
+          javac -source 8 -target 8 -cp "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" \
+            -d out/android-classes android/app/src/ro/cobrabm/fexdroid/*.java
+      - name: Validate Android game-layout and startup invariants
+        run: python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: ci/environment.yml
+          cache-environment: true
+          init-shell: bash
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang lld llvm cmake ninja-build \
+            pkg-config patchelf libxml2-utils unzip xz-utils zstd bison flex python3-venv
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .local-deps/android/arm64-debs
+            .local-deps/android/arm64-sysroot
+            .local-deps/android/migration/x/rootfs
+            out/arm64/fex
+            ~/.cache/ccache
+          key: iss-glibc-${{ runner.os }}-${{ hashFiles('cpu/**', 'tools/android/build/aarch64-toolchain.cmake', 'tools/android/inputs/**', 'ci/**', '.gitmodules') }}
+          restore-keys: iss-glibc-${{ runner.os }}-
+      - name: Build pinned headers and host dependencies
+        shell: bash -el {0}
+        run: bash ci/setup-deps.sh "$CONDA_PREFIX"
+      - name: Fetch checked ARM64 sysroot and rootfs
+        shell: bash -el {0}
+        run: |
+          python3 tools/android/inputs/fetch_arm64_sysroot.py
+          python3 tools/android/inputs/fetch_rootfs.py
+      - name: Preflight Python 3.13 ARM64 runtime libraries (before native compilation)
+        shell: bash -el {0}
+        run: |
+          python3 - <<'PY'
+          from tools.android.runtime.package_runtime import (
+              debian_index, python_overlay, runtime_library_inputs)
+          index = debian_index()
+          python_overlay(index)
+          runtime_library_inputs(index)
+          print("Python 3.13 and recursive Debian library inputs verified")
+          PY
+      - name: Cross-compile FEXCore, Vulkan renderer and runtime
+        shell: bash -el {0}
+        run: |
+          export ISS_ARM64_HEADERS="$CONDA_PREFIX"
+          bash tools/android/build/build_arm64.sh
+      - name: Compile Linux/glibc Turnip for Adreno Gen8 (KGSL)
+        shell: bash -el {0}
+        run: |
+          bash tools/android/build/build_turnip.sh gen8
+          test -s out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so
+          test -s out/arm64/turnip-gen8/freedreno_gen8_icd.aarch64.json
+          llvm-readelf -h out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so | grep -q 'Machine:.*AArch64'
+      - name: Build experimental installable Android APK
+        shell: bash -el {0}
+        run: |
+          bash tools/android/apk/build_apk.sh
+          tar -tzf out/release/runtime.tar.gz > "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'rootfs/usr/lib/aarch64-linux-gnu/libpulsecommon-17.0.so' "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'issport/patches/InfamousSecondSon.xml' "$RUNNER_TEMP/iss-runtime-members.txt"
+          grep -Fx 'issport/scripts/iss_mask_patches.py' "$RUNNER_TEMP/iss-runtime-members.txt"
+      - name: Verify transitive ELF linking with emulated ARM64 glibc loader
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends qemu-user
+          root="$PWD/.local-deps/android/migration/x/rootfs"
+          overlay="$PWD/out/release/dependency-overlay/usr/lib/aarch64-linux-gnu"
+          libs="$PWD/out/arm64/bundle/lib:$overlay:$root/usr/lib/aarch64-linux-gnu:$root/usr/lib:$root/usr/lib/aarch64-linux-gnu/pulseaudio"
+          loader="$root/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"
+          for file in out/arm64/bundle/bin/iss-probe out/arm64/bundle/lib/libtlggpu.so out/arm64/bundle/lib/libisscpu.so out/arm64/turnip-gen8/libvulkan_freedreno_gen8.so; do
+            qemu-aarch64 -L "$root" -E LD_LIBRARY_PATH="$libs" "$loader" --list "$PWD/$file" > /tmp/iss-elf-deps.log 2>&1 || { cat /tmp/iss-elf-deps.log; exit 1; }
+            if grep -E 'not found|cannot open shared object file' /tmp/iss-elf-deps.log; then
+              echo "Unresolved ARM64 dependency for $file" >&2
+              exit 1
+            fi
+          done
+          echo 'ARM64 Linux glibc dynamic loader resolved all checked roots'
+      - name: Upload experimental APK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-glibc-apk-${{ github.sha }}
+          path: |
+            out/release/*.apk
+            out/release/*.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload native compilation artifacts (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: iss-android-glibc-native-${{ github.sha }}
+          path: |
+            out/arm64/iss-probe
+            out/arm64/fex/libisscpu.so
+            out/arm64/gpu/libtlggpu.so
+          if-no-files-found: error
+          retention-days: 7

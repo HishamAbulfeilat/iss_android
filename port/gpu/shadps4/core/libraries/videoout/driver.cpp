@@ -19,6 +19,7 @@
 #include "tlg_toggles.h"
 #include "tlg_freeze.h"
 #include "tlg_settings.h"
+#include "iss_frame_pacing.h"
 #include "tlg_graphics.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_frame_record.h"
@@ -505,7 +506,13 @@ void VideoOutDriver::Flip(const Request& req) {
                         "%.0f draws/frame, idle %.1f%%; blocked: recorder %.1f%%, host copies "
                         "%.1f%% (%.0f/frame), copy threads %.1f%%, GPU ticks %.1f%%; "
                         "reduced-size draws %.0f/frame of %.0f in the scene\n",
-                        frames / window, worst_ms, EmulatorSettings.GetVblankFrequency(), compiles,
+                        frames / window, worst_ms,
+#ifdef ISS_ANDROID_BIONIC
+                        std::getenv("ISS_PERFORMANCE_STATE_FILE") ? u32(TlgSettings::Get().android_vblank_hz.load()) : EmulatorSettings.GetVblankFrequency(),
+#else
+                        EmulatorSettings.GetVblankFrequency(),
+#endif
+                        compiles,
                         compile_ns / 1e6, capture_ms, async_ms, wait_ms, snapshot_ms, guest_wait_ms,
                         pending_draws,
                         static_cast<unsigned long long>(direct),
@@ -658,7 +665,7 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
 }
 
 void VideoOutDriver::PresentThread(std::stop_token token) {
-    const std::chrono::nanoseconds vblank_period(1000000000 /
+    std::chrono::nanoseconds vblank_period(1000000000 /
                                                  EmulatorSettings.GetVblankFrequency());
 
     Common::SetCurrentThreadName("shadPS4:PresentThread");
@@ -672,7 +679,12 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // and the uncapped presets keep their fixed limit.
     const bool fixed_limit = std::getenv("TLG_FPS_LIMIT") || EmulatorSettings.GetVblankFrequency() == 480;
     const auto current_limit = [&] {
+        TlgSettings::PollAndroidPerformance();
         const auto& s = TlgSettings::Get();
+#ifdef ISS_ANDROID_BIONIC
+        // Android controls the presentation ceiling live, independently of desktop GoW3 patches.
+        if (std::getenv("ISS_PERFORMANCE_STATE_FILE")) return u32(s.fps_limit.load());
+#endif
         return fixed_limit ? EmulatorSettings.GetFrameLimit()
                            : u32(TlgGraphics::PresentLimit(s.fps_limit, s.applied_engine_fps));
     };
@@ -705,6 +717,17 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             next_flip = std::chrono::steady_clock::now();
             std::printf("VideoOut: frame limit %u FPS\n", limit);
         }
+#ifdef ISS_ANDROID_BIONIC
+        if (std::getenv("ISS_PERFORMANCE_STATE_FILE")) {
+            const int hz=IssFramePacing::VblankHz(int(frame_limit),main_port.flip_rate.load());
+            const std::chrono::nanoseconds period{1000000000/hz};
+            if(period!=vblank_period){
+                vblank_period=period;timer=Common::AccurateTimer{period};
+                std::printf("VideoOut: Android pacing limit=%u FPS, vblank=%d Hz, guest flip_rate=%d\n",frame_limit,hz,main_port.flip_rate.load());
+            }
+            TlgSettings::Get().android_vblank_hz=hz;
+        }
+#endif
         timer.Start();
         const auto tick_deadline = std::chrono::steady_clock::now() + vblank_period;
 

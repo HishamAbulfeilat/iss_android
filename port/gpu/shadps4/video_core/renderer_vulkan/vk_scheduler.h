@@ -27,6 +27,9 @@
 #include "video_core/renderer_vulkan/vk_draw_pipe.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include "video_core/renderer_vulkan/host_copy_sources.h"
+#include "video_core/renderer_vulkan/vertex_input_state.h"
+#include "video_core/renderer_vulkan/parallel_record_queue.h"
 
 namespace tracy {
 class VkCtxScope;
@@ -667,6 +670,18 @@ private:
     CommandBase* last{};
 };
 
+/// tlg: notified when the scheduler's rendering scopes begin and end, for work that cannot span
+/// them (TLG_OCCLUSION_MODE=4: Vulkan occlusion queries begun in a rendering scope end in it).
+/// Called on the thread that owns the scheduler; record with Scheduler::Record.
+class RenderingObserver {
+public:
+    virtual ~RenderingObserver() = default;
+    /// The rendering scope has just begun.
+    virtual void OnBeginRendering() = 0;
+    /// The rendering scope is about to end.
+    virtual void OnEndRendering() = 0;
+};
+
 class Scheduler {
 public:
     /// `threaded_recording`: Vulkan commands passed to Record() are recorded by a worker thread.
@@ -680,6 +695,16 @@ public:
     /// Sends the current execution context to the GPU
     /// and increments the scheduler timeline semaphore.
     void Flush();
+
+    /// An arena write needs device-to-host visibility at this submission's completion.
+    void RequireHostReadBarrier(
+        vk::PipelineStageFlags2 stage = vk::PipelineStageFlagBits2::eAllCommands,
+        vk::AccessFlags2 access = vk::AccessFlagBits2::eMemoryWrite) {
+        host_read_barrier = true;
+        host_read_src_stages |= stage;
+        host_read_src_access |= access;
+    }
+    void FlushHostReadBarrier();
 
     /// Sends the current execution context to the GPU and waits for it to complete.
     void Finish(std::source_location caller = std::source_location::current());
@@ -701,6 +726,9 @@ public:
 
     /// Ends current rendering scope.
     void EndRendering();
+
+    /// Called before any bindings/dynamic state of the next draw are emitted.
+    void SplitRecordingAtBoundary(const RenderState& next_state);
 
     /// tlg: TLG_FULL_BARRIERS=1 records a full memory barrier around every render pass and
     /// every compute dispatch, to tell a missing barrier from everything else.
@@ -743,7 +771,20 @@ public:
             direct_recordings.fetch_add(1, std::memory_order_relaxed);
             TraceDirectRecording(__builtin_return_address(0));
         }
+        // Raw callers may bind a graphics pipeline with static vertex input. Even if
+        // already in direct mode, do not reuse state across an untracked command stream.
+        vertex_input_state.Invalidate();
         return current_cmdbuf;
+    }
+
+    /// Records dynamic vertex format only when changed. Buffer addresses remain per draw.
+    void RecordVertexInput(std::span<const vk::VertexInputBindingDescription2EXT> bindings,
+                           std::span<const vk::VertexInputAttributeDescription2EXT> attributes);
+
+    /// Call before recording a helper graphics pipeline with static vertex input.
+    void InvalidateVertexInput() {
+        CheckOwner(__builtin_return_address(0));
+        vertex_input_state.Invalidate();
     }
 
     /// TLG_RECORDER_TRACE=1: prints the most frequent CommandBuffer() callers every 2000 calls.
@@ -836,15 +877,21 @@ public:
     /// (it may then rewrite the memory, e.g. UI vertices: flickering) and before the
     /// submission that reads them. Waits for all.
     void WaitHostCopies();
+    static bool HostCopyRangesEnabled();
+    void NoteHostCopySource(u64 address, u64 size);
+    void WaitHostCopiesFor(u64 address, u64 size);
 
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
-        Record([copy = std::forward<Func>(copy), this,
-                seq = ++host_copies_issued](vk::CommandBuffer) {
-            copy();
-            host_copies_done.store(seq, std::memory_order_release);
+        CheckOwner(__builtin_return_address(0));
+        Record([copy = std::forward<Func>(copy), this, lane = parallel_lane,
+                seq = ++host_copies_issued](vk::CommandBuffer) mutable {
+            AfterRecordingPrefix(lane, [copy = std::move(copy), this, seq] {
+                copy();
+                host_copies_done.store(seq, std::memory_order_release);
+            });
         });
     }
 
@@ -858,6 +905,16 @@ public:
     /// the write cannot overtake an earlier fence. Otherwise the guest, seeing the later value,
     /// may free memory the earlier fence then writes into (corrupted heap, guest fault).
     void WaitDeferredSignals();
+
+    /// tlg: whether a render pass is open.
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
+    }
+
+    /// tlg: see RenderingObserver (one at a time; nullptr removes it).
+    void SetRenderingObserver(RenderingObserver* observer) noexcept {
+        rendering_observer = observer;
+    }
 
     /// Whether a render pass with exactly this state is open.
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
@@ -927,6 +984,18 @@ private:
     std::unique_ptr<RecordChunk> AcquireChunk();
 
     void RecorderThread(std::stop_token stoken);
+    void HandOverParallel();
+    void SplitRecording();
+    template <typename Func>
+    void AfterRecordingPrefix(unsigned lane, Func&& task) {
+        if (parallel_recording) {
+            parallel_recording->AfterPrefix(lane, std::forward<Func>(task));
+        } else {
+            task();
+        }
+    }
+    void BeginParallelBatch();
+    std::span<const vk::CommandBuffer> EndRecordingBuffers();
 
     void SubmitExecution(SubmitInfo& info);
 
@@ -936,7 +1005,17 @@ private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    std::unique_ptr<CommandPool> parallel_pool;
+    std::unique_ptr<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>> parallel_recording;
+    unsigned parallel_lane = 0;
+    size_t parallel_bytes = 0;
+    size_t parallel_target = 256 * 1024;
+    std::array<vk::CommandBuffer, 2> submission_buffers{};
     DynamicState dynamic_state;
+    bool host_read_barrier = false;
+    vk::PipelineStageFlags2 host_read_src_stages{};
+    vk::AccessFlags2 host_read_src_access{};
+    VertexInputState vertex_input_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
     std::condition_variable_any event_cv;
@@ -955,6 +1034,7 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    RenderingObserver* rendering_observer = nullptr; ///< tlg
     // tlg: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     void (*owner_hook)(void*, void*) = nullptr;
@@ -977,6 +1057,7 @@ private:
     std::atomic<u32> work_since_submit{0}; ///< tlg: CountWork(), reset by each submission
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
     u64 host_copies_issued = 0;
+    HostCopySources host_copy_sources;
     std::atomic<u64> host_copies_done{0};
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)
     std::shared_ptr<std::atomic<u64>> deferred_signals_done =

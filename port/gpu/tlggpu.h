@@ -24,6 +24,8 @@ void tlggpu_init_headless(const TlgGpuConfig *config);
 uintptr_t tlggpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */
 int tlggpu_handle_fault(void *ucontext, void *address);
+/* Native store overwrite: accepts only pages whose GPU-dirty bytes are entirely replaced. */
+int tlggpu_cpu_store(void *destination, const void *bytes, uint64_t size);
 /* TLG_WRITE_LOG=1: prints the logged GPU-side writes to guest memory near the fault. */
 void tlggpu_dump_guest_writes(void *ucontext);
 /* Keyboard text entry through the game window (IME dialog). begin returns 0 when
@@ -76,6 +78,23 @@ void tlggpu_set_wait_hooks(TlgGpuWaitBegin begin, TlgGpuWaitEnd end);
  * page-protection faults being handled now and handled so far. */
 typedef struct { uint64_t submitted, shown, presented, vblanks, faults_in_progress, faults_handled; } TlgGpuFrameCounters;
 void tlggpu_frame_counters(TlgGpuFrameCounters *out);
+/* Camera fields captured at a verified inFAMOUS x86-64 camera-update site.
+ * Snapshot data is copied by the FEX hook before the game resumes, and kept
+ * separate from the FSR dispatch until matrix convention/frame identity are verified. */
+typedef struct {
+    uint64_t sequence;
+    uint64_t guest_object;
+    float projection[16];      /* game camera +0x1c0 */
+    float view_transform[16];  /* game camera +0x200 */
+    float composite[16];       /* game camera +0x430 */
+    float inverse[16];         /* game camera +0x4b0 */
+    float near_plane, far_plane, vertical_fov, aspect;
+    float tangent_horizontal, tangent_vertical;
+} TlgIssCameraSnapshot;
+/* Called from guest CPU only; does not retain any guest pointer. */
+void tlggpu_iss_camera_publish(const TlgIssCameraSnapshot *sample);
+/* Called from the GPU frame boundary. Returns sequence (>0), or 0 if absent. */
+uint64_t tlggpu_iss_camera_read(TlgIssCameraSnapshot *sample);
 /* The game opened a file (guest path): feeds the region trace (TLG_REGION_TRACE=1, gpu/shim/tlg_region.h). */
 void tlggpu_note_open(const char *guest_path);
 /* The mouse, gathered by the window thread while the game has it (SDL relative mode: the window

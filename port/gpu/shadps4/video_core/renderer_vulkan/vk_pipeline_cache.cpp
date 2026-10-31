@@ -28,6 +28,7 @@
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
+#include "shader_recompiler/backend/spirv/fragment_contraction.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/recompiler_toggles.h"
@@ -426,12 +427,19 @@ std::vector<u8> LoadDriverCacheBlob(const Instance& instance) {
 }
 } // namespace
 
+std::atomic<u64> g_tlg_driver_pipelines_created{0};
+
 struct PipelineCache::DriverCacheSaver {
     std::thread thread;
     std::mutex mutex;
     std::condition_variable cv;
     bool stop = false;
+    bool save_now = false; ///< RequestDriverCacheSave: save without waiting for the period
     u64 saved_hash = 0; ///< XXH3 of the last blob written (or loaded): unchanged data is not rewritten
+    /// g_tlg_driver_pipelines_created at the last save: nothing new means nothing to merge, copy
+    /// or hash (a whole-game blob is ~300 MB, and the save ran every minute regardless).
+    u64 saved_created = ~0ull;
+    bool over_limit_logged = false;
 };
 
 bool PipelineCache::SaveDriverCache() {
@@ -448,6 +456,10 @@ bool PipelineCache::SaveDriverCache() {
 bool PipelineCache::SaveDriverCacheUnchecked() {
     // Pipelines the compiler workers built are only merged into pipeline_cache when they finish
     // (FinishCompilations): merge copies of all of them into a scratch cache for the blob.
+    const u64 created = g_tlg_driver_pipelines_created.load(std::memory_order_relaxed);
+    if (driver_saver && created == driver_saver->saved_created) {
+        return true;
+    }
     const auto device = instance.GetDevice();
     auto [scratch_result, scratch] = device.createPipelineCacheUnique({});
     if (scratch_result != vk::Result::eSuccess) {
@@ -457,15 +469,40 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
     for (const auto& cache : worker_pipeline_caches) {
         sources.push_back(*cache);
     }
-    if (device.mergePipelineCaches(*scratch, sources) != vk::Result::eSuccess) {
+    if (const auto merged = device.mergePipelineCaches(*scratch, sources);
+        merged != vk::Result::eSuccess) {
+        std::printf("GPU: driver pipeline cache not saved: merge failed (%s)\n",
+                    vk::to_string(merged).c_str());
         return false;
     }
     auto [result, blob] = device.getPipelineCacheData(*scratch);
     if (result != vk::Result::eSuccess || blob.size() < sizeof(VkPipelineCacheHeaderVersionOne)) {
+        std::printf("GPU: driver pipeline cache not saved: driver returned %s, %zu bytes\n",
+                    vk::to_string(result).c_str(), blob.size());
+        return false;
+    }
+    // tlg: TLG_DRIVER_CACHE_MAX_MB (default 1024, 0 = no limit): a bigger blob is not written,
+    // so the file never grows past it (the saved one keeps loading). Vulkan has no way to evict
+    // entries from a pipeline cache; deleting the file starts it again.
+    static const u64 max_bytes = [] {
+        const char* v = std::getenv("TLG_DRIVER_CACHE_MAX_MB");
+        return u64(v && *v ? std::max(0, std::atoi(v)) : 1024) << 20;
+    }();
+    if (max_bytes && blob.size() > max_bytes) {
+        if (driver_saver && !driver_saver->over_limit_logged) {
+            driver_saver->over_limit_logged = true;
+            std::printf("GPU: driver pipeline cache not saved: %zu MB is over the %llu MB limit "
+                        "(TLG_DRIVER_CACHE_MAX_MB)\n",
+                        blob.size() >> 20, static_cast<unsigned long long>(max_bytes >> 20));
+        }
+        if (driver_saver) {
+            driver_saver->saved_created = created;
+        }
         return false;
     }
     const u64 hash = XXH3_64bits(blob.data(), blob.size());
     if (driver_saver && hash == driver_saver->saved_hash) {
+        driver_saver->saved_created = created;
         return true;
     }
     const auto path = DriverCacheFile(instance);
@@ -484,14 +521,18 @@ bool PipelineCache::SaveDriverCacheUnchecked() {
         std::filesystem::rename(temp, path, ec);
     }
     if (!written || ec) {
+        const std::string reason = ec ? ec.message() : std::string{"write failed"};
         std::filesystem::remove(temp, ec);
-        LOG_ERROR(Render_Vulkan, "tlg: driver pipeline cache not written to {}", path.string());
+        std::printf("GPU: driver pipeline cache not written to %s (%s)\n", path.string().c_str(),
+                    reason.c_str());
         return false;
     }
     if (driver_saver) {
         driver_saver->saved_hash = hash;
+        driver_saver->saved_created = created;
     }
-    LOG_INFO(Render_Vulkan, "tlg: driver pipeline cache saved ({} bytes)", blob.size());
+    std::printf("GPU: driver pipeline cache saved (%zu KiB, %llu pipelines built this run)\n",
+                blob.size() >> 10, static_cast<unsigned long long>(created));
     return true;
 }
 
@@ -503,20 +544,34 @@ void PipelineCache::StartDriverCacheSaver() {
         auto* saver = driver_saver;
         std::unique_lock lock{saver->mutex};
         while (!saver->stop) {
-            // tlg: TLG_DRIVER_CACHE_SAVE_S (default 60, was 180): a crash loses at most this much of what
-            // the driver learned.
+            // tlg: TLG_DRIVER_CACHE_SAVE_S (default 30, was 60 and 180): a crash or a low-memory
+            // kill loses at most this much of what the driver learned.
             static const int save_seconds = [] {
                 const char* v = std::getenv("TLG_DRIVER_CACHE_SAVE_S");
-                return v && *v ? std::clamp(std::atoi(v), 10, 3600) : 60;
+                return v && *v ? std::clamp(std::atoi(v), 10, 3600) : 30;
             }();
-            if (saver->cv.wait_for(lock, std::chrono::seconds(save_seconds), [&] { return saver->stop; })) {
+            saver->cv.wait_for(lock, std::chrono::seconds(save_seconds),
+                               [&] { return saver->stop || saver->save_now; });
+            if (saver->stop) {
                 break;
             }
+            saver->save_now = false;
             lock.unlock();
             SaveDriverCache();
             lock.lock();
         }
     });
+}
+
+void PipelineCache::RequestDriverCacheSave() {
+    if (!driver_saver) {
+        return;
+    }
+    {
+        std::scoped_lock lock{driver_saver->mutex};
+        driver_saver->save_now = true;
+    }
+    driver_saver->cv.notify_all();
 }
 
 void PipelineCache::StopDriverCacheSaver() {
@@ -604,6 +659,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .dref_broadcast = LightingTest::Current().dref,
         .block1d_as_2d = AmdGpu::Block1DAs2D(),
         .bc_tiny_decode = AmdGpu::BcTinyDecode(),
+        .fragment_contraction_policy = Shader::Backend::SPIRV::FragmentContractionEnabled(),
     };
     // tlg: the recompiler switches (ISS_ names arrive as TLG_), one line each on stdout (the run
     // log keeps it; LOG_INFO is filtered out there), for A/B reports.
@@ -613,6 +669,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     Common::Backports::LogStates();
     std::printf("GPU: host subgroup size %u, LDS barriers %s\n", profile.subgroup_size,
                 profile.needs_lds_barriers ? "on" : "off");
+    std::printf("GPU: fragment contraction %s (no depth export, at most one color target)\n",
+                profile.fragment_contraction_policy ? "on" : "off");
 
     // tlg: BP08, start from the driver blob saved by an earlier session (same GPU and driver).
     std::vector<u8> driver_blob;
@@ -633,18 +691,28 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
-    if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
-        StartDriverCacheSaver();
-        if (!driver_blob.empty()) {
-            driver_saver->saved_hash = XXH3_64bits(driver_blob.data(), driver_blob.size());
-            Common::Backports::Hit(Common::Backports::Id::PipelineCacheBlob);
-        }
-    }
     // tlg: the compiler threads always exist; the in-game menu switches async compilation live
     // (TlgSettings::async_shaders, TLG_ASYNC_SHADERS at start).
     {
-        const auto count = std::clamp(TlgThreads::Available() / 2, 1u, 6u);
-        const auto capture_count = std::min(2u, std::max(1u, TlgThreads::Available() / 4));
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        constexpr bool native_bionic = true;
+#else
+        constexpr bool native_bionic = false;
+#endif
+        // GoW3 Bionic's mobile CPU budget: leave more execution time for FEX and
+        // command recording during shader misses, while retaining async compilation.
+        auto count = native_bionic ? 2u : std::clamp(TlgThreads::Available() / 2, 1u, 6u);
+        const auto capture_count = native_bionic ? 1u :
+            std::min(2u, std::max(1u, TlgThreads::Available() / 4));
+        if (const char* requested = std::getenv("TLG_GPU_COMPILER_WORKERS")) {
+            char* end = nullptr;
+            const auto parsed = std::strtoul(requested, &end, 10);
+            if (end && *end == '\0' && parsed >= 1 && parsed <= 6) {
+                count = static_cast<unsigned>(parsed);
+            }
+        }
+        std::printf("GPU: shader workers: %u compile, %u capture (native Bionic=%d)\n",
+                    count, capture_count, int(native_bionic));
         for (unsigned i = 0; i < count; ++i) {
             auto [result, worker_cache] = instance.GetDevice().createPipelineCacheUnique({});
             ASSERT_MSG(result == vk::Result::eSuccess, "Failed to create compiler pipeline cache");
@@ -652,7 +720,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         }
         capture_compiler = std::make_unique<AsyncCompiler>(capture_count, 8, [](unsigned index) {
             Common::SetCurrentThreadName(("tlg:ShaderCapture" + std::to_string(index)).c_str());
-            Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+            Common::SetCurrentThreadPriority(native_bionic ? Common::ThreadPriority::Low
+                                                         : Common::ThreadPriority::High);
         });
         compiler = std::make_unique<AsyncCompiler>(count, 64, [](unsigned index) {
             Common::SetCurrentThreadName(("tlg:ShaderCompile" + std::to_string(index)).c_str());
@@ -660,6 +729,14 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         });
         LOG_INFO(Render_Vulkan, "tlg: async graphics compilation ready ({} capture, {} compile workers)",
                  capture_count, count);
+    }
+    // Publish worker caches before the independent saver thread can inspect them.
+    if (Common::Backports::On(Common::Backports::Id::PipelineCacheBlob)) {
+        StartDriverCacheSaver();
+        if (!driver_blob.empty()) {
+            driver_saver->saved_hash = XXH3_64bits(driver_blob.data(), driver_blob.size());
+            Common::Backports::Hit(Common::Backports::Id::PipelineCacheBlob);
+        }
     }
 }
 
@@ -1575,7 +1652,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
         if (fetch_shader_) {
-            sel.fetch_shader = fetch_shader_;
+            sel.fetch_shader = std::move(fetch_shader_);
         }
         return true;
     };
@@ -1866,7 +1943,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     };
 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
-    if (it_pgm == program_cache.end() && lazy_programs && LoadProgramFromCache(params.hash)) {
+    if (it_pgm == program_cache.end() && LoadProgramFromCache(params.hash)) {
         it_pgm = program_cache.find(params.hash);
     }
     const bool compile_async = AsyncCompilation() && hw_stage != HwStage::Compute &&
@@ -2023,7 +2100,12 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                  reuse_hits.load(), reuse_misses.load(), reuse_mismatches.load());
     }
     const auto start_binding = binding;
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    auto& spec = sel.specialization_scratch[static_cast<u32>(sw_stage)];
+    spec.Refresh(info, runtime_info, profile, binding);
+#else
     auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
+#endif
 
     size_t perm_idx = program->modules.size();
     u64 perm_hash = HashCombine(params.hash, perm_idx);

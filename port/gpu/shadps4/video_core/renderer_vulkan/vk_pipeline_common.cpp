@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cstdlib>
 #include <span>
 #include <thread>
 
@@ -67,40 +68,148 @@ vk::Pipeline Pipeline::BuiltHandle() const {
     return vk::Pipeline{build->handle.load(std::memory_order_acquire)};
 }
 
+void Pipeline::BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBinding> bindings) {
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_DESCRIPTOR_TEMPLATES");
+        return !(env && *env == '0');
+#else
+        return false;
+#endif
+    }();
+    const auto push = VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPushDescriptorSetWithTemplateKHR;
+    const bool available = push && VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateDescriptorUpdateTemplate &&
+                           VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyDescriptorUpdateTemplate;
+    static std::once_flag reported;
+    std::call_once(reported, [&] {
+        std::printf("GPU: descriptor templates policy=%s available=%d\n",
+                    enabled ? "on" : "off", available ? 1 : 0);
+    });
+    if (!enabled || !available || !uses_push_descriptors || bindings.empty()) {
+        return;
+    }
+    DescriptorTemplateData data;
+    std::vector<vk::DescriptorUpdateTemplateEntry> entries;
+    entries.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        DescriptorPayload payload;
+        size_t stride, alignment;
+        switch (binding.descriptorType) {
+        case vk::DescriptorType::eUniformBuffer:
+        case vk::DescriptorType::eStorageBuffer:
+            payload = DescriptorPayload::Buffer;
+            stride = sizeof(vk::DescriptorBufferInfo);
+            alignment = alignof(vk::DescriptorBufferInfo);
+            break;
+        case vk::DescriptorType::eSampler:
+        case vk::DescriptorType::eCombinedImageSampler:
+        case vk::DescriptorType::eSampledImage:
+        case vk::DescriptorType::eStorageImage:
+        case vk::DescriptorType::eInputAttachment:
+            payload = DescriptorPayload::Image;
+            stride = sizeof(vk::DescriptorImageInfo);
+            alignment = alignof(vk::DescriptorImageInfo);
+            break;
+        case vk::DescriptorType::eUniformTexelBuffer:
+        case vk::DescriptorType::eStorageTexelBuffer:
+            payload = DescriptorPayload::Texel;
+            stride = sizeof(vk::BufferView);
+            alignment = alignof(vk::BufferView);
+            break;
+        default:
+            return; // unsupported descriptors retain the existing update path
+        }
+        if (!data.Add(binding.binding, binding.descriptorCount, u32(binding.descriptorType),
+                      payload, stride, alignment)) {
+            return;
+        }
+        entries.push_back({
+            .dstBinding = binding.binding,
+            .dstArrayElement = 0,
+            .descriptorCount = binding.descriptorCount,
+            .descriptorType = binding.descriptorType,
+            .offset = data.slots.back().offset,
+            .stride = stride,
+        });
+    }
+    const vk::DescriptorUpdateTemplateCreateInfo info = {
+        .descriptorUpdateEntryCount = u32(entries.size()),
+        .pDescriptorUpdateEntries = entries.data(),
+        .templateType = vk::DescriptorUpdateTemplateType::ePushDescriptorsKHR,
+        .pipelineBindPoint = IsCompute() ? vk::PipelineBindPoint::eCompute
+                                        : vk::PipelineBindPoint::eGraphics,
+        .pipelineLayout = *pipeline_layout,
+        .set = 0,
+    };
+    auto [result, update] = instance.GetDevice().createDescriptorUpdateTemplateUnique(info);
+    if (result != vk::Result::eSuccess) {
+        LOG_WARNING(Render_Vulkan, "Descriptor template unavailable ({}): keeping descriptor writes",
+                    vk::to_string(result));
+        return;
+    }
+    descriptor_template_data = std::move(data);
+    descriptor_update_template = std::move(update);
+    push_descriptor_template = push;
+}
 
-void Pipeline::BindResources(DescriptorWrites& set_writes,
+
+void Pipeline::BindResources(DescriptorWrites& set_writes, u32 count,
                              const Shader::PushData& push_data) const {
     const auto bind_point =
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;
     const vk::PipelineLayout layout = *pipeline_layout;
+    const std::span<const vk::WriteDescriptorSet> active_writes{set_writes.data(), count};
+    if (descriptor_update_template && count != 0) {
+        // A compact, aligned snapshot replaces WriteDescriptorSet copies and pointer patching.
+        boost::container::small_vector<u64, 256> words;
+        words.resize((descriptor_template_data.bytes + sizeof(u64) - 1) / sizeof(u64));
+        if (descriptor_template_data.Pack(active_writes, std::span<u64>{words.data(), words.size()})) {
+            const auto payload = scheduler.RecordData(std::span<const u64>{words.data(), words.size()});
+            const VkDescriptorUpdateTemplate update = *descriptor_update_template;
+            const auto push = push_descriptor_template;
+            scheduler.Record([layout, stage_flags, push_data, update, push, payload](vk::CommandBuffer cmdbuf) {
+                cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
+                push(cmdbuf, update, layout, 0, payload.data());
+            });
+            if (IssBionicPerf::Enabled()) {
+                IssBionicPerf::descriptor_template_calls.fetch_add(1, std::memory_order_relaxed);
+                IssBionicPerf::descriptor_template_bytes.fetch_add(descriptor_template_data.bytes,
+                                                                  std::memory_order_relaxed);
+            }
+            return;
+        }
+    }
+    if (IssBionicPerf::Enabled() && count != 0) {
+        IssBionicPerf::descriptor_legacy_calls.fetch_add(1, std::memory_order_relaxed);
+    }
     scheduler.Record([layout, stage_flags, push_data](vk::CommandBuffer cmdbuf) {
         cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
     });
 
     // Bind descriptor set.
-    if (set_writes.empty()) {
+    if (count == 0) {
         return;
     }
 
     if (uses_push_descriptors) {
         if (!scheduler.IsRecordingDeferred()) {
-            scheduler.Record([&](vk::CommandBuffer cmdbuf) {
-                cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, set_writes);
+            scheduler.Record([bind_point, layout, active_writes](vk::CommandBuffer cmdbuf) {
+                cmdbuf.pushDescriptorSetKHR(bind_point, layout, 0, active_writes);
             });
             return;
         }
         // Writes and the infos they point to are laid out in the recording chunk, with the
         // pointers already aimed at those copies: the command only carries a span.
-        size_t bytes = set_writes.size() * sizeof(vk::WriteDescriptorSet) + 64;
-        for (const auto& write : set_writes) {
+        size_t bytes = count * sizeof(vk::WriteDescriptorSet) + 64;
+        for (const auto& write : active_writes) {
             bytes += write.descriptorCount *
                          (sizeof(vk::DescriptorBufferInfo) + sizeof(vk::DescriptorImageInfo) +
                           sizeof(vk::BufferView)) +
                      32;
         }
         scheduler.ReserveRecordData(bytes);
-        const auto writes = scheduler.RecordData(std::span<const vk::WriteDescriptorSet>{set_writes});
+        const auto writes = scheduler.RecordData(active_writes);
         auto* patched = const_cast<vk::WriteDescriptorSet*>(writes.data());
         for (size_t i = 0; i < writes.size(); ++i) {
             auto& write = patched[i];
@@ -123,10 +232,10 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
 
     // Descriptor set updates are device calls: they stay on this thread.
     const auto desc_set = desc_heap.Commit(*desc_layout);
-    for (auto& set_write : set_writes) {
+    for (auto& set_write : std::span{set_writes.data(), count}) {
         set_write.dstSet = desc_set;
     }
-    instance.GetDevice().updateDescriptorSets(set_writes, {});
+    instance.GetDevice().updateDescriptorSets(active_writes, {});
     scheduler.Record([bind_point, layout, desc_set](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindDescriptorSets(bind_point, layout, 0, desc_set, {});
     });

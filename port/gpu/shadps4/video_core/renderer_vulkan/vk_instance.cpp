@@ -316,8 +316,23 @@ bool Instance::CreateDevice() {
     };
 
     // Required
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // The native Android renderer has no VkSurfaceKHR/VkSwapchainKHR. Its images
+    // are AHardwareBuffer allocations imported into Vulkan; sync-fd semaphores
+    // and foreign queue-family ownership replace the desktop WSI path
+    // (vk_swapchain_ahb.cpp). Keep all three required and fail explicitly if
+    // the selected Vulkan HAL cannot support the actual Android presenter.
+    for (const char* extension : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+                                  VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+                                  VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME}) {
+        ASSERT_MSG(add_extension(extension),
+                   "Required Android AHardwareBuffer presentation extension unavailable: {}",
+                   extension);
+    }
+#else
     ASSERT_MSG(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+#endif
     ASSERT_MSG(add_extension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME),
                "Required Vulkan extension unavailable: {}", VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     ASSERT_MSG(add_extension(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME),
@@ -447,6 +462,11 @@ bool Instance::CreateDevice() {
         }
     }
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    // tlg: shared heaps (TLG_SHARED_HEAPS) export guest memory to the runtime as dma-bufs.
+    if (const char* shared = std::getenv("TLG_SHARED_HEAPS"); shared && shared[0] == '1') {
+        dma_buf_export = add_extension(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) &&
+                         add_extension(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
+    }
     // tlg: from shadPS4-Infamous-FixBuild e35e04dc. Lets the driver move device memory out to
     // system memory instead of failing an allocation when the card is full.
     const bool memory_priority = add_extension(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
@@ -563,6 +583,8 @@ bool Instance::CreateDevice() {
                 .wideLines = features.wideLines,
                 .multiViewport = features.multiViewport,
                 .samplerAnisotropy = features.samplerAnisotropy,
+                // tlg: exact sample counts for TLG_OCCLUSION_MODE=4.
+                .occlusionQueryPrecise = features.occlusionQueryPrecise,
                 .vertexPipelineStoresAndAtomics = features.vertexPipelineStoresAndAtomics,
                 .fragmentStoresAndAtomics = features.fragmentStoresAndAtomics,
                 .shaderImageGatherExtended = features.shaderImageGatherExtended,
@@ -837,10 +859,15 @@ void Instance::CreateAllocator() {
         .vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,
     };
 
+    const VkDeviceSize block_size = [] {
+        const char* value=std::getenv("ISS_VMA_BLOCK_MB");
+        return VkDeviceSize(value ? std::clamp(std::atoi(value),0,256) : 64) << 20;
+    }();
     const VmaAllocatorCreateInfo allocator_info = {
         .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
         .physicalDevice = physical_device,
         .device = *device,
+        .preferredLargeHeapBlockSize = block_size,
         .pVulkanFunctions = &functions,
         .instance = *instance,
         .vulkanApiVersion = TargetVulkanApiVersion,
@@ -1047,32 +1074,27 @@ void Instance::CollectToolingInfo() const {
     }
 }
 
-u64 Instance::GetDeviceMemoryUsage() const {
+Instance::MemoryBudgetSnapshot Instance::GetMemoryBudgetSnapshot() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
         .pNext = &memory_budget_props,
     };
     physical_device.getMemoryProperties2(&props);
 
-    u64 total_usage = 0;
+    MemoryBudgetSnapshot snapshot{};
     for (const size_t heap : valid_heaps) {
-        total_usage += memory_budget_props.heapUsage[heap];
+        snapshot.usage += memory_budget_props.heapUsage[heap];
+        snapshot.budget += memory_budget_props.heapBudget[heap];
     }
-    return total_usage;
+    return snapshot;
+}
+
+u64 Instance::GetDeviceMemoryUsage() const {
+    return GetMemoryBudgetSnapshot().usage;
 }
 
 u64 Instance::GetDeviceMemoryBudgetNow() const {
-    vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
-    vk::PhysicalDeviceMemoryProperties2 props = {
-        .pNext = &memory_budget_props,
-    };
-    physical_device.getMemoryProperties2(&props);
-
-    u64 total_budget = 0;
-    for (const size_t heap : valid_heaps) {
-        total_budget += memory_budget_props.heapBudget[heap];
-    }
-    return total_budget;
+    return GetMemoryBudgetSnapshot().budget;
 }
 
 vk::FormatFeatureFlags2 Instance::GetFormatFeatureFlags(vk::Format format) const {

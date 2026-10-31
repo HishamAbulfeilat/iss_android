@@ -2,6 +2,8 @@
 # drivers, adapted to the native_probe runtime through shims in shim/.
 cmake_minimum_required(VERSION 3.24)
 project(tlggpu LANGUAGES C CXX)
+option(ISS_ANDROID_GLIBC "Build Linux ARM64 runtime for Android" OFF)
+option(ISS_ANDROID_BIONIC "Build native Android/Bionic AHB present runtime" OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -24,6 +26,9 @@ if (TLG_LTO)
     if (tlg_ipo_ok)
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
     else()
+        if (ISS_ANDROID_BIONIC)
+            message(FATAL_ERROR "Android/Bionic performance build requires working LTO: ${tlg_ipo_error}")
+        endif()
         message(WARNING "LTO unavailable: ${tlg_ipo_error}")
     endif()
 endif()
@@ -40,7 +45,13 @@ elseif (TLG_PGO STREQUAL "use")
                         -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch)
 endif()
 
-find_package(Vulkan REQUIRED)
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    find_package(VulkanHeaders CONFIG REQUIRED)
+    add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+    set_target_properties(Vulkan::Vulkan PROPERTIES INTERFACE_LINK_LIBRARIES Vulkan::Headers)
+else()
+    find_package(Vulkan REQUIRED)
+endif()
 # Pinned Vulkan-Headers (submodule) ahead of the system ones: distro headers can lag behind the
 # extensions the shadPS4 video core uses (e.g. Fedora 44 ships 1.4.341, VALVE mixed float dot is newer).
 if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include/vulkan/vulkan.hpp)
@@ -70,9 +81,14 @@ if (NOT VulkanMemoryAllocator_FOUND)
 endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
-pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
-if (NOT WIN32)
-    pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    add_library(PkgConfig::SDL3 INTERFACE IMPORTED)
+    add_library(PkgConfig::X11 INTERFACE IMPORTED)
+else()
+    pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
+    if (NOT WIN32)
+        pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
+    endif()
 endif()
 find_package(miniz QUIET)
 if (NOT miniz_FOUND)
@@ -96,9 +112,12 @@ find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 
-# tlg: FSR 3.1 temporal upscaling / frame generation, native Vulkan (MIT, FireBurn/FSR-Vulkan).
+# Portable native Vulkan FSR 3.1; Android keeps the existing AHB presenter.
 set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    set(FFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
 add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
@@ -145,6 +164,16 @@ endforeach()
 add_custom_target(host_shaders DEPENDS ${SHADER_HEADERS})
 
 file(GLOB_RECURSE VIDEO_CORE CONFIGURE_DEPENDS shadps4/video_core/*.cpp)
+# Select only one swapchain ABI per platform. Android uses the direct AHardwareBuffer
+# implementation; glibc/desktop retains its VkSurfaceKHR implementation.
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain\\.cpp$")
+    # Only temporal FSR 3.1 is compiled for Bionic; lightweight FSR4 ABI shim above.
+    list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_fsr4\\.cpp$|renderer_vulkan/fsr411/fsr411\\.cpp$")
+else()
+    list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/vk_swapchain_ahb\\.cpp$")
+endif()
+
 file(GLOB_RECURSE RECOMPILER CONFIGURE_DEPENDS shadps4/shader_recompiler/*.cpp)
 # tlg: the shader cache key: a hash of every source that shapes the generated SPIR-V. The
 # shader cache directory carries it, so a changed recompiler starts a fresh cache instead of
@@ -152,6 +181,14 @@ file(GLOB_RECURSE RECOMPILER CONFIGURE_DEPENDS shadps4/shader_recompiler/*.cpp)
 file(GLOB_RECURSE TLG_SHADER_KEY_SOURCES shadps4/shader_recompiler/*.cpp shadps4/shader_recompiler/*.h)
 list(APPEND TLG_SHADER_KEY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/amdgpu/resource.h
+    # tlg: the 1D/BC promotion predicates that resource.h and the SPIR-V image emitter read
+    # (IsBlock1D): their code changes which texels a shader samples, without changing the profile
+    # the cache compares.
+    ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/amdgpu/tlg_block1d.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/amdgpu/tlg_bc_tiny.h
+    # tlg: the graphics pipeline writes the host tessellation/discard SPIR-V into its serialized
+    # pipeline entry and decides when to emit it.
+    ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_vulkan/vk_pipeline_cache.cpp)
 list(SORT TLG_SHADER_KEY_SOURCES)
 set(TLG_SHADER_KEY_DATA "")
@@ -174,6 +211,11 @@ set(COMMON
 file(GLOB AVPLAYER CONFIGURE_DEPENDS shadps4/core/libraries/avplayer/*.cpp)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    list(FILTER SHIM_SOURCES EXCLUDE REGEX "shim/window\\.cpp$")
+else()
+    list(FILTER SHIM_SOURCES EXCLUDE REGEX "shim/window_android\\.cpp$|shim/vk_forwarders\\.cpp$|shim/iss_present_client\\.cpp$|shim/vk_driver_loader\\.cpp$")
+endif()
 # Windows: a DLL cannot leave the runtime_* symbols for tlg-probe.exe to resolve, so the
 # library is static there and linked into the executable.
 if (WIN32)
@@ -204,8 +246,12 @@ target_compile_options(tlggpu PRIVATE -Wno-deprecated-declarations -Wno-missing-
 if (NOT WIN32)
     target_link_options(tlggpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
-target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable)
+else()
+    target_link_libraries(tlggpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+endif()
+target_link_libraries(tlggpu PUBLIC Vulkan::Headers fmt::fmt-header-only Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 # xbyak is header-only: the distribution's copy when there is one (Fedora xbyak-devel), else the
 # submodule (MSYS2 and Ubuntu do not package it).
@@ -497,10 +543,26 @@ target_include_directories(page-state-test PRIVATE ../tests/stubs shim shadps4)
 target_link_libraries(page-state-test PRIVATE Boost::headers)
 target_compile_options(page-state-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
-add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
-    shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
-target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
-target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+if(NOT (ANDROID AND ISS_ANDROID_BIONIC))
+    add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
+        shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
+    target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
+    target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+endif()
 
 add_executable(cheat-hook-test ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+if(ANDROID AND ISS_ANDROID_BIONIC)
+    target_compile_definitions(tlggpu PRIVATE VK_USE_PLATFORM_ANDROID_KHR ISS_ANDROID_BIONIC=1)
+    target_include_directories(tlggpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/android/present)
+    target_link_libraries(tlggpu PRIVATE android nativewindow dl)
+    target_link_options(tlggpu PRIVATE -Wl,-z,undefs)
+endif()
+if(ISS_ANDROID_GLIBC)
+ target_link_libraries(tlggpu PRIVATE "${ISS_CPU_LIBRARY}")
+endif()
+
+if(ANDROID AND ISS_ANDROID_BIONIC)
+ target_include_directories(tlggpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/android/lsfg)
+endif()
