@@ -344,7 +344,20 @@ void Init(const Vulkan::Instance& instance, std::uint64_t block_size, vk::Buffer
     const char* writes_env = std::getenv("TLG_SHARED_GPU_WRITES");
     gpu_writes = !(writes_env && writes_env[0] == '0');
     auto shared = ranges;
+    std::uint64_t pad = 0;
     if (gpu_writes) {
+        // tlg: and around them. inFAMOUS keeps a GPU-written buffer just below the first heap
+        // (0x1048000000-0x1048200000, under a heap at 0x1048200000): job threads and the main
+        // thread wrote it and waited for the GPU, 2-4 s of every 5 s. Only direct memory a mapping
+        // covers is shared, so the margin costs nothing where nothing is mapped.
+        const char* pad_env = std::getenv("TLG_SHARED_PAD_MB");
+        pad = (pad_env ? std::strtoull(pad_env, nullptr, 10) : 32ull) << 20;
+        pad &= ~(std::max<std::uint64_t>(arena_block, 2ull << 20) - 1);
+        for (auto& [base, size] : shared) {
+            const std::uint64_t below = std::min(pad, base);
+            base -= below;
+            size += below + pad;
+        }
         std::sort(shared.begin(), shared.end());
         std::vector<std::pair<std::uint64_t, std::uint64_t>> merged;
         for (const auto& [base, size] : shared) {
@@ -369,6 +382,10 @@ void Init(const Vulkan::Instance& instance, std::uint64_t block_size, vk::Buffer
     std::printf("GPU: shared heaps: on, %zu ranges (%llu MiB) in memory type %u; the game and the GPU "
                 "use one copy (TLG_SHARED_HEAPS=0 turns it off)\n",
                 shared.size(), static_cast<unsigned long long>(total >> 20), memory_type);
+    if (pad) {
+        std::printf("GPU: shared heaps: %llu MiB around each range shared too (TLG_SHARED_PAD_MB)\n",
+                    static_cast<unsigned long long>(pad >> 20));
+    }
     std::printf("GPU: shared heaps: GPU writes %s (TLG_SHARED_GPU_WRITES)\n",
                 gpu_writes ? "shared too, no read faults or readback waits there; end-of-frame fences wait for the GPU"
                            : "off: GPU results are copied back as before");
