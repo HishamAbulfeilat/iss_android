@@ -1096,33 +1096,58 @@ void BufferCache::ReleaseIdleResidency() {
         }
     }
     const u64 now = scheduler.CurrentTick();
-    if (now <= release_idle_ticks) {
-        return;
-    }
     const u32 shift = std::bit_width(RESIDENCY_GRANULE_SIZE) - 1;
     constexpr u64 MaxBytesPerPass = 256_MB;
     std::vector<Backing> candidates;
+    u64 shared_bytes = 0, partial_bytes = 0, recent_bytes = 0;
+    u64 pending_bytes = 0, modified_bytes = 0, eligible_bytes = 0;
     for (const Backing& backing : resident_ranges) {
         const VAddr addr = backing.start << block_shift;
         const u64 size = (backing.end - backing.start) << block_shift;
+        if (TlgSharedHeaps::Overlaps(addr, addr + size)) {
+            shared_bytes += size;
+            continue;
+        }
         // Whole allocations only: a backing that does not start at its allocation is a piece of
         // memory still bound elsewhere (allocations from before this mode, or chunk carving).
-        if (backing.offset != 0 || size > RESIDENCY_GRANULE_SIZE ||
-            TlgSharedHeaps::Overlaps(addr, addr + size)) {
+        if (backing.offset != 0 || size > RESIDENCY_GRANULE_SIZE) {
+            partial_bytes += size;
             continue;
         }
         const u64 last = granule_use[addr >> shift].load(std::memory_order_relaxed);
-        if (now - last < release_idle_ticks || !scheduler.IsFree(last)) {
+        if (now <= release_idle_ticks || last > now || now - last < release_idle_ticks) {
+            recent_bytes += size;
+            continue;
+        }
+        if (!scheduler.IsFree(last)) {
+            pending_bytes += size;
             continue;
         }
         if (memory_tracker->IsRegionGpuModified(addr, size) ||
             gpu_modified_ranges.Intersects(addr, size)) {
+            modified_bytes += size;
             continue; // the GPU's bytes exist only here
         }
-        candidates.push_back(backing);
-        if (candidates.size() * RESIDENCY_GRANULE_SIZE >= MaxBytesPerPass) {
-            break;
+        eligible_bytes += size;
+        if (candidates.size() * RESIDENCY_GRANULE_SIZE < MaxBytesPerPass) {
+            candidates.push_back(backing);
         }
+    }
+    static auto report_time = std::chrono::steady_clock::time_point{};
+    const auto report_now = std::chrono::steady_clock::now();
+    if (report_now - report_time >= std::chrono::seconds(5)) {
+        std::printf("GPU: idle buffer pressure at tick %llu (grace %llu): "
+                    "shared %llu, partial %llu, recent %llu, in-flight %llu, "
+                    "GPU-modified %llu, eligible %llu MiB\n",
+                    static_cast<unsigned long long>(now),
+                    static_cast<unsigned long long>(release_idle_ticks),
+                    static_cast<unsigned long long>(shared_bytes >> 20),
+                    static_cast<unsigned long long>(partial_bytes >> 20),
+                    static_cast<unsigned long long>(recent_bytes >> 20),
+                    static_cast<unsigned long long>(pending_bytes >> 20),
+                    static_cast<unsigned long long>(modified_bytes >> 20),
+                    static_cast<unsigned long long>(eligible_bytes >> 20));
+        report_time = report_now;
     }
     if (candidates.empty()) {
         return;

@@ -1912,6 +1912,7 @@ void TextureCache::GarbageCollectImages() {
     // oldest images all GPU-written tiled targets, nothing was ever freed again and VRAM grew
     // with every area visited. A pass also stops after looking at 256 images.
     u32 visited = 0;
+    u32 retained_tiled = 0;
     const auto clean_up = [&](ImageId image_id) {
         if (num_deletions == 0) {
             return true;
@@ -1927,6 +1928,7 @@ void TextureCache::GarbageCollectImages() {
         // Retained GPU images need neither a CPU readback wait nor staging invalidation.
         // Pending copies are retired by ProcessDownloadImages even when this GC skips them.
         if (image.SafeToDownload() && (image.info.IsTiled() || !pressured)) {
+            retained_tiled += image.info.IsTiled();
             lru_cache.Touch(image.lru_id, gc_tick);
             return false;
         }
@@ -1935,6 +1937,7 @@ void TextureCache::GarbageCollectImages() {
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
         if ((tiled && download) || (download && !pressured)) {
+            retained_tiled += tiled && download;
             // Tiled: we can't handle non-linear image downloads yet. Otherwise a download
             // waits for memory pressure.
             lru_cache.Touch(image.lru_id, gc_tick);
@@ -1998,16 +2001,18 @@ void TextureCache::GarbageCollectImages() {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
 #ifdef __ANDROID__
-            const char* reason = android_low ? " (Android low on free RAM)" : "";
+            const char* reason = android_low ? " (Android RAM/swap pressure)" : "";
 #else
             const char* reason = "";
 #endif
             std::printf("Texture cache: memory pressure%s, %llu of %llu MiB (critical %llu): "
-                        "%llu images evicted, %llu written back since the last report\n",
+                        "%llu images evicted, %llu written back since the last report; "
+                        "%u GPU-written tiled images retained in this pass\n",
                         reason, (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
-                        (unsigned long long)gc_evictions, (unsigned long long)gc_downloads);
+                        (unsigned long long)gc_evictions, (unsigned long long)gc_downloads,
+                        retained_tiled);
             gc_report_time = now;
             gc_evictions = gc_downloads = 0;
         }
