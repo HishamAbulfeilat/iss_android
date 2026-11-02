@@ -18,9 +18,10 @@ class AddcontRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "addcont-test"
             source = ROOT / "tools/android/runtime/c/test_addcont_runtime.c"
-            subprocess.run([CC, "-std=c11", "-Wall", "-Wextra", "-Werror",
-                            str(source), "-o", str(binary)], check=True,
-                           capture_output=True, text=True)
+            compiled = subprocess.run([CC, "-std=c11", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra",
+                                       "-Werror", str(source), "-o", str(binary)],
+                                      capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
             game = Path(temp) / "game"
             addon = game / "addcont/CUSA00223/UP9000-CUSA00223_00-ISS_DLC"
             addon.mkdir(parents=True)
