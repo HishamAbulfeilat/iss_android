@@ -21,9 +21,6 @@ jobs:
       ISS_JOBS: '2'
       ISS_RELEASE_BUILD: '1'
     steps:
-      # Build code from an optional experiment, but run the job on the
-      # signed experimental-bionic workflow ref so the ORIGINAL signing-key
-      # cache remains available. Never generate an ephemeral key for releases.
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -58,7 +55,7 @@ jobs:
         with:
           path: .local-deps/android/bionic-development.keystore
           key: iss-fork-signing-v1
-      - name: Restore or create the fork signing key
+      - name: Restore and verify the original fork signing key
         env:
           FORK_KEYSTORE_B64: ${{ secrets.FORK_KEYSTORE_B64 }}
         run: |
@@ -68,12 +65,16 @@ jobs:
           if [ -n "${FORK_KEYSTORE_B64:-}" ]; then
             echo "$FORK_KEYSTORE_B64" | base64 -d > "$key"
           elif [ ! -s "$key" ]; then
-            keytool -genkeypair -keystore "$key" -storepass android -keypass android \
-              -alias iss-bionic-dev -dname "CN=ISS Bionic Android Fork" -keyalg RSA \
-              -keysize 2048 -validity 10000 -noprompt
+            echo "::error::Original signing key unavailable. Set FORK_KEYSTORE_B64 to the original keystore; refusing to generate an incompatible replacement."
+            exit 1
           fi
           keytool -exportcert -keystore "$key" -storepass android -alias iss-bionic-dev \
             | sha256sum | cut -d ' ' -f 1 > tools/android/bionic/signing-certificate.sha256
+          expected=0e10f08b8e896bbe60e30e41479f6d126628cdb9e1b651971fe27dd2b4e42060
+          if [ "$(cat tools/android/bionic/signing-certificate.sha256)" != "$expected" ]; then
+            echo "::error::Signing certificate does not match the installed fork releases. Restore the original key; refusing to publish an incompatible update."
+            exit 1
+          fi
           echo "Fork signing certificate SHA-256: $(cat tools/android/bionic/signing-certificate.sha256)"
       - name: Check Bionic Android launcher Java compilation
         run: |

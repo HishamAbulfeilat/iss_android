@@ -19,3 +19,9 @@ collector. The count describes that pass, not the entire cache.
 The existing eviction safety rules and 256 MiB buffer release limit remain
 unchanged. Shared heaps and GPU-only data are not discarded to avoid a kill.
 Export the latest log from the launcher's Settings after a failed run.
+
+Release signing now verifies the original fork certificate and refuses to
+generate a replacement key. GitHub Actions caches are branch-scoped: builds
+on `main` need the original keystore in `FORK_KEYSTORE_B64` if its cache is
+unavailable or contains a different key. The Android release branch retains
+the original signing cache and can build upgrade-compatible APKs.
