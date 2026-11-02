@@ -7,6 +7,7 @@
 #include "video_core/amdgpu/liverpool.h"
 
 #include "tlg_toggles.h"
+#include "tlg_android_memory.h"
 #include "tlg_freeze.h"
 #include "common/assert.h"
 #include "common/backports.h"
@@ -1803,34 +1804,6 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers<false>(addr, size);
 }
 
-#ifdef __ANDROID__
-// tlg: Android's MemAvailable in bytes, read at most every 250 ms (0 when unreadable). The
-// driver's budget does not shrink as Android runs out of RAM, so the low-memory killer ends the
-// game while the collector still sees room.
-static u64 AndroidAvailableMemory() {
-    static std::chrono::steady_clock::time_point last{};
-    static u64 available = 0;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last < std::chrono::milliseconds(250)) {
-        return available;
-    }
-    last = now;
-    available = 0;
-    if (std::FILE* f = std::fopen("/proc/meminfo", "r")) {
-        char line[128];
-        unsigned long long kb = 0;
-        while (std::fgets(line, sizeof(line), f)) {
-            if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
-                available = u64(kb) << 10;
-                break;
-            }
-        }
-        std::fclose(f);
-    }
-    return available;
-}
-#endif
-
 void TextureCache::GarbageCollectImages() {
     TlgStats::Timer gc_timer{TlgStats::t_gc};
     if (instance.CanReportMemoryUsage()) {
@@ -1868,16 +1841,17 @@ void TextureCache::GarbageCollectImages() {
         const char* env = std::getenv("TLG_GC_ANDROID_FREE_MB");
         const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 1500;
         if (mb) {
-            std::printf("Texture cache: old images are freed when Android has under %llu MiB "
-                        "free (TLG_GC_ANDROID_FREE_MB, 0 = off)\n",
+            std::printf("Texture cache: old images are freed when Android RAM or swap has under "
+                        "%llu MiB free (TLG_GC_ANDROID_FREE_MB, 0 = off)\n",
                         static_cast<unsigned long long>(mb));
         }
         return mb << 20;
     }();
     bool android_low = false;
     if (android_free_mark != 0 && instance.CanReportMemoryUsage() && instance.IsIntegrated()) {
-        const u64 available = AndroidAvailableMemory();
-        if (available != 0 && available < android_free_mark) {
+        const auto memory = TlgAndroidMemory::Current();
+        const u64 available = memory.HeadroomBytes();
+        if (memory.UnderPressure(android_free_mark)) {
             const u64 deficit = android_free_mark - available;
             const u64 target = total_used_memory > deficit ? total_used_memory - deficit : 0;
             critical_gc_memory = std::min(critical_gc_memory, target);
