@@ -10,25 +10,34 @@ import java.util.regex.*;
 
 /** orbis-pkg-util, installed directly into the selected local directory. */
 final class BionicPkgInstaller {
- static final int BASE=20, UPDATE=21, DESTINATION=22;
+ static final int BASE=20, UPDATE=21, DESTINATION=22, ADDON=23;
  interface State {void set(boolean busy,String message);}
  private final Activity activity;private final State state;
- private Uri selected;private boolean update;private volatile boolean running;
+ private Uri selected;private boolean update,addon;private volatile boolean running;
  BionicPkgInstaller(Activity a,State s){activity=a;state=s;}
- boolean busy(){return running||selected!=null;}
+ boolean busy(){return running||selected!=null||addon;}
  void pick(boolean replacing){
   if(busy())return;
   if(replacing&&!new File(game(),"eboot.bin").isFile()){state.set(false,AppLanguage.text("Select the base game before installing an update.", "Selecione o jogo base antes da atualização."));return;}
   update=replacing;
   activity.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),replacing?UPDATE:BASE);
  }
+ void pickAddon(){
+  if(busy())return;
+  if(!new File(game(),"eboot.bin").isFile()){state.set(false,AppLanguage.text("Install the base game before adding DLC.", "Instale o jogo base antes de adicionar DLC."));return;}
+  addon=true;
+  try{activity.startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+    .setType("*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),ADDON);}
+  catch(RuntimeException e){addon=false;state.set(false,AppLanguage.text("Could not open the PKG picker: ","Não foi possível abrir o seletor de PKG: ")+e.getMessage());}
+ }
  private File game(){return new File(activity.getSharedPreferences("iss",0).getString("game_dir",""));}
  boolean result(int request,int result,Intent data){
-  if(request!=BASE&&request!=UPDATE&&request!=DESTINATION)return false;
-  if(result!=Activity.RESULT_OK||data==null||data.getData()==null){selected=null;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));return true;}
+  if(request!=BASE&&request!=UPDATE&&request!=DESTINATION&&request!=ADDON)return false;
+  if(result!=Activity.RESULT_OK||data==null||data.getData()==null){selected=null;addon=false;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));return true;}
   try{
-   if(request==BASE||request==UPDATE){selected=data.getData();update=request==UPDATE;
+   if(request==BASE||request==UPDATE||request==ADDON){selected=data.getData();update=request==UPDATE;addon=request==ADDON;
     if(update){new AlertDialog.Builder(activity).setTitle(AppLanguage.text("Install update?", "Instalar atualização?")).setMessage(AppLanguage.text("Matching files will be replaced directly in the game folder. TITLE_ID will be validated before extraction.", "Os arquivos correspondentes serão substituídos diretamente na pasta do jogo. TITLE_ID será validado antes da extração.")).setNegativeButton(AppLanguage.text("Cancel", "Cancelar"),(d,w)->{selected=null;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));}).setPositiveButton(AppLanguage.text("Install", "Instalar"),(d,w)->install(Uri.fromFile(game()))).setOnCancelListener(d->{selected=null;state.set(false,AppLanguage.text("Installation canceled.", "Instalação cancelada."));}).show();}
+    else if(addon)install(Uri.fromFile(game()));
     else {
      Intent choose=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
@@ -40,15 +49,15 @@ final class BionicPkgInstaller {
     // The selected tree is a parent; never install directly into it.
     install(dest);
    }
-  }catch(Exception e){selected=null;state.set(false,e.getMessage());}return true;
+  }catch(Exception e){selected=null;addon=false;state.set(false,e.getMessage());}return true;
  }
  private void install(Uri destination){
-  if(running||selected==null)return;final Uri source=selected;selected=null;running=true;state.set(true,AppLanguage.text("Preparing PKG installation…", "Preparando instalação PKG…"));
+  if(running||selected==null)return;final Uri source=selected;final boolean installingAddon=addon;selected=null;addon=false;running=true;state.set(true,AppLanguage.text("Preparing PKG installation…", "Preparando instalação PKG…"));
   new Thread(()->{String message;
    try(BionicSession.Guard guard=BionicSession.acquire(activity.getFilesDir())){
     BionicRuntimeInstaller.install(activity);
     File pkg=local(source,false),dest=local(destination,true);
-    if(!update){
+    if(!update&&!installingAddon){
      File parent=dest;
      if(!parent.isDirectory())throw new IOException(AppLanguage.text("The selected destination is not a folder.", "O destino selecionado não é uma pasta."));
      dest=new File(parent,"inFamous Second Son").getCanonicalFile();
@@ -60,7 +69,7 @@ final class BionicPkgInstaller {
     if(!dest.isDirectory()||!dest.canWrite())throw new IOException(AppLanguage.text("No write permission for the selected folder.", "Sem permissão de escrita na pasta escolhida."));
     File[] entries=dest.listFiles();
     if(entries==null)throw new IOException(AppLanguage.text("Could not list the destination folder.", "Não foi possível listar a pasta de destino."));
-    if(!update&&entries.length!=0){
+    if(!update&&!installingAddon&&entries.length!=0){
      // Never extract a base package over previous files, including incomplete installs.
      File parent=dest.getParentFile();String name=dest.getName();
      File free=null;
@@ -87,13 +96,47 @@ final class BionicPkgInstaller {
     String info=execute(helper,dest,"info",pkg.getPath());
     Matcher title=Pattern.compile("(?im)^\\s*Title ID:\\s*(CUSA[0-9]{5})\\s*$").matcher(info);
     if(!title.find())throw new IOException(AppLanguage.text("TITLE_ID missing from PKG header.", "TITLE_ID ausente no cabeçalho PKG."));String id=title.group(1).toUpperCase(java.util.Locale.US);
-    if(update&&(!dest.equals(game().getCanonicalFile())||!id.equals(BionicSaveArchive.readTitle(dest))))throw new IOException(AppLanguage.text("The update does not match the selected game.", "A atualização não corresponde ao jogo selecionado."));
-    stateOnUi(true,AppLanguage.text("Extracting PKG directly into the selected folder…", "Extraindo PKG diretamente na pasta escolhida…"));
-    if(update)execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath(),"--force");
-    else execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath());
-    if(!new File(dest,"eboot.bin").isFile()||!new File(dest,"art").isDirectory()||!id.equals(BionicSaveArchive.readTitle(dest)))throw new IOException(AppLanguage.text("Extraction does not contain a complete inFAMOUS Second Son dump. Check eboot.bin, art/ and sce_sys/param.sfo.", "Extração não contém um dump completo de inFAMOUS Second Son. Confira eboot.bin, art/ e sce_sys/param.sfo."));
-    if(!activity.getSharedPreferences("iss",0).edit().putString("game_dir",dest.getPath()).commit())throw new IOException(AppLanguage.text("Content extracted, but the folder could not be selected.", "Conteúdo extraído, mas não foi possível selecionar a pasta."));
-    message=(update?AppLanguage.text("Update", "Atualização"):AppLanguage.text("Game", "Jogo"))+" "+id+AppLanguage.text(" installed at ", " instalado em ")+dest.getPath();
+    if(installingAddon){
+     Matcher contentType=Pattern.compile("(?im)^\\s*Content Type:\\s*0x(?:02|1B)\\b").matcher(info);
+     Matcher contentIdMatch=Pattern.compile("(?im)^\\s*Content ID:\\s*([A-Z]{2}[0-9]{4}-CUSA00223_[A-Z0-9]{2}-[A-Z0-9_-]{1,128})\\s*$").matcher(info);
+     if(!contentType.find()||!contentIdMatch.find())throw new IOException("Selected PKG is not PS4 add-on content.");
+     File gameRoot=game().getCanonicalFile();
+     if(!dest.getCanonicalFile().equals(gameRoot)||!id.equals(BionicSaveArchive.readTitle(gameRoot)))
+      throw new IOException("Add-on title does not match the selected base game.");
+     if(!"CUSA00223".equals(id))throw new IOException("DLC installation is currently supported only for CUSA00223.");
+     String contentId=contentIdMatch.group(1).toUpperCase(java.util.Locale.US);
+     File addonRoot=new File(gameRoot,"addcont/"+id).getCanonicalFile();
+     if(!addonRoot.toPath().startsWith(gameRoot.toPath()))throw new IOException("Invalid add-on destination.");
+     if(!addonRoot.isDirectory()&&!addonRoot.mkdirs())throw new IOException("Could not create add-on destination.");
+     File target=new File(addonRoot,contentId).getCanonicalFile();
+     File stage=new File(addonRoot,"."+contentId+".installing").getCanonicalFile();
+     if(!target.toPath().startsWith(addonRoot.toPath())||!stage.toPath().startsWith(addonRoot.toPath()))
+      throw new IOException("Invalid add-on package path.");
+     if(target.exists())throw new IOException("This add-on is already installed; existing content was not replaced.");
+     if(stage.exists())throw new IOException("An incomplete install exists at "+stage+"; remove it before retrying.");
+     if(!stage.mkdir())throw new IOException("Could not create a temporary add-on folder.");
+     stateOnUi(true,AppLanguage.text("Extracting add-on into a temporary folder…","Extraindo DLC em uma pasta temporária…"));
+     execute(helper,gameRoot,"extract",pkg.getPath(),"--output",stage.getPath());
+     File addonSfo=new File(stage,"sce_sys/param.sfo");
+     String extractedTitle=BionicSaveArchive.readSfoString(addonSfo,"TITLE_ID");
+     String extractedCategory=BionicSaveArchive.readSfoString(addonSfo,"CATEGORY");
+     String extractedContentId=BionicSaveArchive.readSfoString(addonSfo,"CONTENT_ID");
+     if(!id.equals(extractedTitle)||!extractedCategory.toLowerCase(java.util.Locale.US).startsWith("ac")||
+        !contentId.equalsIgnoreCase(extractedContentId))
+      throw new IOException("Extracted add-on metadata does not match its PKG header.");
+     File marker=new File(stage,".iss-content-id");
+     try(FileOutputStream output=new FileOutputStream(marker)){output.write((contentId+"\n").getBytes("US-ASCII"));output.getFD().sync();}
+     if(!stage.renameTo(target))throw new IOException("Could not commit the add-on; staged data remains at "+stage);
+     message=AppLanguage.text("Add-on ","DLC ")+contentId+AppLanguage.text(" installed for "," instalado para ")+id;
+    }else{
+     if(update&&(!dest.equals(game().getCanonicalFile())||!id.equals(BionicSaveArchive.readTitle(dest))))throw new IOException(AppLanguage.text("The update does not match the selected game.", "A atualização não corresponde ao jogo selecionado."));
+     stateOnUi(true,AppLanguage.text("Extracting PKG directly into the selected folder…", "Extraindo PKG diretamente na pasta escolhida…"));
+     if(update)execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath(),"--force");
+     else execute(helper,dest,"extract",pkg.getPath(),"--output",dest.getPath());
+     if(!new File(dest,"eboot.bin").isFile()||!new File(dest,"art").isDirectory()||!id.equals(BionicSaveArchive.readTitle(dest)))throw new IOException(AppLanguage.text("Extraction does not contain a complete inFAMOUS Second Son dump. Check eboot.bin, art/ and sce_sys/param.sfo.", "Extração não contém um dump completo de inFAMOUS Second Son. Confira eboot.bin, art/ e sce_sys/param.sfo."));
+     if(!activity.getSharedPreferences("iss",0).edit().putString("game_dir",dest.getPath()).commit())throw new IOException(AppLanguage.text("Content extracted, but the folder could not be selected.", "Conteúdo extraído, mas não foi possível selecionar a pasta."));
+     message=(update?AppLanguage.text("Update", "Atualização"):AppLanguage.text("Game", "Jogo"))+" "+id+AppLanguage.text(" installed at ", " instalado em ")+dest.getPath();
+    }
    }catch(Exception e){message=AppLanguage.text("Installation failed: ", "Falha na instalação: ")+e.getMessage();}
    running=false;stateOnUi(false,message);
   },"iss-pkg-install").start();

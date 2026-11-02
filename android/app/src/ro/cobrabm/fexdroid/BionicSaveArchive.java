@@ -161,4 +161,27 @@ public final class BionicSaveArchive {
   }catch(RuntimeException ignored){}
   throw new IOException("TITLE_ID não encontrado no param.sfo.");
  }
+ public static String readSfoString(File sfo,String wanted)throws IOException {
+  if(sfo.length()<20||sfo.length()>1024*1024)throw new IOException("param.sfo inválido.");
+  byte[] data=new byte[(int)sfo.length()];
+  try(DataInputStream in=new DataInputStream(new FileInputStream(sfo))){in.readFully(data);}
+  try {
+   ByteBuffer b=ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+   if(b.getInt(0)!=0x46535000)throw new IllegalArgumentException();
+   int keys=b.getInt(8),values=b.getInt(12),count=b.getInt(16);
+   if(keys<20||keys>=data.length||values<20||values>data.length||count<0||count>(data.length-20)/16)
+    throw new IllegalArgumentException();
+   for(int i=0;i<count;i++){
+    int at=20+16*i,key=keys+(b.getShort(at)&65535),end=key;
+    while(end<data.length&&data[end]!=0)end++;
+    if(key<keys||end==data.length)throw new IllegalArgumentException();
+    if(!wanted.equals(new String(data,key,end-key,StandardCharsets.UTF_8)))continue;
+    int length=b.getInt(at+4),offset=values+b.getInt(at+12);
+    if(length<1||offset<values||offset>data.length-length)throw new IllegalArgumentException();
+    String value=new String(data,offset,length,StandardCharsets.UTF_8).replace("\0","").trim();
+    if(!value.isEmpty())return value;
+   }
+  }catch(RuntimeException ignored){}
+  throw new IOException(wanted+" não encontrado no param.sfo.");
+ }
 }

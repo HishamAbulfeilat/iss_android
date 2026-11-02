@@ -5,7 +5,7 @@
 name: inFAMOUS Second Son — fork APK release
 on:
   push:
-    branches: [ccr-4486da53-6f6y3a]
+    branches: [main, ccr-4486da53-6f6y3a]
     paths-ignore: ['**/*.md']
   workflow_dispatch:
 concurrency:
@@ -84,6 +84,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
           python3 -m compileall -q tools/android/bionic
+          bash -n tools/android/bionic/build_bloodframe.sh
       - uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: ci/environment.yml

@@ -257,6 +257,7 @@ def prepare(game, out):
                   'sceKernelLoadStartModule', 'sceVideoOutOpen', 'sceKernelCreateSema', 'sceKernelWaitSema', 'sceKernelPollSema',
                   'sceKernelSignalSema', 'sceKernelCancelSema', 'sceKernelDeleteSema',
                   'sceAppContentInitialize', 'sceAppContentAppParamGetInt', 'sceAppContentGetAddcontInfoList',
+                  'sceAppContentGetAddcontInfo', 'sceAppContentAddcontMount', 'sceAppContentAddcontUnmount',
                   'pthread_cond_init', 'sceSysmoduleLoadModule', 'pthread_mutexattr_init', 'gettimeofday',
                   'scePthreadMutexattrInit', 'scePthreadMutexattrSettype', 'scePthreadMutexattrDestroy',
                   'scePthreadMutexInit', 'scePthreadMutexLock', 'scePthreadMutexTrylock',

@@ -8,8 +8,8 @@ from patches import game_profile,selected_patches,profile_version_matches
 from unittest.mock import patch
 XML=ROOT/'port/patches/InfamousSecondSon.xml'
 
-def fixture(folder,patterns,merge_contained=False):
-    code=bytearray(b'\xcc'*40)
+def fixture(folder,patterns,merge_contained=False,image_size=40):
+    code=bytearray(b'\xcc'*image_size)
     if merge_contained:
         patterns=sorted(patterns,key=lambda x:len(mask_tokens(x)),reverse=True)
     for item in patterns:
@@ -33,7 +33,7 @@ class InfamousPatchTests(unittest.TestCase):
     def test_catalog_and_conflicts(self):
         self.assertEqual(game_profile('CUSA00004')[2],'01.00')
         allpatch=ET.parse(XML).getroot().findall('Metadata')
-        self.assertEqual(len(allpatch),9)
+        self.assertEqual(len(allpatch),10)
         self.assertNotIn('Disable light beams',{x.get('Name') for x in allpatch})
         self.assertTrue(all(x.get('AppVer')=='01.00' for x in allpatch))
         self.assertEqual(selected_patches(XML,'01.00',''),[])
@@ -50,7 +50,9 @@ class InfamousPatchTests(unittest.TestCase):
             self.assertFalse(profile_version_matches('game',expected))
     def test_compile_all_catalog_signatures(self):
         for item in ET.parse(XML).getroot().findall('Metadata'):
-            sigs=[x.get('Address') for x in item.findall('.//Line')]
+            if any(x.get('Type')=='bytes' for x in item.findall('.//Line')):
+                continue # Exact-hash fixed writes are covered by the dedicated source-hash test.
+            sigs=[x.get('Address') for x in item.findall('.//Line') if x.get('Type')=='mask']
             with self.subTest(item.get('Name')),tempfile.TemporaryDirectory() as d:
                 path=Path(d);fixture(path,sigs,merge_contained=True)
                 catalog=ET.parse(XML)
@@ -106,4 +108,32 @@ class InfamousPatchTests(unittest.TestCase):
                 compile_masks(XML,[item.get('Name')],'01.00',path/'boot-linked.bin',path/'eboot.elf')
             with self.assertRaisesRegex(ValueError,'missing'):
                 compile_masks(XML,[item.get('Name')],'01.07',path/'boot-linked.bin',path/'eboot.elf')
+    def test_paper_trail_fixed_writes_require_exact_source_hash(self):
+        import hashlib
+        from unittest.mock import Mock
+        name='Paper Trail offline'
+        item=next(x for x in ET.parse(XML).getroot().findall('Metadata') if x.get('Name')==name)
+        self.assertFalse(selected_patches(XML,'01.00',''))
+        self.assertIn(name,[x.get('Name') for x in ET.parse(XML).getroot().findall('Metadata')])
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)
+            fixture(path,[],image_size=0x160000)
+            source=path/'eboot.bin'
+            source.write_bytes(b'verified test executable')
+            digest=hashlib.sha256(source.read_bytes()).hexdigest()
+            catalog=ET.parse(XML)
+            fixed=next(x for x in catalog.getroot().findall('Metadata') if x.get('Name')==name)
+            fixed.set('AllowedEbootSHA256',digest)
+            test_xml=path/'catalog.xml'
+            catalog.write(test_xml)
+            writes=compile_masks(test_xml,[name],'01.00',path/'boot-linked.bin',
+                                 path/'eboot.elf',source)
+            self.assertEqual([offset for offset,_ in writes],[0x15ed1a,0x15e500])
+            self.assertEqual(writes[0][1],b'\x90\x90')
+            self.assertEqual(len(writes[1][1]),72)
+            with patch('iss_mask_patches.hashlib.sha256',
+                       return_value=Mock(hexdigest=lambda:'wrong-source')):
+                with self.assertRaisesRegex(ValueError,'source eboot SHA-256 mismatch'):
+                    compile_masks(test_xml,[name],'01.00',path/'boot-linked.bin',
+                                  path/'eboot.elf',source)
 if __name__=='__main__': unittest.main()

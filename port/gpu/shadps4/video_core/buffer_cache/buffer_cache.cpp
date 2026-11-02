@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
 #include "tlg_copy.h"
+#include "tlg_android_memory.h"
 #include "tlg_shared_heaps.h"
 #include "tlg_toggles.h"
 #include "common/alignment.h"
@@ -1086,7 +1087,11 @@ void BufferCache::ReleaseIdleResidency() {
     }();
     if (!always) {
         const auto budget = instance.GetMemoryBudgetSnapshot();
-        if (budget.budget == 0 || budget.usage < budget.budget / 100 * 85) {
+        bool pressured = budget.budget != 0 && budget.usage >= budget.budget / 100 * 85;
+#ifdef __ANDROID__
+        pressured |= TlgAndroidMemory::Current().UnderPressure(1500_MB);
+#endif
+        if (!pressured) {
             return;
         }
     }

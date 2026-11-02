@@ -190,6 +190,10 @@ final class BionicVideoSettings {
   shadows.setChecked(prefs.getBoolean("patch_shadows",false));
   shadows.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_shadows",checked).apply());l.addView(shadows);
 
+  CheckBox paperTrail=new CheckBox(activity);paperTrail.setText(AppLanguage.text("Paper Trail offline (verified 01.07 eboot only; no website karma rewards)","Paper Trail offline (somente eboot 01.07 validado; sem recompensas do site)"));
+  paperTrail.setChecked(prefs.getBoolean("patch_paper_trail_offline",false));
+  paperTrail.setOnCheckedChangeListener((button,checked)->prefs.edit().putBoolean("patch_paper_trail_offline",checked).apply());l.addView(paperTrail);
+
   }return l;
  }
  static void show(Activity a){showPage(a,2);}

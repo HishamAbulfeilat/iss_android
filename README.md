@@ -4,6 +4,9 @@ Android ARM64 port of **inFAMOUS Second Son**, based on [HayatoG/iss_pc](https:/
 
 Fork and Android adaptations: **[erickmendes22](https://github.com/erickmendes22) / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
 
+This fork targets Android only. Automatic builds on `main` produce the Bionic ARM64 APK;
+the inherited desktop packaging workflow is manual-only and is not an Android release check.
+
 ## Links
 
 - [Downloads and source](https://github.com/erickmendes22/iss_android)
@@ -29,7 +32,8 @@ The Bionic APK updates the previous Bionic builds using the same package and sig
 1. Install the APK and grant the requested file access.
 2. Select the extracted game folder, or install a local game PKG directly into an empty folder. A prepared game folder contains `eboot.bin`, `art/` and `sce_sys/param.sfo`.
 3. If needed, install the matching update PKG into the selected game folder.
-4. Choose the settings below, then tap **PLAY**. Driver and resolution changes apply on the next game start.
+4. For additional content, choose **Install DLC from PKG** after selecting the base game. The initial implementation is limited to matching CUSA00223 add-on packages and will not replace an already installed package.
+5. Choose the settings below, then tap **PLAY**. Driver and resolution changes apply on the next game start.
 
 Language defaults to **Automatic**, following the phone language with English fallback. **Settings → Language** also offers English, Portuguese, Spanish, French, German, Italian, Russian, Japanese, Korean and simplified Chinese. The game follows the selection on its next start when both its text and audio packages are installed; otherwise it uses English. Untranslated technical messages use English.
 
@@ -54,7 +58,7 @@ Language defaults to **Automatic**, following the phone language with English fa
 - Bloodframe frame generation, configured separately from the game's source FPS. Import your own `Lossless.dll` to use it.
 - Configurable HUD and inFAMOUS-themed Mobile action controls (default), with drag-to-look camera and an optional Classic controller layout. Each layout saves its positions separately; optional draggable swipepad, physical controllers, incremental D-pad swipes and a two-finger TOUCH action. Automatic input routing reads the game menu lifecycle on matching executables; AUTO/MENU/GAME and L1+R1+Start provide an override.
 - Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
-- Direct PKG installation, save import/export and log export.
+- Direct base-game, update and CUSA00223 add-on PKG installation, save import/export and log export. Add-on installation is not yet validated on a physical device.
 
 FPS selections are targets; achieved performance depends on the scene and device. Shader caches refresh automatically when the shader source key changes, so the first run after an update may compile shaders again.
 

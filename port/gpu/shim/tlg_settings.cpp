@@ -147,6 +147,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.vsync = i != 0;
     } else if (key == "fps_limit") {
         v.fps_limit = TlgGraphics::ParseFpsLimit(i);
+    } else if (key == "quality_target_fps") {
+        v.quality_target_fps = i <= 0 ? 0 : std::clamp(i, 20, 240);
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
     } else if (key == "fsr1") {
@@ -274,6 +276,7 @@ void Load() {
         {"TLG_REGION_LOD", "region_lod"},         {"TLG_REGION_FADE", "region_fade"},
         {"TLG_NEAR_CLIP", "near_clip"},           {"TLG_FAR_CLIP", "far_clip"},
         {"TLG_MIP_LOD_BIAS", "mip_lod_bias"},
+        {"TLG_QUALITY_TARGET_FPS", "quality_target_fps"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -421,10 +424,11 @@ void Save() {
                  int(v.graffiti_guide_seen.load()));
     std::fprintf(file,
                  "lod_scale=%.3f\nregion_lod=%.3f\nregion_fade=%.3f\nnear_clip=%.3f\nfar_clip=%.0f\n"
-                 "mip_lod_bias=%.3f\nlod_bands=%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+                 "mip_lod_bias=%.3f\nlod_bands=%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\nquality_target_fps=%d\n",
                  v.lod_scale.load(), v.region_lod.load(), v.region_fade.load(), v.near_clip.load(),
                  v.far_clip.load(), v.mip_lod_bias.load(), v.lod_bands[0].load(), v.lod_bands[1].load(),
-                 v.lod_bands[2].load(), v.lod_bands[3].load(), v.lod_bands[4].load(), v.lod_bands[5].load());
+                 v.lod_bands[2].load(), v.lod_bands[3].load(), v.lod_bands[4].load(), v.lod_bands[5].load(),
+                 v.quality_target_fps.load());
     // Fixes: applied on the next start by the launcher (TLG_BPnn / TLG_<NAME>); only the ones
     // the player or the launcher chose are written.
     for (int n = 0; n < kBackportPrefs; ++n) {

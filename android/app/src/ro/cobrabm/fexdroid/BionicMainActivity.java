@@ -18,7 +18,7 @@ public final class BionicMainActivity extends Activity {
  private BionicPkgInstaller pkg;
  private ProgressBar progress;
  private Dialog setupDialog;
- private static final int SETUP=1, FOLDER=2, PKG=3, UPDATE_PKG=4;
+ private static final int SETUP=1, FOLDER=2, PKG=3, UPDATE_PKG=4, ADDON_PKG=5;
  private int pendingSetup;
  private boolean requestingAccess, waitingForSettings;
 
@@ -55,7 +55,7 @@ public final class BionicMainActivity extends Activity {
   for(int i=0;i<tabs.length;i++){final int index=i;Button b=new Button(this);b.setText(tabs[i]);b.setAllCaps(false);b.setTextSize(12);b.setTextColor(i==page?0xfffff1e9:0xffc7aba8);b.setBackground(background(i==page?0xffad2532:0x00211015,0x00000000));navigation.addView(b,new LinearLayout.LayoutParams(0,dp(62),1));b.setOnClickListener(v->{if(!busy)showPage(index);});}
   ScrollView sc=new ScrollView(this);sc.setFillViewport(true);LinearLayout content=new LinearLayout(this);content.setOrientation(1);content.setPadding(0,0,0,dp(18));sc.addView(content);pages.addView(sc,new LinearLayout.LayoutParams(-1,-1));
   if(page==0){
-   LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  PLAY", "▶  JOGAR"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));
+   LinearLayout game=card(content,AppLanguage.text("GAME", "JOGO"));button(game,AppLanguage.text("▶  PLAY", "▶  JOGAR"),this::launch);button(game,AppLanguage.text("Select game folder", "Selecionar pasta do jogo"),this::choose);button(game,AppLanguage.text("Install game from PKG", "Instalar jogo por PKG"),()->installPkg(false));button(game,AppLanguage.text("Install update from PKG", "Instalar atualização por PKG"),()->installPkg(true));button(game,AppLanguage.text("Install DLC from PKG", "Instalar DLC por PKG"),this::installAddonPkg);
    directStart=BionicStartupSettings.toggle(this);game.addView(directStart);actions.add(directStart);
    LinearLayout video=card(content,AppLanguage.text("DISPLAY AND PERFORMANCE", "EXIBIÇÃO E DESEMPENHO"));button(video,AppLanguage.text("FPS and VSync · ", "FPS e VSync · ")+BionicPerformanceSettings.summary(this),()->BionicPerformanceSettings.show(this,()->showPage(0)));button(video,AppLanguage.text("Video", "Vídeo"),()->BionicVideoSettings.showVideo(this));
    button(video,AppLanguage.text("Readback — smoke and powers", "Readback — fumaça e poderes")+" · "+BionicReadbackSettings.summary(this),()->BionicReadbackSettings.show(this,()->showPage(0)));
@@ -96,8 +96,9 @@ public final class BionicMainActivity extends Activity {
   pendingSetup=next;requestingAccess=true;
   requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,Manifest.permission.WRITE_EXTERNAL_STORAGE},1);
  }
- private void continueSetup(){int next=pendingSetup;pendingSetup=0;if(next==FOLDER)choose();else if(next==PKG)installPkg(false);else if(next==UPDATE_PKG)installPkg(true);else if(next==SETUP)beginSetup(false);}
+ private void continueSetup(){int next=pendingSetup;pendingSetup=0;if(next==FOLDER)choose();else if(next==PKG)installPkg(false);else if(next==UPDATE_PKG)installPkg(true);else if(next==ADDON_PKG)installAddonPkg();else if(next==SETUP)beginSetup(false);}
  private void installPkg(boolean update){if(!access()){requestAccess(update?UPDATE_PKG:PKG);return;}pkg.pick(update);}
+ private void installAddonPkg(){if(!access()){requestAccess(ADDON_PKG);return;}pkg.pickAddon();}
  private void choose(){
   if(!access()){requestAccess(FOLDER);return;}
   if(setupDialog!=null&&setupDialog.isShowing())return;

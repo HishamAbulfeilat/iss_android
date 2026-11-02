@@ -10,7 +10,7 @@ import java.util.Map;
 
 /** Reversible renderer changes, read only when a fresh game process starts. */
 final class BionicRendererSettings {
- static void environment(SharedPreferences p,Map<String,String> env){
+ static void environment(Activity activity,SharedPreferences p,Map<String,String> env){
   // The UI label "Precise 2" intentionally executes the Hybrid V6 path.
   // Never select real Readbacks=2; treat older Precise preferences as Hybrid.
   env.put("TLG_READBACKS", "1");
@@ -46,6 +46,8 @@ final class BionicRendererSettings {
   if(p.getBoolean("renderer_no_msaa",false))env.put("TLG_NO_MSAA","1");
   env.put("TLG_SHARED_HEAPS",p.getBoolean("renderer_shared_heaps",true)?"1":"0");
   env.put("TLG_SHARED_GPU_WRITES",p.getBoolean("renderer_shared_gpu_writes",true)?"1":"0");
+  env.put("TLG_QUALITY_TARGET_FPS",p.getBoolean("renderer_adaptive_quality",false)
+      ?Integer.toString(BionicPerformanceSettings.effective(activity)):"0");
   // Opt-in speed experiments (off by default on Android since GoW3 Bionic): the two-stage draw
   // pipeline (+18-19% measured on PC; Bloodborne-Android keeps it on) and FEX's multiblock JIT.
   if(p.getBoolean("renderer_draw_pipe",false))env.put("TLG_DRAW_PIPE","1");
@@ -64,6 +66,7 @@ final class BionicRendererSettings {
   CheckBox msaa=new CheckBox(a);msaa.setText(AppLanguage.text("Disable multisampling (less memory and GPU work; softer edges)","Desligar multisampling (menos memória e trabalho da GPU; bordas mais suaves)"));msaa.setChecked(p.getBoolean("renderer_no_msaa",false));msaa.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_no_msaa",on).apply());panel.addView(msaa);
   CheckBox shared=new CheckBox(a);shared.setText(AppLanguage.text("Unified memory: the game and the GPU share the geometry heaps (much less RAM; turn off if you see glitches)","Memória unificada: o jogo e a GPU compartilham os heaps de geometria (muito menos RAM; desligue se aparecerem falhas)"));shared.setChecked(p.getBoolean("renderer_shared_heaps",true));shared.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_shared_heaps",on).apply());panel.addView(shared);
   CheckBox sharedWrites=new CheckBox(a);sharedWrites.setText(AppLanguage.text("Unified memory: GPU results too (higher FPS, no waits for GPU data; turn off if you see glitches)","Memória unificada: resultados da GPU também (mais FPS, sem esperar dados da GPU; desligue se aparecerem falhas)"));sharedWrites.setChecked(p.getBoolean("renderer_shared_gpu_writes",true));sharedWrites.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_shared_gpu_writes",on).apply());panel.addView(sharedWrites);
+  CheckBox adaptiveQuality=new CheckBox(a);adaptiveQuality.setText(AppLanguage.text("Adaptive game quality (may lower distant detail when FPS stays below the selected limit)","Qualidade adaptativa (pode reduzir detalhes distantes quando o FPS ficar abaixo do limite selecionado)"));adaptiveQuality.setChecked(p.getBoolean("renderer_adaptive_quality",false));adaptiveQuality.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_adaptive_quality",on).apply());panel.addView(adaptiveQuality);
   CheckBox pipe=new CheckBox(a);pipe.setText(AppLanguage.text("Experimental: two-stage draw pipeline (draws prepared on a second thread; may raise FPS on 8-core phones)","Experimental: pipeline de desenho em dois estágios (desenhos preparados em outra thread; pode aumentar o FPS em celulares de 8 núcleos)"));pipe.setChecked(p.getBoolean("renderer_draw_pipe",false));pipe.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_draw_pipe",on).apply());panel.addView(pipe);
   CheckBox multiblock=new CheckBox(a);multiblock.setText(AppLanguage.text("Experimental: FEX multiblock JIT (larger translated code blocks; faster game code, may crash)","Experimental: JIT multiblock do FEX (blocos traduzidos maiores; código do jogo mais rápido, pode travar)"));multiblock.setChecked(p.getBoolean("renderer_fex_multiblock",false));multiblock.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_fex_multiblock",on).apply());panel.addView(multiblock);
   CheckBox prep=new CheckBox(a);prep.setText(AppLanguage.text("Experimental: draw preparation workers (2 helper threads read the game's GPU commands ahead; use with the draw pipeline)","Experimental: preparadores de desenho (2 threads auxiliares leem antes os comandos de GPU do jogo; use com o pipeline de desenho)"));prep.setChecked(p.getBoolean("renderer_prep_workers",false));prep.setOnCheckedChangeListener((b,on)->p.edit().putBoolean("renderer_prep_workers",on).apply());panel.addView(prep);
