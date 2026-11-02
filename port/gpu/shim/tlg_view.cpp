@@ -4,10 +4,14 @@
 // (LOD table, band distances, default clip planes) equal to the menu's values, so changes are
 // live and survive the game rewriting them (debug LOD modes, script resets).
 #include "tlg_settings.h"
+#include "tlg_quality.h"
 #include "tlg_view.h"
 
 #include "../../src/view_hook.h"
+#include "../tlggpu.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +24,9 @@ unsigned char* image = nullptr;
 // Read by the hook stubs: {LOD_ADJUST weight, 1.0f} and 1 / FADE_DISTANCE scale.
 alignas(16) float region_params[2] = {1.0f, 1.0f};
 alignas(16) float fade_inverse = 1.0f;
+alignas(16) int32_t quality_floor = 0;
+std::atomic<int> automatic_floor{0};
+std::atomic<bool> lower_hook_installed{false};
 
 void Put(uint32_t at, float value) {
     float current;
@@ -42,6 +49,16 @@ void Apply() {
     Put(TLG_VIEW_FAR_CLIP, TlgView::ClampFarClip(s.far_clip));
     region_params[0] = TlgView::ClampRegionLod(s.region_lod);
     fade_inverse = 1.0f / TlgView::ClampRegionFade(s.region_fade);
+    const int floor = std::clamp(automatic_floor.load(std::memory_order_relaxed), 0,
+                                 TlgQuality::MaxLevel);
+    quality_floor = floor;
+    if (floor > 0) {
+        int32_t level;
+        std::memcpy(&level, image + TLG_VIEW_LEVEL, sizeof(level));
+        if (level < floor) {
+            std::memcpy(image + TLG_VIEW_LEVEL, &floor, sizeof(floor));
+        }
+    }
 }
 
 } // namespace
@@ -54,8 +71,14 @@ extern "C" uintptr_t tlg_view_fade_inverse(void) {
     return reinterpret_cast<uintptr_t>(&fade_inverse);
 }
 
-extern "C" void tlg_view_attach(unsigned char* guest_image) {
+extern "C" uintptr_t tlg_view_floor_address(void) {
+    return reinterpret_cast<uintptr_t>(&quality_floor);
+}
+
+extern "C" void tlg_view_attach(unsigned char* guest_image, int floor_hook) {
     image = guest_image;
+    lower_hook_installed = floor_hook != 0;
+    TlgSettings::Get().quality_supported = floor_hook != 0;
     Apply(); // before the game's first frame
     const auto& s = TlgSettings::Get();
     std::printf("Draw distance: LOD scale %.2f, bands %.0f/%.0f/%.0f/%.0f/%.0f/%.0f, region LOD_ADJUST weight %.2f, "
@@ -64,9 +87,27 @@ extern "C" void tlg_view_attach(unsigned char* guest_image) {
                 s.lod_bands[3].load(), s.lod_bands[4].load(), s.lod_bands[5].load(), s.region_lod.load(),
                 s.region_fade.load(), s.near_clip.load(), s.far_clip.load(), s.mip_lod_bias.load());
     TlgSettings::Get().view_supported = true;
+}
+
+extern "C" void tlg_view_start(void) {
+    if (!image) return;
     std::thread([] {
+        TlgQuality::Governor governor;
+        auto governor_at = std::chrono::steady_clock::now();
+        TlgGpuFrameCounters last{};
+        tlggpu_frame_counters(&last);
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            const auto now = std::chrono::steady_clock::now();
+            if (lower_hook_installed && now - governor_at >= std::chrono::seconds(1)) {
+                const double seconds = std::chrono::duration<double>(now - governor_at).count();
+                TlgGpuFrameCounters current{};
+                tlggpu_frame_counters(&current);
+                const double fps = double(current.shown - last.shown) / seconds;
+                last = current;
+                governor_at = now;
+                automatic_floor = governor.Update(TlgSettings::Get().quality_target_fps, fps);
+            }
             Apply();
         }
     }).detach();

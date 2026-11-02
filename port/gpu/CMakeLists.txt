@@ -552,6 +552,8 @@ endif()
 
 add_executable(cheat-hook-test ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_executable(quality-governor-test EXCLUDE_FROM_ALL ../tests/test_quality_governor.cpp)
+target_compile_options(quality-governor-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
 if(ANDROID AND ISS_ANDROID_BIONIC)
     target_compile_definitions(tlggpu PRIVATE VK_USE_PLATFORM_ANDROID_KHR ISS_ANDROID_BIONIC=1)

@@ -4,6 +4,7 @@ The inFAMOUS port must never install God of War III draw-distance hooks on
 CUSA00004; all dynamically generated code executed by FEX must be registered.
 """
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -18,10 +19,10 @@ def function_source(source, start, end):
 
 
 class InFamousFexBootstrapTests(unittest.TestCase):
-    def test_gow3_draw_distance_is_serial_and_version_gated(self):
+    def test_infamous_draw_distance_and_quality_are_version_gated(self):
         source = PROBE.read_text()
         view = function_source(source, "static void install_view_tuning(", "/* G3PATCH2")
-        self.assertIn('strcmp(serial, "CUSA01623") || strcmp(version, "01.02")', view)
+        self.assertIn('strcmp(serial, "CUSA00223") || strcmp(version, "01.07")', view)
         self.assertLess(view.index('if (strcmp(serial'), view.index('tlg_view_signature_match'))
         self.assertIn('install_view_tuning(app0, segments, ns, size)', source)
 
@@ -39,6 +40,12 @@ class InFamousFexBootstrapTests(unittest.TestCase):
                 func = function_source(source, start, end)
                 self.assertIn("guest_cpu_code((uintptr_t)", func)
                 self.assertLess(func.index("protect("), func.index("guest_cpu_code((uintptr_t)"))
+
+    def test_quality_worker_starts_once_after_guest_protections(self):
+        source = PROBE.read_text()
+        starts = [match.start() for match in re.finditer(r"\btlg_view_start\(\);", source)]
+        self.assertEqual(len(starts), 1)
+        self.assertGreater(starts[0], source.index("protect(image + segments[i].address"))
 
     def test_unknown_guest_code_is_not_blindly_marked_executable(self):
         text = CPU.read_text()

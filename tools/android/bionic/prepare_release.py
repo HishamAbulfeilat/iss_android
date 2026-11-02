@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,9 +53,11 @@ def main():
                 raise SystemExit('Packaged runtime does not match the release source/version')
     digest = hashlib.sha256(args.apk.read_bytes()).hexdigest()
     args.apk.with_suffix('.apk.sha256').write_text(f'{digest}  {args.apk.name}\n')
+    repository = os.environ.get('GITHUB_REPOSITORY', 'erickmendes22/iss_android')
+    branch = os.environ.get('GITHUB_REF_NAME', 'experimental-bionic')
     metadata = {'version': version, 'version_code': int(code), 'application_id': package,
-                'source_commit': commit, 'source_repository': 'https://github.com/erickmendes22/iss_android',
-                'source_branch': 'experimental-bionic', 'apk': args.apk.name,
+                'source_commit': commit, 'source_repository': f'https://github.com/{repository}',
+                'source_branch': branch, 'apk': args.apk.name,
                 'apk_sha256': digest, 'runtime_sha256': runtime_hash,
                 'signer_certificate_sha256': pinned, 'min_android_api': 30,
                 'abi': 'arm64-v8a', 'runtime_backend': 'android-bionic'}

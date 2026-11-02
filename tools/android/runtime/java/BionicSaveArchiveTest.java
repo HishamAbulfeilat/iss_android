@@ -93,6 +93,30 @@ public class BionicSaveArchiveTest {
    b.putInt(32,Integer.MAX_VALUE);put(temp,"sce_sys/param.sfo",sfo);
    try{BionicSaveArchive.readTitle(temp);throw new AssertionError();}catch(IOException expected){}break;
   }
+  case "sfo-strings": {
+   String[] keys={"TITLE_ID","CATEGORY","CONTENT_ID"};
+   String[] values={"CUSA00223","ac","UP9000-CUSA00223_00-ISS_DLC"};
+   byte[] sfo=new byte[512];ByteBuffer b=ByteBuffer.wrap(sfo).order(ByteOrder.LITTLE_ENDIAN);
+   b.putInt(0,0x46535000);b.putInt(8,68);b.putInt(12,128);b.putInt(16,keys.length);
+   int keyOffset=0,valueOffset=0;
+   for(int i=0;i<keys.length;i++){
+    byte[] key=(keys[i]+"\0").getBytes("UTF-8"),value=(values[i]+"\0").getBytes("UTF-8");
+    int entry=20+i*16;b.putShort(entry,(short)keyOffset);b.putShort(entry+2,(short)0x0204);
+    b.putInt(entry+4,value.length);b.putInt(entry+8,value.length);b.putInt(entry+12,valueOffset);
+    System.arraycopy(key,0,sfo,68+keyOffset,key.length);System.arraycopy(value,0,sfo,128+valueOffset,value.length);
+    keyOffset+=key.length;valueOffset+=value.length;
+   }
+   File metadata=new File(temp,"param.sfo");Files.write(metadata.toPath(),sfo);
+   assert BionicSaveArchive.readSfoString(metadata,"TITLE_ID").equals(values[0]);
+   assert BionicSaveArchive.readSfoString(metadata,"CATEGORY").equals(values[1]);
+   assert BionicSaveArchive.readSfoString(metadata,"CONTENT_ID").equals(values[2]);
+   try{BionicSaveArchive.readSfoString(metadata,"MISSING");throw new AssertionError();}
+   catch(IOException expected){}
+   b.putInt(20+2*16+12,Integer.MAX_VALUE);Files.write(metadata.toPath(),sfo);
+   try{BionicSaveArchive.readSfoString(metadata,"CONTENT_ID");throw new AssertionError();}
+   catch(IOException expected){}
+   break;
+  }
   case "recovery": {
    File journal=new File(temp,".save-import-"+UUID.randomUUID());
    put(journal,"previous/1/"+TITLE+"/infamousssAuto0/data","original");

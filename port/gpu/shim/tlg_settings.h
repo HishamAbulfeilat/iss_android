@@ -149,6 +149,8 @@ struct Values {
     std::atomic<float> near_clip{10.0f}, far_clip{1.0e7f};
     std::atomic<float> lod_bands[6]{400.0f, 750.0f, 1500.0f, 3500.0f, 6000.0f, 15000.0f};
     std::atomic<bool> view_supported{false};
+    std::atomic<int> quality_target_fps{0};
+    std::atomic<bool> quality_supported{false};
     /// Extra texture LOD bias of the game's draws (vk_rasterizer.cpp), any game.
     std::atomic<float> mip_lod_bias{0.0f};
 

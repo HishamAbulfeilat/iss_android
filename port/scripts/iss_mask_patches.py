@@ -95,14 +95,27 @@ def compile_masks(xml, names, version, linked_image, eboot_elf, source_eboot=Non
         executable_regions=executable(eboot_elf)
         writes=[]
         for name in names:
+            metadata=found[name]
+            lines=list(metadata.iter('Line'))
+            if any(line.get('Type')=='bytes' for line in lines):
+                allowed=metadata.get('AllowedEbootSHA256')
+                if not allowed or not source_eboot:
+                    raise ValueError(f'{name}: fixed-address patch requires a verified source eboot')
+                if hashlib.sha256(Path(source_eboot).read_bytes()).hexdigest()!=allowed:
+                    raise ValueError(f'{name}: fixed-address patch source eboot SHA-256 mismatch')
             pending=[]
-            for line in found[name].iter('Line'):
-                if line.get('Type')!='mask': raise ValueError(f'{name}: unexpected patch type')
-                hits=find_mask(blob,base,size,executable_regions,mask_tokens(line.get('Address','')))
-                if len(hits)!=1:
-                    raise ValueError(f'{name}: signature has {len(hits)} matches, expected 1')
-                target=hits.pop()+int(line.get('Offset','0'),0)
-                payload=bytes.fromhex(line.get('Value','').replace(' ',''))
+            for line in lines:
+                if line.get('Type')=='mask':
+                    hits=find_mask(blob,base,size,executable_regions,mask_tokens(line.get('Address','')))
+                    if len(hits)!=1:
+                        raise ValueError(f'{name}: signature has {len(hits)} matches, expected 1')
+                    target=hits.pop()+int(line.get('Offset','0'),0)
+                    payload=bytes.fromhex(line.get('Value','').replace(' ',''))
+                elif line.get('Type')=='bytes':
+                    target=int(line.get('Address',''),0)-0x400000
+                    payload=bytes.fromhex(line.get('Value','').replace(' ',''))
+                else:
+                    raise ValueError(f'{name}: unexpected patch type')
                 if not payload or not any(a<=target and target+len(payload)<=b for a,b in executable_regions):
                     raise ValueError(f'{name}: patch outside executable region')
                 pending.append((target,payload))

@@ -98,6 +98,7 @@ void runtime_file_configure(const char *app0,const char *user) {
         char guest[32]; snprintf(guest,sizeof(guest),"/%s",writable[i]);
         runtime_file_mount(guest,path);
     }
+    runtime_infamous_configure(app0);
 }
 /* Resolve a guest path to a host path; returns 0 or a host errno. */
 static int translate(const char *guest,char *out,size_t size) {
@@ -709,4 +710,3 @@ void runtime_file_report(void) {
     printf("Runtime: files opened=%zu, reads=%zu (%llu bytes), writes=%zu, not found=%zu\n",
            opens,reads,(unsigned long long)bytes_read,writes,missing);
 }
-

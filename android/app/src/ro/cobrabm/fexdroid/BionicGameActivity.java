@@ -122,7 +122,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   java.util.ArrayList<String> patches=new java.util.ArrayList<>();
   android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
   e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
-  BionicRendererSettings.environment(prefs,e);
+  BionicRendererSettings.environment(this,prefs,e);
   // The texture collector follows the driver's live budget, as upstream. A forced 45%-of-RAM budget
   // (v0.2.1-v0.2.3) evicted nothing (buffers, not textures, fill memory) and kept it in pressure mode.
   {android.app.ActivityManager.MemoryInfo m=memory();if(m!=null)record("Memory: "+(m.totalMem>>20)+" MiB RAM");}
@@ -155,6 +155,7 @@ public final class BionicGameActivity extends Activity implements SurfaceHolder.
   if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
   if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
   if(prefs.getBoolean("patch_shadows",false))patches.add("Disable shadow maps");
+  if(prefs.getBoolean("patch_paper_trail_offline",false))patches.add("Paper Trail offline");
 
   e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
   e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");

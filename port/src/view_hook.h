@@ -18,11 +18,23 @@
                                         delta, float max distance, float, int */
 #define TLG_VIEW_LOD_ROWS 21u
 #define TLG_VIEW_LOD_STRIDE 0x14u
+#define TLG_VIEW_STATE 0xf1bcd0u
+#define TLG_VIEW_LEVEL 0xf39978u
 #define TLG_VIEW_BANDS 0xdfaa34u      /* 6 floats: LOD band distances (a 7th, FLT_MAX, follows) */
 #define TLG_VIEW_BAND_COUNT 6u
 #define TLG_VIEW_NEAR_CLIP 0xdf9e64u  /* float 10.0: new cameras' near plane, the regions' default */
 #define TLG_VIEW_FAR_CLIP 0xdf9e68u   /* float 1e7: new cameras' far plane */
 #define TLG_VIEW_SITE_LENGTH 8u
+
+#define TLG_VIEW_LOWER_SITE 0x1f1b68u
+#define TLG_VIEW_LOWER_LENGTH 11u
+static const unsigned char tlg_view_lower_code[TLG_VIEW_LOWER_LENGTH] = {
+    0x41, 0x8d, 0x50, 0xff, 0x41, 0x89, 0x95, 0xa8, 0xdc, 0x01, 0x00};
+
+static inline int tlg_view_lower_signature(const unsigned char *image, uint64_t size) {
+    return size > TLG_VIEW_LOWER_SITE + TLG_VIEW_LOWER_LENGTH &&
+           !memcmp(image + TLG_VIEW_LOWER_SITE, tlg_view_lower_code, TLG_VIEW_LOWER_LENGTH);
+}
 
 static const float tlg_view_lod_original[TLG_VIEW_LOD_ROWS] = {
     1.0f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.5f, 0.4f, 0.4f, 0.3f, 0.2f,
@@ -105,6 +117,23 @@ static inline unsigned tlg_view_build_fade_stub(unsigned char *out, uintptr_t in
     memcpy(out + n, head, sizeof(head)); n += sizeof(head);
     memcpy(out + n, &inverse_scale, 8); n += 8;
     memcpy(out + n, tail, sizeof(tail)); n += sizeof(tail);
+    return n + tlg_view_jump_back(out + n, resume);
+}
+
+static inline unsigned tlg_view_build_lower_stub(unsigned char *out, uintptr_t floor_address, uintptr_t resume) {
+    static const unsigned char head[] = {
+        0x48, 0x8d, 0xa4, 0x24, 0x80, 0xff, 0xff, 0xff,
+        0x50, 0x48, 0xb8};
+    static const unsigned char tail[] = {
+        0x8b, 0x00, 0x41, 0x8d, 0x50, 0xff, 0x39, 0xc2, 0x0f, 0x4c, 0xd0, 0x58,
+        0x48, 0x8d, 0xa4, 0x24, 0x80, 0, 0, 0, 0x41, 0x89, 0x95, 0xa8, 0xdc, 0x01, 0x00};
+    unsigned n = 0;
+    memcpy(out + n, head, sizeof(head));
+    n += sizeof(head);
+    memcpy(out + n, &floor_address, 8);
+    n += 8;
+    memcpy(out + n, tail, sizeof(tail));
+    n += sizeof(tail);
     return n + tlg_view_jump_back(out + n, resume);
 }
 #endif
