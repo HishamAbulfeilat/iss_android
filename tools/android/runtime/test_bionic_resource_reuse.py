@@ -35,6 +35,79 @@ class ResourceReuseTests(unittest.TestCase):
                            check=True, capture_output=True, text=True)
             subprocess.run([str(binary)], check=True, capture_output=True, text=True)
 
+    def test_staging_pressure_trims_only_completed_unheld_idle_allocations(self):
+        source = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp").read_text()
+        bodies = (method(source, "void StagingBufferPool::TrimRing(") +
+                  method(source, "void StagingBufferPool::TrimLarge("))
+        self.run_cpp(r'''
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <memory>
+#include <vector>
+using u64 = uint64_t;
+constexpr u64 RING_IDLE_FRAMES=600, LARGE_IDLE_FRAMES=300;
+struct Buffer {
+    u64 tick;
+    u64 LastTick() const { return tick; }
+};
+struct StagingBufferPool {
+    struct Block { std::unique_ptr<Buffer> buffer; u64 last_used_frame; };
+    struct Ring { std::vector<Block> blocks; size_t current=0; };
+    struct LargeBuffer { std::unique_ptr<Buffer> buffer; u64 tick,last_used_frame; bool held; };
+    u64 frame=10,keep_blocks=1,completed=5;
+    bool memory_pressure=false;
+    bool GpuTickComplete(u64 tick,bool&) { return tick<=completed; }
+    void TrimRing(Ring&,size_t&,bool&);
+    void TrimLarge(std::vector<LargeBuffer>&,size_t&,bool&);
+};
+''' + bodies + r'''
+int main() {
+    StagingBufferPool pool;
+    std::vector<StagingBufferPool::LargeBuffer> cache;
+    const auto add=[&](u64 tick,u64 frame,bool held) {
+        cache.push_back({std::make_unique<Buffer>(Buffer{tick}),tick,frame,held});
+    };
+    add(5,9,false); // completed, idle for one frame
+    add(6,9,false); // in flight
+    add(5,9,true);  // readback still held
+    add(5,10,false); // used in current frame
+    size_t budget=4;
+    bool refreshed=false;
+    pool.TrimLarge(cache,budget,refreshed);
+    assert(cache.size()==4 && budget==4); // normal retention unchanged
+    pool.memory_pressure=true;
+    pool.TrimLarge(cache,budget,refreshed);
+    assert(cache.size()==3 && budget==3);
+    assert(cache[0].tick==6 && cache[1].held && cache[2].last_used_frame==10);
+    add(5,9,false);
+    budget=0;
+    pool.TrimLarge(cache,budget,refreshed);
+    assert(cache.size()==4); // deletion limit still enforced
+
+    StagingBufferPool::Ring ring;
+    const auto block=[&](u64 tick,u64 frame) {
+        ring.blocks.push_back({std::make_unique<Buffer>(Buffer{tick}),frame});
+    };
+    block(5,9); block(6,9); block(5,10); block(5,9);
+    ring.current=3;
+    budget=1;
+    pool.TrimRing(ring,budget,refreshed);
+    assert(ring.blocks.size()==3 && budget==0 && ring.current==0);
+    budget=4;
+    pool.TrimRing(ring,budget,refreshed);
+    assert(ring.blocks.size()==2); // in-flight and current-frame blocks retained
+    ring.blocks.clear();
+    block(5,9);
+    pool.TrimRing(ring,budget,refreshed);
+    assert(ring.blocks.size()==1); // warm ring floor retained
+    pool.memory_pressure=false;
+    block(5,9);
+    pool.TrimRing(ring,budget,refreshed);
+    assert(ring.blocks.size()==2); // normal ring retention unchanged
+}
+''')
+
     def test_pool_reuses_refreshed_ticks_without_reusing_inflight_resources(self):
         source = (ROOT / "port/gpu/shadps4/video_core/renderer_vulkan/vk_resource_pool.cpp").read_text()
         body = method(source, "std::size_t ResourcePool::CommitResource()")

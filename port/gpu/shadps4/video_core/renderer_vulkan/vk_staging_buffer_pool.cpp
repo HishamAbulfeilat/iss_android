@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "tlg_toggles.h"
+#include "tlg_android_memory.h"
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -213,11 +215,14 @@ void StagingBufferPool::TickFrame() {
     // sparse memory cache: do not copy that GC or its game-specific patches.
     // Instead, bound the destructors of idle Vulkan staging allocations so
     // hundreds of 16-MiB rings / large uploads cannot all be destroyed in a
-    // single frame. Keep their 3000-frame retention and GPU completion checks.
+    // single frame. GPU completion and held readbacks remain protected under pressure.
 #if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
     size_t remaining_deletions = 4; // 4 total, not 4 for each memory pool
 #else
     size_t remaining_deletions = std::numeric_limits<size_t>::max();
+#endif
+#ifdef __ANDROID__
+    memory_pressure = TlgAndroidMemory::Current().UnderPressure(1500_MB);
 #endif
     bool refreshed = false; // Shared across all ring and dedicated pools this frame.
     for (Ring& ring : rings) {
@@ -226,6 +231,31 @@ void StagingBufferPool::TickFrame() {
     for (auto& cache : large_caches) {
         TrimLarge(cache, remaining_deletions, refreshed);
     }
+#ifdef __ANDROID__
+    if (memory_pressure) {
+        static auto last_report = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_report >= std::chrono::seconds(5)) {
+            u64 ring_bytes = 0, large_bytes = 0, held_bytes = 0;
+            for (const auto& ring : rings) {
+                for (const auto& block : ring.blocks) {
+                    ring_bytes += block.buffer->SizeBytes();
+                }
+            }
+            for (const auto& cache : large_caches) {
+                for (const auto& entry : cache) {
+                    large_bytes += entry.buffer->SizeBytes();
+                    if (entry.held) held_bytes += entry.buffer->SizeBytes();
+                }
+            }
+            std::printf("GPU: staging pressure: ring %llu, dedicated %llu, held %llu MiB\n",
+                        static_cast<unsigned long long>(ring_bytes >> 20),
+                        static_cast<unsigned long long>(large_bytes >> 20),
+                        static_cast<unsigned long long>(held_bytes >> 20));
+            last_report = now;
+        }
+    }
+#endif
     PublishStats();
 }
 
@@ -234,7 +264,8 @@ void StagingBufferPool::TrimRing(Ring& ring, size_t& remaining_deletions, bool& 
     for (size_t i = blocks.size(); i-- > 0;) {
         if (remaining_deletions == 0) break;
         const Block& block = blocks[i];
-        if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RING_IDLE_FRAMES ||
+        if (blocks.size() <= keep_blocks ||
+            frame - block.last_used_frame < (memory_pressure ? 1 : RING_IDLE_FRAMES) ||
             !GpuTickComplete(block.buffer->LastTick(), refreshed)) {
             continue;
         }
@@ -256,7 +287,7 @@ void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache,
     if (remaining_deletions == 0) return;
     std::erase_if(cache, [this, &remaining_deletions, &refreshed](const LargeBuffer& entry) {
         if (remaining_deletions == 0 || entry.held ||
-            frame - entry.last_used_frame < LARGE_IDLE_FRAMES ||
+            frame - entry.last_used_frame < (memory_pressure ? 1 : LARGE_IDLE_FRAMES) ||
             !GpuTickComplete(entry.tick, refreshed)) {
             return false;
         }

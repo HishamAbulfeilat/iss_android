@@ -89,6 +89,7 @@ private:
     u64 keep_blocks = 0; ///< tlg: ring blocks never trimmed
     std::array<std::vector<LargeBuffer>, NUM_TYPES> large_caches;
     u64 frame = 0;
+    bool memory_pressure = false;
 };
 
 } // namespace Vulkan
