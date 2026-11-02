@@ -84,6 +84,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tools/android/runtime -p 'test_*.py' -v
           python3 -m compileall -q tools/android/bionic
+          bash -n tools/android/bionic/build_bloodframe.sh
       - uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: ci/environment.yml
@@ -125,9 +126,11 @@ jobs:
         run: |
           VULKAN_HEADERS_INCLUDE="$ISS_BIONIC_HEADERS/include" \
             python3 -m unittest discover -s tools/android/runtime -p 'test_bionic_parallel_recording.py' -v
-      - name: Build direct PKG extractor
+      - name: Build Bloodframe and direct PKG extractor
         shell: bash -el {0}
-        run: bash tools/android/bionic/build_pkg.sh
+        run: |
+          bash tools/android/bionic/build_bloodframe.sh
+          bash tools/android/bionic/build_pkg.sh
       - name: Stage pinned Turnip Gen8 V38 Patched and v27 R1
         shell: bash -el {0}
         run: |

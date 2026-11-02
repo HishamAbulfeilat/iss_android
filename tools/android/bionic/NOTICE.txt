@@ -34,9 +34,10 @@ mentioned in the shared legacy THIRD_PARTY_LICENSES.txt.
 
 No Sony game files, firmware, PKG, update, save or Lossless.dll are included.
 
-Optional Bloodframe frame generation: ducvd89/bloodframe@c29027555cfa8c9fc73c20f03816230becb9f469 (MIT),
+Bloodframe frame generation: ducvd89/bloodframe@c29027555cfa8c9fc73c20f03816230becb9f469 (MIT),
 based on GameNative lsfg-vk Android and PancakeTAS lsfg-vk. Source: https://github.com/ducvd89/bloodframe
-When included, see bloodframe license files and bloodframe-source.txt in this directory.
+The build prefers this pinned source and falls back to the verified v0.4.6 library if its DXBC submodule
+is unavailable. See the included Bloodframe license files and bloodframe-source.txt.
 Host synchronization patch and launcher/menu/HUD adaptations:
 Daedalus GoW3@9b2f68eb3cda4ae7960c07181083650cc155cc6a and Bloodborne-Android (GPL-2.0).
 Launcher icon: inFAMOUS Second Son promotional artwork, Sony Interactive Entertainment/Sucker Punch.

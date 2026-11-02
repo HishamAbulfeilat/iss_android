@@ -18,7 +18,8 @@ final class BionicRuntimeInstaller {
  private static boolean complete(File root){
   String[] required={"issport/arm64/bin/iss-probe","issport/arm64/bin/kgsl-chip-id","issport/arm64/bin/orbis-pkg-util",
    "issport/arm64/lib/libisscpu.so","issport/arm64/lib/libtlggpu.so",
-   "issport/arm64/lib/libc++_shared.so","issport/arm64/python/bin/python3.13",
+   "issport/arm64/lib/libc++_shared.so","issport/arm64/lib/libbloodframe.so",
+   "issport/arm64/python/bin/python3.13",
    "issport/arm64/drivers/gen8/libvulkan_freedreno.so",
    "issport/arm64/drivers/gen7/libvulkan_freedreno.so",
    "issport/run-bionic.sh","issport/launch.py",

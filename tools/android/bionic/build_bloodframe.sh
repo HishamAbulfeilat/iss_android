@@ -25,16 +25,32 @@ build=$out/bloodframe-build
 [[ -f $ndk/build/cmake/android.toolchain.cmake ]] || { echo "No NDK: $ndk (tools/android/build_bionic_deps.sh)" >&2; exit 1; }
 if [[ ! -d $src/.git ]]; then
     mkdir -p "$root/src"
-    git clone -q "$BLOODFRAME_REPO" "$src" ||
-        { echo "Cannot clone $BLOODFRAME_REPO (network?)" >&2; exit 1; }
+    if ! GIT_TERMINAL_PROMPT=0 git clone -q "$BLOODFRAME_REPO" "$src"; then
+        echo "Cannot fetch Bloodframe source; using the checksum-pinned release library." >&2
+        python3 tools/android/bionic/fetch_bloodframe_prebuilt.py --output "$out"
+        exit 0
+    fi
 fi
-git -C "$src" cat-file -e "$BLOODFRAME_COMMIT^{commit}" 2>/dev/null ||
-    git -C "$src" fetch -q origin main
-git -C "$src" -c advice.detachedHead=false checkout -q "$BLOODFRAME_COMMIT"
+if ! git -C "$src" cat-file -e "$BLOODFRAME_COMMIT^{commit}" 2>/dev/null &&
+   ! GIT_TERMINAL_PROMPT=0 git -C "$src" fetch -q origin main; then
+    echo "Cannot fetch pinned Bloodframe source; using the checksum-pinned release library." >&2
+    python3 tools/android/bionic/fetch_bloodframe_prebuilt.py --output "$out"
+    exit 0
+fi
+if ! git -C "$src" -c advice.detachedHead=false checkout -q "$BLOODFRAME_COMMIT"; then
+    echo "Pinned Bloodframe source is unavailable; using the checksum-pinned release library." >&2
+    python3 tools/android/bionic/fetch_bloodframe_prebuilt.py --output "$out"
+    exit 0
+fi
 [[ $(git -C "$src" rev-parse HEAD) == "$BLOODFRAME_COMMIT" ]] ||
     { echo "$src is not at $BLOODFRAME_COMMIT" >&2; exit 1; }
 cmp -s "$src/android/bb_lsfg.h" tools/android/lsfg/bb_lsfg.h ||
     { echo "tools/android/lsfg/bb_lsfg.h differs from $src/android/bb_lsfg.h (the pinned commit)" >&2; exit 1; }
+if ! GIT_TERMINAL_PROMPT=0 git -C "$src" submodule update -q --init -- thirdparty/dxbc; then
+    echo "Pinned DXBC source is unavailable; using the checksum-pinned Bloodframe library." >&2
+    python3 tools/android/bionic/fetch_bloodframe_prebuilt.py --output "$out"
+    exit 0
+fi
 python3 tools/android/bionic/patch_bloodframe_host_sync.py "$src/android/bb_lsfg.cpp"
 # A build tree made from another source (an older layout) is not reused.
 if [[ -f $build/CMakeCache.txt ]] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$src" "$build/CMakeCache.txt"; then
