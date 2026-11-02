@@ -51,6 +51,7 @@ const u64 RING_IDLE_FRAMES = EnvOr("TLG_STAGING_IDLE_FRAMES", DEFAULT_RING_IDLE_
 const u64 LARGE_IDLE_FRAMES =
     std::min(EnvOr("TLG_STAGING_IDLE_FRAMES", DEFAULT_LARGE_IDLE_FRAMES), RING_IDLE_FRAMES);
 constexpr u64 PREWARM_BLOCKS = 8;
+constexpr u64 ANDROID_PREWARM_BLOCKS = 2;
 constexpr u64 LARGE_MIN_GRANULARITY = 64_KB;
 constexpr u64 BLOCK_SIZE = 16_MB;
 
@@ -70,7 +71,11 @@ StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& sched
                 static_cast<unsigned long long>(LARGE_IDLE_FRAMES),
                 static_cast<unsigned long long>(RING_IDLE_FRAMES));
     Ring& ring = rings[u32(MemoryType::HostUncached)];
-    for (u64 i = 0; i < PREWARM_BLOCKS; ++i) {
+    u64 prewarm_blocks = PREWARM_BLOCKS;
+#ifdef __ANDROID__
+    prewarm_blocks = ANDROID_PREWARM_BLOCKS;
+#endif
+    for (u64 i = 0; i < prewarm_blocks; ++i) {
         auto& block = ring.blocks.emplace_back(Block{
             .buffer = std::make_unique<VideoCore::StreamBuffer>(
                 instance, scheduler, MemoryType::HostUncached, BLOCK_SIZE),
@@ -264,7 +269,8 @@ void StagingBufferPool::TrimRing(Ring& ring, size_t& remaining_deletions, bool& 
     for (size_t i = blocks.size(); i-- > 0;) {
         if (remaining_deletions == 0) break;
         const Block& block = blocks[i];
-        if (blocks.size() <= keep_blocks ||
+        const u64 minimum_blocks = memory_pressure ? std::min<u64>(keep_blocks, 1) : keep_blocks;
+        if (blocks.size() <= minimum_blocks ||
             frame - block.last_used_frame < (memory_pressure ? 1 : RING_IDLE_FRAMES) ||
             !GpuTickComplete(block.buffer->LastTick(), refreshed)) {
             continue;

@@ -55,7 +55,7 @@ struct StagingBufferPool {
     struct Block { std::unique_ptr<Buffer> buffer; u64 last_used_frame; };
     struct Ring { std::vector<Block> blocks; size_t current=0; };
     struct LargeBuffer { std::unique_ptr<Buffer> buffer; u64 tick,last_used_frame; bool held; };
-    u64 frame=10,keep_blocks=1,completed=5;
+    u64 frame=10,keep_blocks=8,completed=5;
     bool memory_pressure=false;
     bool GpuTickComplete(u64 tick,bool&) { return tick<=completed; }
     void TrimRing(Ring&,size_t&,bool&);
@@ -98,13 +98,19 @@ int main() {
     pool.TrimRing(ring,budget,refreshed);
     assert(ring.blocks.size()==2); // in-flight and current-frame blocks retained
     ring.blocks.clear();
-    block(5,9);
-    pool.TrimRing(ring,budget,refreshed);
-    assert(ring.blocks.size()==1); // warm ring floor retained
+    for (int i=0;i<8;++i) block(5,9);
     pool.memory_pressure=false;
+    pool.TrimRing(ring,budget,refreshed);
+    assert(ring.blocks.size()==8); // normal warm ring floor retained
     block(5,9);
     pool.TrimRing(ring,budget,refreshed);
-    assert(ring.blocks.size()==2); // normal ring retention unchanged
+    assert(ring.blocks.size()==9); // normal ring retention unchanged
+    pool.memory_pressure=true;
+    while (ring.blocks.size()>1) {
+        budget=4;
+        pool.TrimRing(ring,budget,refreshed);
+    }
+    assert(ring.blocks.size()==1); // pressured rings retain only one reusable block
 }
 ''')
 
