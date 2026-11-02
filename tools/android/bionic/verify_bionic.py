@@ -14,12 +14,15 @@ def main():
     readelf = args.ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
     required = [
         args.root / "bin/iss-probe", args.root / "bin/kgsl-chip-id",
-        args.root / "bin/orbis-pkg-util", args.root / "lib/libbloodframe.so",
+        args.root / "bin/orbis-pkg-util",
         args.root / "lib/libisscpu.so", args.root / "lib/libtlggpu.so",
         args.root / "lib/libisspresent.so", args.root / "lib/libc++_shared.so",
         args.root / "drivers/gen8/libvulkan_freedreno.so",
         args.root / "drivers/gen7/libvulkan_freedreno.so",
     ]
+    optional_bloodframe = args.root / "lib/libbloodframe.so"
+    if optional_bloodframe.exists():
+        required.append(optional_bloodframe)
     if args.complete:
         required += [
             args.root / "python/bin/python3.13",

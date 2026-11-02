@@ -24,7 +24,7 @@ def main():
         runtime = base / "arm64"
         for kind, names in {
             "bin": ("iss-probe", "kgsl-chip-id", "orbis-pkg-util"),
-            "lib": ("libisscpu.so", "libtlggpu.so", "libc++_shared.so", "libbloodframe.so"),
+            "lib": ("libisscpu.so", "libtlggpu.so", "libc++_shared.so"),
         }.items():
             directory = runtime / kind
             directory.mkdir(parents=True)
@@ -33,6 +33,9 @@ def main():
                 if not origin.is_file() or not origin.stat().st_size:
                     raise RuntimeError(f"Missing Bionic binary: {origin}")
                 shutil.copy2(origin, directory / name)
+        optional_bloodframe = SRC / "lib/libbloodframe.so"
+        if optional_bloodframe.is_file() and optional_bloodframe.stat().st_size:
+            shutil.copy2(optional_bloodframe, runtime / "lib/libbloodframe.so")
         shutil.copytree(SRC / "drivers", runtime / "drivers")
         python = runtime / "python"
         (python / "bin").mkdir(parents=True)

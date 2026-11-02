@@ -7,3 +7,5 @@
 - Added installation and runtime discovery for matching CUSA00223 add-on PKGs. Packages are staged and checked against their header and `param.sfo` metadata before installation; existing add-on folders are not replaced.
 
 These features have focused automated coverage, but have not yet been validated in gameplay on a Galaxy S25 Ultra. Performance, graphics, thermals, memory use, and DLC behavior should be tested on-device. Adaptive quality and Paper Trail patching are opt-in.
+
+Lossless Scaling frame generation is not included in this test build because its pinned upstream dependency is unavailable. Enabling it will safely fall back to normal presentation; this does not affect the native renderer or adaptive quality.
