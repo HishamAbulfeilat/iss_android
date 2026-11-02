@@ -1,16 +1,8 @@
-# Builds the Linux and Windows packages on every push to main and publishes them as a new
-# release tagged vYYYY.MM.DD-<commit>, marked latest. Every release is kept as version history
-# (the old "nightly" release is removed). A pushed tag v* publishes that tag the same way.
-# No game or console file is ever built in or uploaded.
-name: Build
+# Inherited desktop packaging, retained for reference and manual use only.
+# This fork's automatic builds and releases target Android via fork-apk-release.yml.
+name: Legacy desktop packaging (manual only)
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  # Pull requests to main build both packages (artifacts only): the Release is left untouched.
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:

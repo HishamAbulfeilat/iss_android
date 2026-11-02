@@ -4,6 +4,9 @@ Android ARM64 port of **inFAMOUS Second Son**, based on [HayatoG/iss_pc](https:/
 
 Fork and Android adaptations: **[erickmendes22](https://github.com/erickmendes22) / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
 
+This fork targets Android only. Automatic builds on `main` produce the Bionic ARM64 APK;
+the inherited desktop packaging workflow is manual-only and is not an Android release check.
+
 ## Links
 
 - [Downloads and source](https://github.com/erickmendes22/iss_android)
