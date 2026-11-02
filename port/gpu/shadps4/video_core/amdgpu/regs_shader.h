@@ -240,14 +240,16 @@ struct ComputeProgram {
 // translated from garbage.
 inline constexpr u32 BinaryInfoSearchLimit = 0x4000; // dwords (64 KiB)
 
-static constexpr bool BinaryInfoMatchesCode(const u32* code, const BinaryInfo* info) {
+// These lookups inspect runtime shader addresses (and use pointer reinterpretation).
+// They cannot be constexpr under Clang's ARM64 C++23 compiler.
+static inline bool BinaryInfoMatchesCode(const u32* code, const BinaryInfo* info) {
     const auto offset_dwords =
         static_cast<u64>(reinterpret_cast<const u32*>(info) - code);
     return info->Valid() && info->length != 0 && info->length % sizeof(u32) == 0 &&
            info->length / sizeof(u32) <= offset_dwords && offset_dwords < BinaryInfoSearchLimit;
 }
 
-static constexpr const BinaryInfo* FindBinaryInfo(const u32* code) {
+static inline const BinaryInfo* FindBinaryInfo(const u32* code) {
     constexpr u32 token_mov_vcchi = 0xBEEB03FF;
     if (code[0] == token_mov_vcchi && code[1] < BinaryInfoSearchLimit / 2) {
         const auto* info = std::bit_cast<const BinaryInfo*>(code + (code[1] + 1) * 2);
@@ -266,7 +268,7 @@ static constexpr const BinaryInfo* FindBinaryInfo(const u32* code) {
     return nullptr;
 }
 
-static constexpr const BinaryInfo& SearchBinaryInfo(const u32* code) {
+static inline const BinaryInfo& SearchBinaryInfo(const u32* code) {
     const BinaryInfo* info = FindBinaryInfo(code);
     if (!info) {
         UNREACHABLE_MSG("Shader binary info not found.");

@@ -1,3 +1,6 @@
+#ifdef __ANDROID__
+#include "video_core/renderer_vulkan/vk_swapchain_ahb.h"
+#else
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -74,6 +77,16 @@ public:
         return extent;
     }
 
+    // Desktop VkSwapchainKHR: keep WSI layout and Vulkan-owned queue family.
+    // Android AHardwareBuffer uses GENERAL and FOREIGN_EXT instead.
+    vk::ImageLayout PresentLayout() const { return vk::ImageLayout::ePresentSrcKHR; }
+    std::pair<u32, u32> AcquireQueues() const {
+        return {VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+    }
+    std::pair<u32, u32> ReleaseQueues() const {
+        return {VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED};
+    }
+
     [[nodiscard]] vk::Semaphore GetImageAcquiredSemaphore() const {
         return image_acquired[frame_index];
     }
@@ -142,3 +155,5 @@ private:
 };
 
 } // namespace Vulkan
+
+#endif

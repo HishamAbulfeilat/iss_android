@@ -69,11 +69,12 @@ int main() {
         cmd.pipelineBarrier2({.memoryBarrierCount=1,.pMemoryBarriers=&b},d);
     };
     const auto run=[&](const char* label,float depth,float translation,float rotation,
-                       float object_depth,u32 mode,float expected,bool jitter=false) {
+                       float object_depth,u32 mode,float expected,bool jitter=false,
+                       float guest_jitter_delta=0.f,float raw_object_motion=2.f) {
         auto* pixels=static_cast<float*>(ai.pMappedData);
         for (u32 p=0;p<N;++p) {
             pixels[p*4]=depth;
-            pixels[N*4+p*4]=2.f; pixels[N*4+p*4+1]=0.f;
+            pixels[N*4+p*4]=raw_object_motion; pixels[N*4+p*4+1]=0.f;
             pixels[N*4+p*4+2]=1.f; pixels[N*4+p*4+3]=object_depth;
         }
         const auto cmd=scheduler.CommandBuffer();
@@ -100,8 +101,10 @@ int main() {
                 .pImageInfo=&infos[i]};
         }
         Params params{{1,0,rotation,translation,0,1,0,0,0,0,1,0},
-            {1,1,1,-0.05f},{1,1,1,-0.05f},{W,H},
-            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{0,0},mode};
+            mode >= 3 ? std::array<float,4>{0,0,0,1} :
+                        std::array<float,4>{1,1,1,-0.05f},
+            {1,1,1,-0.05f},{W,H},
+            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{guest_jitter_delta,0},mode};
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute,*pipeline,d);
         cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,*layout,0,writes,d);
         cmd.pushConstants(*layout,vk::ShaderStageFlagBits::eCompute,0,sizeof(params),&params,d);
@@ -130,6 +133,33 @@ int main() {
     run("sky ignores translation",1,1000,0,0,0,0);
     run("static camera cancels jitter",distant,0,0,0,0,0,true);
     run("matching object vector",distant,0,0,distant,1,2);
+    // On-device captures: the per-object clip motion is OPPOSITE the
+    // native camera push delta. The old subtract doubled an alternating
+    // +/-0.5-pixel static camera jitter into +/-1-pixel ghost motion.
+    run("ISS removes positive-phase guest jitter",distant,0,0,distant,
+        3,0.f,false,0.5f,-0.5f);
+    run("ISS removes negative-phase guest jitter",distant,0,0,distant,
+        3,0.f,false,-0.5f,0.5f);
+    run("ISS preserves genuine object movement",distant,0,0,distant,
+        3,2.f,false,0.5f,1.5f);
+    // Camera matrix is identity: guest jitter is metadata, NOT camera motion.
+    // This catches the earlier -previous_jitter subtraction on native mode 4.
+    run("ISS native camera does not double-subtract guest jitter",
+        distant,0,0,0,4,0.f,false,0.5f);
+    run("ISS native camera retains real displacement",
+        distant,0.1f,0,0,4,0.45f,false,0.5f);
+    // Real Redmagic capture: 609 pixels of object motion on a static
+    // doorway. With no camera motion the native mode-3 selector must
+    // reject mismatched mesh history and use the (zero) camera vector.
+    run("ISS rejects 609px stale object history",distant,0,0,distant,
+        3,0.f,false,0.f,609.f);
+    // Reversed-Z depth mismatch: old tolerance (1-depth)*0.01
+    // incorrectly accepted a 0.003 delta at depth=0.4.
+    run("ISS rejects wrong-layer object depth",0.4f,0,0,0.403f,
+        3,0.f,false,0.f,2.f);
+    // Preserve legitimate moving objects well within scene limits.
+    run("ISS keeps depth-matched object motion",distant,0,0,distant,
+        3,1.5f,false,0.f,1.5f);
     run("stale distant object vector",distant,0,0,0.9999f,1,0);
     vmaDestroyBuffer(instance.GetAllocator(),staging,allocation);
 }

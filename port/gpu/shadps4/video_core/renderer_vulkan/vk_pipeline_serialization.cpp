@@ -37,7 +37,7 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 9u; // tlg: LDS barrier scope per guest wave
+static constexpr u32 ShaderBinaryVersion = 10u; // guarded fragment contraction, profile also keyed
 static constexpr u32 ShaderMetaVersion = 9u; // tlg: LDS barrier scope per guest wave
 static constexpr u32 PipelineKeyVersion = 5u; // tlg: Info layout (ImageResource::needs_native)
 } // namespace Serialization
@@ -300,6 +300,9 @@ vk::ResultValue<vk::UniquePipeline> CreateCachedGraphicsPipeline(
                                 .count());
         extern std::atomic<u64> g_tlg_pipeline_driver_ns;
         g_tlg_pipeline_driver_ns += ns;
+        if (result.result == vk::Result::eSuccess) {
+            g_tlg_driver_pipelines_created.fetch_add(1, std::memory_order_relaxed);
+        }
         if (enabled) {
             (restored ? binary_restore_ns : binary_compile_ns) += ns;
             ++(restored ? binary_restore_calls : binary_compile_calls);
@@ -1487,6 +1490,7 @@ void PipelineCache::PumpWarmUp() {
                 g_tlg_pipeline_total_ns / 1e9);
     // The idle threads stay parked (StopWarmUp).
     warm.finished = true;
+    RequestDriverCacheSave();
     TlgOverlay::SetBackgroundLoading(0, 0);
     Storage::DataBase::Instance().FinishPreload();
 }
@@ -1557,7 +1561,7 @@ void PersistentSrtInfo::Serialize(Serialization::Archive& ar) const {
 
     srt.Write(this, sizeof(*this));
     if (walker_func_size) {
-        srt.Write(reinterpret_cast<void*>(walker_func), walker_func_size);
+        srt.Write(SrtWalkerCode(walker_func), walker_func_size);
     }
 }
 

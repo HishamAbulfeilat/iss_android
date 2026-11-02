@@ -20,6 +20,22 @@ struct WindowSystemInfo {
     WindowSystemType type = WindowSystemType::Headless;
 };
 
+#ifdef __ANDROID__
+class WindowSDL {
+public:
+ WindowSDL(s32 w, s32 h, const char* title);
+ s32 GetWidth() const { return width.load(std::memory_order_relaxed); }
+ s32 GetHeight() const { return height.load(std::memory_order_relaxed); }
+ WindowSystemInfo GetWindowInfo() const { return window_info; }
+ bool IsOpen() const { return true; }
+ bool PollEvents();
+ void BeginTextInput(const std::string&, const std::string&);
+ int PollTextInput(std::string&);
+private:
+ std::atomic<s32> width, height;
+ WindowSystemInfo window_info{};
+};
+#else
 class WindowSDL {
 public:
     WindowSDL(s32 width, s32 height, const char* title);
@@ -58,5 +74,7 @@ private:
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };
+
+#endif
 
 } // namespace Frontend

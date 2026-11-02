@@ -78,6 +78,8 @@ private:
 
 const u32* GetFetchShaderCode(const Info& info, u32 sgpr_base);
 
+// Assign into caller-owned storage so cache hits retain the attribute vector's capacity.
+void ParseFetchShader(const Shader::Info& info, std::optional<FetchShaderData>& result);
 std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info);
 
 } // namespace Shader::Gcn

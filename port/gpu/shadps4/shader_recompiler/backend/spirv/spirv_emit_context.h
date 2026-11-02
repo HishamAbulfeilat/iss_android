@@ -195,6 +195,7 @@ public:
     const Profile& profile;
     HwStage hw_stage;
     SwStage sw_stage{};
+    bool allow_fp_contraction{};
 
     Id last_label{};
 

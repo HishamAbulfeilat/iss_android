@@ -1,32 +1,81 @@
-# inFAMOUS Second Son — Daedalus Android Fork
+# inFAMOUS Second Son — Daedalus Android Bionic v0.1
 
-Projeto **iss_android**, mantido por [erickmendes22 — Daedalus Emulator](https://www.youtube.com/@daedalusemulator), baseado em [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc).
+Android ARM64 port of **inFAMOUS Second Son**, based on [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), with an Android **Bionic** runtime, FEX CPU translation and native Vulkan presentation through AHardwareBuffer.
 
-## Estado atual
+Fork and Android adaptations: **[erickmendes22](https://github.com/erickmendes22) / [Daedalus Emulator](https://www.youtube.com/@daedalusemulator)**.
 
-**Preparação do port para Android ARM64. Ainda não há APK Android nem gameplay Android validada neste projeto.**
+## Links
 
-A primeira etapa utilizará **Linux/glibc + FEXCore**, reaproveitando a infraestrutura dos ports de God of War III e Bloodborne. Após validar inicialização e gameplay, a etapa seguinte será a migração para o runtime nativo **Android/Bionic**.
+- [Downloads and source](https://github.com/erickmendes22/iss_android)
+- [Releases](https://github.com/erickmendes22/iss_android/releases)
+- [Build 71 artifacts](https://github.com/erickmendes22/iss_android/actions/runs/39456999142)
+- [Daedalus Emulator on YouTube](https://www.youtube.com/@daedalusemulator)
+- [Turnip driver releases](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases)
 
-O código original do jogo é x86-64 e precisará de tradução para ARM64. O renderizador traduz comandos gráficos e shaders do PS4 para Vulkan.
+## Download and requirements
 
-## Base preservada
+Current validated package: **Build 71**, version **0.1**, Android version code **11**, package `com.daedalus.iss.bionic`.
 
-- Código, submódulos e correções específicas do inFAMOUS provenientes de `HayatoG/iss_pc`.
-- Base inicial: `1898d449a7edf506d12ef63445f8fc5432e60105`.
-- Documentação original preservada em [README.upstream.md](README.upstream.md). Seus requisitos e instruções de execução descrevem a versão de PC.
-- Os workflows herdados ainda compilam a versão de PC; não geram um APK Android.
+Download the APK artifact from [Build 71 on GitHub Actions](https://github.com/erickmendes22/iss_android/actions/runs/39456999142). Extract the artifact ZIP and install `inFAMOUS-Second-Son-Daedalus-v0.1.apk`. Published release packages will be available under [Releases](https://github.com/erickmendes22/iss_android/releases).
 
-Consulte o [plano de adaptação](docs/ANDROID_PORT.md) para as etapas e os pontos que precisam de implementação.
+- Android 11 or newer, ARM64 and a compatible Vulkan GPU/driver.
+- Snapdragon/Adreno is the primary target; other GPU families have not been validated.
+- Supply your own compatible inFAMOUS Second Son game files. No game, firmware, keys or Lossless.dll are included.
 
-## Créditos
+The Bionic APK updates the previous Bionic builds using the same package and signing certificate. Keep app data to retain settings and saves. The older glibc APK is a separate application.
 
-- [HayatoG/iss_pc](https://github.com/HayatoG/iss_pc) — projeto de origem, runtime e adaptações específicas do inFAMOUS.
-- [God of War III — Daedalus Fork](https://github.com/erickmendes22/gow3_android_daedalus_fork) — referência para a infraestrutura Android e integração FEX.
-- [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android) — referência para a etapa Android/Bionic.
-- [FEX-Emu](https://github.com/FEX-Emu/FEX) — tradução dinâmica x86-64 para ARM64 planejada.
-- [shadPS4](https://github.com/shadps4-emu/shadPS4) e demais projetos e colaboradores creditados na [documentação original](README.upstream.md).
+## Getting started
 
-As atribuições e licenças existentes nos arquivos e componentes continuam preservadas. Os projetos Android citados são referências de integração; sua infraestrutura ainda não foi incorporada nesta preparação inicial.
+1. Install the APK and grant the requested file access.
+2. Select the extracted game folder, or install a local game PKG directly into an empty folder. A prepared game folder contains `eboot.bin`, `art/` and `sce_sys/param.sfo`.
+3. If needed, install the matching update PKG into the selected game folder.
+4. Choose the settings below, then tap **PLAY**. Driver and resolution changes apply on the next game start.
 
-Nenhum arquivo do jogo ou firmware é distribuído. É necessária uma cópia própria do jogo. Projeto sem afiliação com Sony Interactive Entertainment ou Sucker Punch Productions.
+Language defaults to **Automatic**, following the phone language with English fallback. **Settings → Language** also offers English, Portuguese, Spanish, French, German, Italian, Russian, Japanese, Korean and simplified Chinese. The game follows the selection on its next start when both its text and audio packages are installed; otherwise it uses English. Untranslated technical messages use English.
+
+## Settings layout
+
+| Location | Options |
+| --- | --- |
+| Home → Video | The only Fullscreen switch; disabled by default. Off uses automatic 16:9 and disables mode selection. On enables stretch or proportional filling with cropped edges. Android system bars remain hidden during gameplay in both cases. |
+| Home → FPS and VSync | 30 / 60 / 120 / 240 FPS targets and VSync. |
+| Home → Bloodframe | Frame-generation settings. |
+| Patches | Original 1080p, 720p or 900p resolution; motion blur, depth of field and depth blur signature-validated patches for CUSA00004/CUSA00223/CUSA00263; the supplied regional executable is also recognized across APP_VER values. Output resolution follows the selected resolution patch; there is no separate output-resolution selector. |
+| Settings → Vulkan driver | Automatic GPU detection, bundled or system drivers, and driver ZIP import. |
+| Settings | Language, HUD, controls, save import/export, log export and Lossless.dll import. |
+
+## Features
+
+- Optional image filling only in Home → Video (off by default); 16:9 uses an immersive display, and Android game classification is enabled.
+- Native PCM audio mixer feeding Android AudioTrack at fixed s16 stereo / 48 kHz.
+- inFAMOUS-themed launcher and in-game menu, opened from the left edge or Back/Guide.
+- 30/60/120/240 FPS targets, VSync toggle and display refresh-rate requests.
+- Bundled Turnip Gen8 V38 Patched for Adreno 8xx and Turnip v27.0.0-R1 for Adreno 6xx/7xx; custom driver ZIP import.
+- Bloodframe frame generation, configured separately from the game's source FPS. Import your own `Lossless.dll` to use it.
+- Configurable HUD and inFAMOUS-themed Mobile action controls (default), with drag-to-look camera and an optional Classic controller layout. Each layout saves its positions separately; optional draggable swipepad, physical controllers, incremental D-pad swipes and a two-finger TOUCH action. Automatic input routing reads the game menu lifecycle on matching executables; AUTO/MENU/GAME and L1+R1+Start provide an override.
+- Graffiti controls: L3+R3 toggles the virtual sensor, ✕ shakes the can, R2 sprays and the left stick aims.
+- Direct PKG installation, save import/export and log export.
+
+FPS selections are targets; achieved performance depends on the scene and device. Shader caches refresh automatically when the shader source key changes, so the first run after an update may compile shaders again.
+
+## Build 71 rendering status
+
+The recent eight PC performance ports and subgroup/ballot changes were reverted after a report of flickering lighting. Build 71 restores the earlier GPU baseline (`0f9a9a4`), retaining safe cache-saver startup ordering and shader-cache invalidation. The individual cause has not been isolated, and the visual result still needs confirmation on the device.
+
+Java/native compilation, the runtime test suite, ARM64/Bionic checks, the APK signature and package hashes passed. These checks do not establish in-game visual correctness or a performance gain.
+
+## Documentation and source
+
+- [Release 0.1 notes](docs/RELEASE_NOTES_v0.1.md)
+- [Controls, PKG installation, saves and Bloodframe](docs/ANDROID_BIONIC_PLAYER.md)
+- [Release build and publication](docs/RELEASE_BUILD.md)
+- [PC performance-port analysis and rollback status](docs/BIONIC_PC_PERFORMANCE_PORT.md)
+- [Original PC documentation](README.upstream.md)
+
+The release source is on `experimental-bionic`; the name is retained for branch continuity. The historical Linux/glibc integration remains separate. Native builds use `.github/workflows/bionic-experimental.yml` and `tools/android/bionic/`; the workflow prepares signed assets without publishing a release automatically.
+
+## Credits and licenses
+
+[HayatoG/iss_pc](https://github.com/HayatoG/iss_pc), [shadPS4](https://github.com/shadps4-emu/shadPS4), [FEX-Emu](https://github.com/FEX-Emu/FEX), [ducvd89/Bloodborne-Android](https://github.com/ducvd89/Bloodborne-Android), [Daedalus GoW3](https://github.com/erickmendes22/gow3_android_daedalus_fork), [fexdroid](https://github.com/cobrabm12/fexdroid), Bloodframe, Mesa/Turnip, [StevenMXZ / Adreno Tools Drivers](https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases) and all upstream contributors.
+
+Source licenses and notices are preserved in the repository and packaged runtime. See [port/LICENSE](port/LICENSE) and [runtime notices](tools/android/bionic/NOTICE.txt). No affiliation with Sony Interactive Entertainment or Sucker Punch Productions.

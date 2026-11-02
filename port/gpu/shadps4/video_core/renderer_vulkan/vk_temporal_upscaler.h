@@ -65,6 +65,11 @@ public:
     void OnDispatch(u64 cs_hash);
 
     /// Start of a frame in the command stream (display pass).
+    // Bloodborne Android: complete a scaled scene before the display copy if no UI draw was identified.
+    // No dispatch occurs until camera, depth and scene color were validated.
+    void OnDisplayPassStart();
+    // Explicit CUSA00004 PM4 marker after the game's AA and colour composite.
+    void OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height);
     bool OnFrameStart();
     bool RasterScaling() const;
     /// tlg: LOD bias for scene materials, log2(render / output) while a reduced scene is
@@ -144,6 +149,12 @@ private:
     void RunUiOnly(VideoCore::ImageId color, VideoCore::ImageId depth);
     void EnsureUiResources(u32 width, u32 height, vk::Format color, vk::Format depth);
     void PrepareUiDepth(VideoCore::ImageId depth);
+#ifdef ISS_ANDROID_BIONIC
+    // Preserve real G-buffer scene depth at the first HDR lighting pass.
+    // The game later clears/reuses the depth attachment for on-screen UI;
+    // reading it at RunScaled() otherwise supplies HUD shapes to FSR3.
+    void SnapshotIssSceneDepth(VideoCore::ImageId depth);
+#endif
     /// Render size below the scaled-preset output size (the resolution patch is on).
     [[nodiscard]] bool Scaled() const;
     /// A target of the patched render size: the game allocates it with aligned dimensions
@@ -220,9 +231,50 @@ private:
     bool ui_read_barrier = false;
     VideoCore::UniqueImage ui_image;
     VideoCore::UniqueImage ui_depth_image;
+#ifdef ISS_ANDROID_BIONIC
+    VideoCore::UniqueImage iss_scene_depth_image;
+    vk::UniqueImageView iss_scene_depth_view;
+    vk::Format iss_scene_depth_format = vk::Format::eUndefined;
+    u32 iss_scene_depth_width = 0, iss_scene_depth_height = 0;
+    bool iss_scene_depth_snapshot_valid = false;
+#endif
     vk::UniqueImageView ui_view;
     vk::UniqueImageView ui_depth_view;
     bool depth_blit = false;
+#ifdef ISS_ANDROID_BIONIC
+    // Per-180-frame lightweight diagnostics for the title-specific FSR camera/scene path.
+    // Counts only: no Vulkan readback, per-draw logging or additional allocations.
+    struct AndroidFsrProbe {
+        u32 frames = 0;
+        u32 scene_colors = 0;
+        u32 ldr_targets = 0;
+        u32 ui_draws = 0;
+        u32 native_viewport_draws = 0;
+        u32 rgba_ui_candidates = 0;
+        u32 camera_ready_draws = 0;
+        u32 ldr_match_draws = 0;
+        u32 dispatched = 0;
+        u32 ui_only_copies = 0;
+        u32 ui_draws_after_fsr = 0;
+        u32 redirected_color = 0;
+        u32 redirected_samples = 0;
+        u32 native_camera_dispatches = 0;
+        u32 fallback_motion_dispatches = 0;
+        u32 rcas_dispatches = 0;
+        u32 extra_sharpen_dispatches = 0;
+        u32 source_width = 0, source_height = 0;
+        u32 depth_width = 0, depth_height = 0;
+        u32 source_format = 0, depth_format = 0;
+    } android_fsr_probe{};
+    struct AndroidUiSample {
+        u64 vertex_hash = 0;
+        u32 width = 0, height = 0, format = 0;
+        bool same_ldr_target = false;
+    };
+    std::array<AndroidUiSample, 12> android_ui_samples{};
+    u32 android_ui_sample_count = 0;
+    bool android_ui_samples_printed = false;
+#endif
     bool scaled_session = false;
     u32 ui_width = 0, ui_height = 0;
     u32 render_width = 0, render_height = 0;
@@ -286,3 +338,4 @@ private:
 };
 
 } // namespace Vulkan
+

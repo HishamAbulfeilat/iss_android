@@ -24,7 +24,9 @@ layout(push_constant) uniform Constants {
     vec2 size;         // pixels
     vec2 jitter;       // current viewport shift in render pixels (x right, y down)
     vec2 previous_jitter;
-    uint mode;         // motion: 1 = object motion vectors available; debug: 0 motion, 1 raw
+    uint mode;         // motion: 1 = original camera + object, 2 = objects only
+                       //         3 = ISS native camera + object, 4 = ISS camera only
+                       //         debug: 0 motion, 1 raw
                        // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|
 };
 
@@ -34,6 +36,91 @@ void main() {
         return;
     }
     const float depth = texelFetch(depth_tex, pixel, 0).r;
+#ifndef DEBUG_OVERLAY
+    // ISS Android experimental mode: per-pixel vertex motion is available, but the
+    // Bloodborne 864-byte global camera structure has not been found in this game.
+    // Do not reconstruct any world position or project with an invalid camera.
+    // Uncovered/occluded pixels get zero motion instead of NaNs or invented camera motion.
+    // ISS camera mode: the verified game 4x4 matrices were multiplied on the
+    // host as previous_composite * inverse(current_composite), ROW-MAJOR.
+    // They map CURRENT NDC clip coordinates into PREVIOUS clip coordinates.
+    // The fourth row occupies the old 'proj' push-constant slot. Never use
+    // Bloodborne's affine/3000-far-plane assumptions for this mode.
+    if (mode == 3u || mode == 4u) {
+        const vec2 uv = (vec2(pixel) + 0.5) / size;
+        // Viewport jitter is applied by the Vulkan rasterizer, separately
+        // from the native game's projection matrix. Remove that offset from
+        // the clip reconstruction, just as the original camera shader does.
+        const vec2 scene_uv = uv - jitter / size;
+        const vec4 current_clip = vec4(scene_uv.x * 2.0 - 1.0,
+                                       1.0 - scene_uv.y * 2.0, depth, 1.0);
+        const vec4 previous_clip = vec4(
+            dot(reproject[0], current_clip),
+            dot(reproject[1], current_clip),
+            dot(reproject[2], current_clip),
+            dot(proj, current_clip));
+        vec2 result = vec2(0.0);
+        if (!any(isnan(previous_clip)) && !any(isinf(previous_clip)) &&
+            abs(previous_clip.w) > 1.0e-5) {
+            const vec2 prev_ndc = previous_clip.xy / previous_clip.w;
+            const vec2 prev_uv = vec2(prev_ndc.x * 0.5 + 0.5,
+                                      0.5 - prev_ndc.y * 0.5);
+            // The native CURRENT->PREVIOUS composite reprojects positions
+            // in the guest game's stable camera space; its reconstructed
+            // motion does not include the +/-0.25-pixel projection jitter
+            // carried separately in previous_jitter. Removing that delta a
+            // second time created the ~+/-0.5-pixel ghost vectors visible on
+            // static parts of the 2026-10-28 capture even outside object
+            // overrides. Keep only genuine camera displacement here. The
+            // per-object path below needs the opposite guest-jitter correction.
+            const vec2 camera_motion = (prev_uv - scene_uv) * size;
+            if (!any(isnan(camera_motion)) && !any(isinf(camera_motion)) &&
+                all(lessThan(abs(camera_motion), size * 0.5))) {
+                result = camera_motion;
+            }
+        }
+        // Per-object vectors take priority only at the exact scene depth;
+        // all uncovered pixels receive native camera reprojected motion.
+        if (mode == 3u) {
+            const vec4 object_motion = texelFetch(object_tex, pixel, 0);
+            // ISS uses reversed-Z D32 depth. (1-depth)*0.01 was an
+            // almost 0.01-wide tolerance for real scene depths near 0.02:
+            // stale object vectors could incorrectly match a different
+            // layer. Compare relative to the actual (reversed) depth.
+            const float threshold = max(2e-7, depth * 0.005);
+            const vec2 candidate = object_motion.rg + previous_jitter;
+            // In the Oct 28 two-frame 640x360 capture, the static office
+            // doorway (x=168..215,y=102..206) received +609 px object
+            // motion while camera reprojection correctly yielded ~0.
+            // A reused/mismatched mesh-history slot must not contaminate
+            // FSR3's accumulation. Reject displacements exceeding 1/4
+            // of the scene size relative to camera, but retain normal
+            // object motion, including real independent animation.
+            const vec2 disagreement = abs(candidate - result);
+            const vec2 max_difference = size * 0.25;
+            if (object_motion.b > 0.99 &&
+                abs(object_motion.a - depth) < threshold &&
+                !any(isnan(candidate)) && !any(isinf(candidate)) &&
+                all(lessThan(disagreement, max_difference))) {
+                result = candidate;
+            }
+        }
+        imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
+        return;
+    }
+    if (mode == 2u) {
+        const vec4 object_motion = texelFetch(object_tex, pixel, 0);
+        const float depth_threshold = max(2e-7, (1.0 - depth) * 0.01);
+        vec2 result = vec2(0.0);
+        if (object_motion.b > 0.99 &&
+            abs(object_motion.a - depth) < depth_threshold &&
+            !any(isnan(object_motion.rg)) && !any(isinf(object_motion.rg))) {
+            result = object_motion.rg;
+        }
+        imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
+        return;
+    }
+#endif
     const vec2 uv = (vec2(pixel) + 0.5) / size;
     // Depth was rasterised through a shifted viewport. Reconstruct its unjittered
     // position, and keep jitter out of FSR's motion vectors (as for the object vectors).

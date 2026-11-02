@@ -1,0 +1,33 @@
+From: ISS Android Daedalus Fork
+Subject: [PATCH] wsi/x11: use coherent direct frame delivery with MIT-SHM present
+
+The local FEXDroid direct-present extension was only used when X11 MIT-SHM
+was unavailable. When the X server advertised MIT-SHM, the WSI backend
+selected x11_present_to_x11_dri3() instead, even with FEXDROID_PRESENT.
+The Android bridge then periodically scanned Xvfb's mutable framebuffer,
+potentially capturing rows from different guest frames (horizontal tearing).
+
+Use the completed software-present copy sent through the fxpresent slots
+whenever the app has enabled that path, regardless of whether the X server
+also supports MIT-SHM. Without fxpresent, keep Mesa's existing DRI3/MIT-SHM
+selection unchanged. The 0007 patch already allocates fxpresent when the
+app requests it (extended by the second hunk below).
+
+--- a/src/vulkan/wsi/wsi_common_x11.c
++++ b/src/vulkan/wsi/wsi_common_x11.c
+@@ -2338,5 +2338,5 @@ x11_present_to_x11(struct x11_swapchain *chain, uint32_t image_index)
+    VkResult result;
+-   if (chain->base.wsi->sw && !chain->has_mit_shm)
++   if (chain->base.wsi->sw && (!chain->has_mit_shm || chain->fxpresent))
+       result = x11_present_to_x11_sw(chain, image_index);
+    else
+ #ifdef HAVE_X11_DRM
+@@ -3532,7 +3532,7 @@
+    chain->has_mit_shm = wsi_conn->has_mit_shm;
+    chain->base.sw_fence_wait_in_backend = chain->base.wsi->sw;
+    /* fexdroid: frames straight to the app, when it asks for them. */
+-   if (chain->base.wsi->sw && !chain->has_mit_shm && os_get_option("FEXDROID_PRESENT")) {
++   if (chain->base.wsi->sw && os_get_option("FEXDROID_PRESENT")) {
+       chain->fxpresent = vk_zalloc(pAllocator, sizeof(*chain->fxpresent), 8,
+                                    VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+       if (chain->fxpresent)

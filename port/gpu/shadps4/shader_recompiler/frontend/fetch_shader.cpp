@@ -92,12 +92,14 @@ const u32* GetFetchShaderCode(const Info& info, u32 sgpr_base) {
     return code;
 }
 
-std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info) {
+void ParseFetchShader(const Shader::Info& info, std::optional<FetchShaderData>& result) {
     if (compiler_snapshot && compiler_snapshot->info == &info) {
-        return compiler_snapshot->fetch;
+        result = compiler_snapshot->fetch;
+        return;
     }
     if (!info.has_fetch_shader) {
-        return std::nullopt;
+        result.reset();
+        return;
     }
 
     const auto* code = GetFetchShaderCode(info, info.fetch_shader_sgpr_base);
@@ -113,7 +115,8 @@ std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info) {
     if (const auto it = cache.find(code);
         !TlgToggle::Disabled(TlgToggle::FetchShaderCache) && it != cache.end() &&
         std::memcmp(code, it->second.code.data(), it->second.code.size() * sizeof(u32)) == 0) {
-        return it->second.data;
+        result = it->second.data;
+        return;
     }
 
     FetchShaderData data{};
@@ -177,7 +180,13 @@ std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info) {
         cache.clear();
     }
     cache[code] = CachedParse{std::vector<u32>(code, code_slice.position()), data};
-    return data;
+    result = std::move(data);
+}
+
+std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info) {
+    std::optional<FetchShaderData> result;
+    ParseFetchShader(info, result);
+    return result;
 }
 
 } // namespace Shader::Gcn

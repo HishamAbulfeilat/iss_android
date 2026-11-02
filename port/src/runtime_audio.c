@@ -1,4 +1,5 @@
-/* libSceAudioOut on SDL3 audio streams. sceAudioOutOutput returns once per
+/* libSceAudioOut: native PCM FIFO on Android, SDL3 audio streams elsewhere.
+ * sceAudioOutOutput returns once per
  * buffer period on a steady clock, like PS4 hardware: FMOD's output thread
  * reads 256-frame slots out of its mixer's 512-frame ring, and returning in
  * bursts (whenever the device pulls a quantum) lets it overtake the mixer and
@@ -13,7 +14,15 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <math.h>
+#else
 #include <SDL3/SDL.h>
+#endif
 
 #define PORTS 25
 #define ERR_NOT_OPENED ((int32_t)0x80260001)
@@ -32,7 +41,12 @@
 typedef struct {
     int used, type, channels, is_float, frames, sample_bytes, std_layout, downmix;
     int32_t volume[8];
+#ifdef __ANDROID__
+    unsigned char *ring; size_t ring_cap, ring_head, ring_len;
+#else
     SDL_AudioStream *stream;
+#endif
+    int sink;
     uint64_t next_deadline_ns; /* next return of sceAudioOutOutput */
     int64_t adjust_ns; int window_min, window_count; /* queue level control */
     uint64_t last_output_us;
@@ -50,6 +64,21 @@ static Port ports[PORTS];
 static int initialized, sdl_ready=-1;
 static size_t buffers_out, ports_opened;
 
+#ifdef __ANDROID__
+/* Stable locks survive slot close/reopen; Port itself is reset for the next stream. */
+static pthread_mutex_t audio_port_locks[PORTS];
+static pthread_once_t audio_port_locks_once=PTHREAD_ONCE_INIT;
+static void init_audio_port_locks(void) {
+    for (int i=0;i<PORTS;++i) pthread_mutex_init(&audio_port_locks[i],NULL);
+}
+static pthread_mutex_t *port_mutex(Port *p) {
+    pthread_once(&audio_port_locks_once,init_audio_port_locks);
+    return &audio_port_locks[p-ports];
+}
+#else
+static pthread_mutex_t *port_mutex(Port *p) { return &p->lock; }
+#endif
+
 static uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000000u+(uint64_t)t.tv_nsec; }
 static void sleep_until(uint64_t deadline) {
 #ifdef _WIN32
@@ -60,7 +89,129 @@ static void sleep_until(uint64_t deadline) {
     while (clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&t,NULL)) {}
 #endif
 }
-static int sdl_audio(void) {
+/* Native PCM sink adapted from Daedalus GoW3/Bloodborne-Android. Keep ISS's own
+ * AudioOut/Audio3d ports, formats, volume and cadence; only replace the host sink. */
+#ifdef __ANDROID__
+#define MIX_FRAMES 512
+static int fifo_fd=-1;
+static pthread_mutex_t fifo_ring_locks[PORTS];
+static pthread_once_t fifo_locks_once=PTHREAD_ONCE_INIT;
+static void fifo_init_locks(void) {
+    for (int i=0;i<PORTS;++i) pthread_mutex_init(&fifo_ring_locks[i],NULL);
+}
+static int audio_backend(void) {
+    if (sdl_ready<0) {
+        const char *mode=getenv("TLG_AUDIO"), *path=getenv("TLG_AUDIO_FIFO");
+        sdl_ready=0;
+        if ((!mode || strcmp(mode,"none")) && path && *path) {
+            /* Read-write like the app's own open: never blocks, whoever came first. */
+            fifo_fd=open(path,O_RDWR|O_CLOEXEC|O_NOFOLLOW);
+            if (fifo_fd>=0) {
+                struct stat st;
+                if (fstat(fifo_fd,&st)!=0 || !S_ISFIFO(st.st_mode)) {
+                    close(fifo_fd); fifo_fd=-1; errno=EINVAL;
+                }
+            }
+            if (fifo_fd<0) fprintf(stderr,"Runtime: audio FIFO %s failed (%s)\n",path,strerror(errno));
+            else sdl_ready=1;
+        }
+        printf("Runtime: audio backend %s\n",sdl_ready ? "fifo (s16 stereo 48 kHz)" : "timer (silent)");
+    }
+    return sdl_ready;
+}
+/* Source samples (SDL channel order: FL FR FC LFE BL BR SL SR) of one frame to stereo. */
+static void frame_to_stereo(const Port *p, const unsigned char *in, int *l, int *r) {
+    float v[8];
+    for (int c=0;c<p->channels;++c) {
+        if (p->is_float) { float x; memcpy(&x,in+c*4,4); v[c]=x*32768.0f; }
+        else { int16_t x; memcpy(&x,in+c*2,2); v[c]=x; }
+    }
+    float fl, fr;
+    if (p->channels==1) fl=fr=v[0];
+    else if (p->channels==2) { fl=v[0]; fr=v[1]; }
+    else {
+        /* 7.1 down to stereo: centre and surrounds at -3 / -6 dB, normalised so the sum cannot clip. */
+        const float n=1.0f/2.7071f;
+        fl=(v[0]+0.7071f*v[2]+0.5f*v[4]+0.5f*v[6])*n; fr=(v[1]+0.7071f*v[2]+0.5f*v[5]+0.5f*v[7])*n;
+    }
+    if (!isfinite(fl)) fl=0;
+    if (!isfinite(fr)) fr=0;
+    fl=fl>32767 ? 32767 : fl<-32768 ? -32768 : fl;
+    fr=fr>32767 ? 32767 : fr<-32768 ? -32768 : fr;
+    *l=(int)fl; *r=(int)fr;
+}
+static void *mixer_thread(void *arg) {
+    (void)arg;
+    int16_t out[MIX_FRAMES*2];
+    static int32_t acc[MIX_FRAMES*2];
+    unsigned char frame[8*4];
+    int reported_pcm=0;
+    for (;;) {
+        memset(acc,0,sizeof acc);
+        pthread_mutex_lock(&table_lock);
+        for (int id=0;id<PORTS;++id) {
+            Port *p=&ports[id];
+            if (!p->used || !p->sink) continue;
+            const size_t fb=(size_t)p->channels*(size_t)p->sample_bytes;
+            pthread_mutex_lock(&fifo_ring_locks[p-ports]);
+            for (int f=0;f<MIX_FRAMES && p->ring_len>=fb;++f) {
+                for (size_t i=0;i<fb;++i) frame[i]=p->ring[(p->ring_head+i)%p->ring_cap];
+                p->ring_head=(p->ring_head+fb)%p->ring_cap; p->ring_len-=fb;
+                int l, r; frame_to_stereo(p,frame,&l,&r);
+                acc[2*f]+=l; acc[2*f+1]+=r;
+            }
+            pthread_mutex_unlock(&fifo_ring_locks[p-ports]);
+        }
+        pthread_mutex_unlock(&table_lock);
+        int nonzero=0;
+        for (int i=0;i<MIX_FRAMES*2;++i) {
+            out[i]=(int16_t)(acc[i]>32767 ? 32767 : acc[i]<-32768 ? -32768 : acc[i]);
+            nonzero|=out[i]!=0;
+        }
+        if (nonzero && !reported_pcm) {
+            reported_pcm=1;
+            printf("Runtime: native audio mixer produced non-silent s16 stereo 48 kHz PCM\n");
+        }
+        const unsigned char *at=(const unsigned char *)out; size_t left=sizeof out;
+        while (left) {
+            ssize_t n=write(fifo_fd,at,left);
+            if (n<0 && errno==EINTR) continue;
+            if (n<0) { usleep(5000); continue; }
+            at+=n; left-=(size_t)n;
+        }
+    }
+    return NULL;
+}
+static int sink_open(Port *p) {
+    p->ring_cap=(size_t)p->frames*(size_t)p->channels*(size_t)p->sample_bytes*16;
+    p->ring=malloc(p->ring_cap); p->ring_head=p->ring_len=0;
+    if (!p->ring) return 0;
+    pthread_once(&fifo_locks_once,fifo_init_locks);
+    static int started;
+    if (!started) {
+        pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a,PTHREAD_CREATE_DETACHED);
+        started=pthread_create(&t,&a,mixer_thread,NULL)==0;
+        pthread_attr_destroy(&a);
+        if (!started) { free(p->ring); p->ring=NULL; return 0; }
+    }
+    return 1;
+}
+static void sink_close(Port *p) {
+    /* Under table_lock (audio_close), like the mixer's walk: it never touches the ring after this. */
+    p->sink=0; free(p->ring); p->ring=NULL;
+}
+static int sink_queued(Port *p) { pthread_mutex_lock(&fifo_ring_locks[p-ports]); int n=(int)p->ring_len; pthread_mutex_unlock(&fifo_ring_locks[p-ports]); return n; }
+static void sink_put(Port *p, const void *data, int bytes) {
+    pthread_mutex_lock(&fifo_ring_locks[p-ports]);
+    if (p->ring_len+(size_t)bytes<=p->ring_cap) { /* overflow (the app is not reading): drop */
+        size_t tail=(p->ring_head+p->ring_len)%p->ring_cap;
+        for (int i=0;i<bytes;++i) p->ring[(tail+(size_t)i)%p->ring_cap]=((const unsigned char *)data)[i];
+        p->ring_len+=(size_t)bytes;
+    }
+    pthread_mutex_unlock(&fifo_ring_locks[p-ports]);
+}
+#else
+static int audio_backend(void) {
     if (sdl_ready<0) {
         const char *mode=getenv("TLG_AUDIO");
         sdl_ready = (!mode || strcmp(mode,"none")) && SDL_InitSubSystem(SDL_INIT_AUDIO);
@@ -68,6 +219,20 @@ static int sdl_audio(void) {
     }
     return sdl_ready;
 }
+static int sink_open(Port *p) {
+    SDL_AudioSpec device; int device_frames;
+    p->downmix=p->channels==8 && SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&device,&device_frames)
+               && device.channels==2;
+    SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->downmix ? 2 : p->channels, 48000};
+    p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
+    if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
+    else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port uses timer sink\n",SDL_GetError());
+    return p->stream!=NULL;
+}
+static void sink_close(Port *p) { SDL_DestroyAudioStream(p->stream); p->stream=NULL; }
+static int sink_queued(Port *p) { return SDL_GetAudioStreamQueued(p->stream); }
+static void sink_put(Port *p, const void *data, int bytes) { SDL_PutAudioStreamData(p->stream,data,bytes); }
+#endif
 static int port_range(int type, int *first, int *last) {
     switch (type) {
     case 0: *first=0; *last=7; return 1;      /* main */
@@ -132,19 +297,16 @@ static int32_t open_port(int32_t type, uint32_t length, uint32_t freq, uint32_t 
     if (id<0) { pthread_mutex_unlock(&table_lock); return ERR_PORT_FULL; }
     Port *p=&ports[id];
     memset(p,0,sizeof(*p));
+#ifdef __ANDROID__
+    (void)port_mutex(p);
+#else
     pthread_mutex_init(&p->lock,NULL);
+#endif
     p->used=1; p->type=type; p->channels=channels[format]; p->is_float=format>=3 && format!=6;
     p->sample_bytes=p->is_float ? 4 : 2; p->frames=(int)length; p->std_layout=format>=6;
     for (int c=0;c<8;++c) p->volume[c]=VOLUME_0DB;
-    if (sdl_audio()) {
-        SDL_AudioSpec device; int device_frames;
-        p->downmix=p->channels==8 && SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&device,&device_frames)
-                   && device.channels==2;
-        SDL_AudioSpec spec={p->is_float ? SDL_AUDIO_F32 : SDL_AUDIO_S16, p->downmix ? 2 : p->channels, 48000};
-        p->stream=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,NULL,NULL);
-        if (p->stream) SDL_ResumeAudioStreamDevice(p->stream);
-        else fprintf(stderr,"Runtime: SDL audio stream failed (%s); port %d uses the timer sink\n",SDL_GetError(),id);
-    }
+    if (audio_backend()) p->sink=sink_open(p);
+    if (sdl_ready && !p->sink) fprintf(stderr,"Runtime: audio sink failed for port %d\n",id);
     p->stats=getenv("TLG_AUDIO_STATS")!=NULL;
     const char *dump=getenv("TLG_AUDIO_DUMP");
     if (dump) {
@@ -156,7 +318,7 @@ static int32_t open_port(int32_t type, uint32_t length, uint32_t freq, uint32_t 
     pthread_mutex_unlock(&table_lock);
     printf("Runtime: audio port %d opened (type %d, %d ch, %s, %u frames%s)\n",id,type,p->channels,p->is_float ? "float" : "s16",length,
            p->downmix ? ", downmixed to stereo" : "");
-    if (runtime_verbose()) printf("Verbose: audio port %d: SDL stream %s, format code %u\n",id,p->stream ? "open" : "none (timer sink)",format);
+    if (runtime_verbose()) printf("Verbose: audio port %d: host sink %s, format code %u\n",id,p->sink ? "open" : "none (timer sink)",format);
     return (type<<16) | id | 0x20000000;
 }
 static ABI int32_t audio_open(int32_t user, int32_t type, int32_t index, uint32_t length, uint32_t freq, uint32_t param) {
@@ -169,12 +331,12 @@ static ABI int32_t audio_close(int32_t handle) {
     int32_t error=0;
     Port *p=port_of(handle,&error);
     if (p) {
-        pthread_mutex_lock(&p->lock);
-        if (p->stream) SDL_DestroyAudioStream(p->stream);
+        pthread_mutex_lock(port_mutex(p));
+        if (p->sink) sink_close(p);
         if (p->dump) fclose(p->dump);
         p->dump=NULL;
-        p->stream=NULL; p->used=0;
-        pthread_mutex_unlock(&p->lock);
+        p->sink=0; p->used=0;
+        pthread_mutex_unlock(port_mutex(p));
     }
     pthread_mutex_unlock(&table_lock);
     return p ? 0 : error;
@@ -186,7 +348,8 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
     Port *p=port_of(handle,&error);
     pthread_mutex_unlock(&table_lock);
     if (!p) return error;
-    pthread_mutex_lock(&p->lock);
+    pthread_mutex_lock(port_mutex(p));
+    if (!p->used) { pthread_mutex_unlock(port_mutex(p)); return ERR_NOT_OPENED; }
     size_t samples=(size_t)p->frames*(size_t)p->channels, bytes=samples*(size_t)p->sample_bytes;
     uint64_t period=(uint64_t)p->frames*1000000000u/48000u;
     if (data) {
@@ -207,8 +370,8 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             if (!p->stat_start_ns) { p->stat_start_ns=now; p->stat_min_queued=1<<30; }
             else if (now-p->stat_last_ns>p->stat_max_gap_ns) p->stat_max_gap_ns=now-p->stat_last_ns;
             p->stat_last_ns=now; ++p->stat_buffers;
-            if (p->stream) {
-                int queued=SDL_GetAudioStreamQueued(p->stream);
+            if (p->sink) {
+                int queued=sink_queued(p);
                 if (queued<p->stat_min_queued) p->stat_min_queued=queued;
                 if (queued==0) ++p->stat_starved;
             }
@@ -225,13 +388,13 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             else sleep_until(p->next_deadline_ns);
             p->next_deadline_ns+=period;
         }
-        if (p->stream) {
+        if (p->sink) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
-            int low=2*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
+            int low=2*(int)bytes, queued=sink_queued(p);
             if (queued<(int)bytes) {
                 static const unsigned char silence[2048*8*4];
-                SDL_PutAudioStreamData(p->stream,silence,low-queued<(int)bytes ? low-queued : (int)bytes);
+                sink_put(p,silence,low-queued<(int)bytes ? low-queued : (int)bytes);
                 queued=low;
             }
             if (!p->window_count || queued<p->window_min) p->window_min=queued;
@@ -240,12 +403,12 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
                 p->window_count=0;
             }
             p->next_deadline_ns+=(uint64_t)p->adjust_ns;
-            SDL_PutAudioStreamData(p->stream,converted,(int)bytes);
+            sink_put(p,converted,(int)bytes);
         }
         ++buffers_out;
     }
     p->last_output_us=now_ns()/1000;
-    pthread_mutex_unlock(&p->lock);
+    pthread_mutex_unlock(port_mutex(p));
     return data ? (int32_t)samples : 0;
 }
 static ABI int32_t audio_output(int32_t handle, const void *data) { return output_port(handle,data,1); }
@@ -266,12 +429,12 @@ static ABI int32_t audio_volume(int32_t handle, int32_t flags, const int32_t *vo
     pthread_mutex_unlock(&table_lock);
     if (!p) return error;
     if (!volume) return ERR_INVALID_POINTER;
-    pthread_mutex_lock(&p->lock);
+    pthread_mutex_lock(port_mutex(p));
     for (int c=0;c<8;++c) if (flags & (1<<c)) {
-        if (volume[c]<0 || volume[c]>VOLUME_0DB) { pthread_mutex_unlock(&p->lock); return ERR_INVALID_VOLUME; }
+        if (volume[c]<0 || volume[c]>VOLUME_0DB) { pthread_mutex_unlock(port_mutex(p)); return ERR_INVALID_VOLUME; }
         p->volume[c]=volume[c];
     }
-    pthread_mutex_unlock(&p->lock);
+    pthread_mutex_unlock(port_mutex(p));
     return 0;
 }
 static ABI int32_t audio_state(int32_t handle, PortState *state) {

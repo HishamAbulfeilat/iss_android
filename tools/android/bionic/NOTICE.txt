@@ -1,0 +1,49 @@
+inFAMOUS Second Son — Daedalus Fork 0.1 · Android/Bionic runtime
+Source and build recipes: https://github.com/erickmendes22/iss_android/tree/experimental-bionic
+
+inFAMOUS runtime: Daedalus Fork and upstream contributors.
+GPL-2.0; see LICENSE-Gow3.txt and the repository's third-party sources/notices.
+
+Android Vulkan HAL loader, AHardwareBuffer presenter and native preparation adaptations:
+Bloodborne-Android, revision 2e4726530b04f76e513e232d272d386e9973c73b (GPL-2.0).
+https://github.com/ducvd89/Bloodborne-Android/tree/2e4726530b04f76e513e232d272d386e9973c73b
+The inFAMOUS preparation format and patches remain specific to this port.
+
+FEX revision fb925d6fc5cc8576bf0f9ae6978fc6d912485593 and its bundled dependencies:
+see third_party/FEX in the source repository for individual licenses.
+
+CPython 3.13.7, Python Software Foundation and contributors.
+https://www.python.org/downloads/release/python-3137/
+https://www.python.org/ftp/python/3.13.7/Python-3.13.7.tar.xz
+See LICENSE-Python.txt for the PSF license and bundled third-party notices.
+
+orbis-pkg-util, videobitva/orbis, revision 13f1294a87a53d54f82feec56acbfd03f50667a9.
+https://github.com/videobitva/orbis/tree/13f1294a87a53d54f82feec56acbfd03f50667a9
+MIT OR Apache-2.0; see orbis-LICENSE-MIT and orbis-LICENSE-APACHE.
+Cargo.lock at that revision identifies the Rust dependencies and versions.
+
+Turnip Gen8 V38 Patched and Turnip v27.0.0-R1: Mesa, StevenMXZ and upstream contributors.
+https://github.com/StevenMXZ/Adreno-Tools-Drivers/releases/tag/v27.0.0-R1
+Gen8 source: https://github.com/whitebelyash/mesa-unified/tree/turnip/gen8
+Additional patches: https://github.com/WinNative-Emu/Drivers/tree/main/patches
+https://github.com/Vauzi-17/710/tree/experiment/patches
+Build repository license: see driver/StevenMXZ-LICENSE-GPL-3.txt.
+Exact archive/library hashes: arm64/drivers/{gen8,gen7}/PINNED-DRIVER.json.
+This Bionic package does not include the glibc Turnip build or the Linux lsfg-vk layer
+mentioned in the shared legacy THIRD_PARTY_LICENSES.txt.
+
+No Sony game files, firmware, PKG, update, save or Lossless.dll are included.
+
+Bloodframe frame generation: ducvd89/bloodframe@c29027555cfa8c9fc73c20f03816230becb9f469 (MIT),
+based on GameNative lsfg-vk Android and PancakeTAS lsfg-vk. Source: https://github.com/ducvd89/bloodframe
+See bloodframe license files and bloodframe-source.txt in this directory.
+Host synchronization patch and launcher/menu/HUD adaptations:
+Daedalus GoW3@9b2f68eb3cda4ae7960c07181083650cc155cc6a and Bloodborne-Android (GPL-2.0).
+Launcher icon: inFAMOUS Second Son promotional artwork, Sony Interactive Entertainment/Sucker Punch.
+Source: https://store.playstation.com/pt-br/product/UP9000-CUSA00223_00-SECONDSONSHIP000
+Image: https://image.api.playstation.com/vulcan/img/rnd/202011/0700/enLAr4eVGBxWjrHh5nLTUSnn.png
+No affiliation with or endorsement by Sony Interactive Entertainment.
+
+Native AudioOut PCM FIFO mixing adapted from Daedalus GoW3, source snapshot b3a7c3d,
+which credits Bloodborne-Android 2e472653. ISS AudioOut/Audio3d semantics retained.
+https://github.com/erickmendes22/gow3_android_daedalus_fork/blob/b3a7c3d/src/runtime_audio_bionic.c

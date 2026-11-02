@@ -1,0 +1,26 @@
+From: ISS Android Bionic
+Subject: [PATCH] Allow compatible non-device-local Vulkan memory for FSR resources
+
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -962,7 +962,19 @@
+         requiredMemoryProperties,
+         backendContext->deviceCoherentMemoryEnabled,
+         backendResource->memoryProperties);
+ 
++    // Device-local is a preference for SDK default heaps, not a requirement
++    // of Vulkan memory allocation. CPU/UMA Vulkan devices can expose valid
++    // compatible heaps without VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT.
++    // Retain the device-local fast path on Turnip when it is available.
++    if (allocInfo.memoryTypeIndex == UINT32_MAX &&
++        (requiredMemoryProperties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
++        allocInfo.memoryTypeIndex = findMemoryTypeIndex(
++            backendContext->physicalDevice, memRequirements,
++            requiredMemoryProperties & ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
++            backendContext->deviceCoherentMemoryEnabled,
++            backendResource->memoryProperties);
++    }
+     if (allocInfo.memoryTypeIndex == UINT32_MAX) {
+         return FFX_ERROR_BACKEND_API_ERROR;
+     }

@@ -164,7 +164,7 @@ static ABI int32_t font_memory_term(FontMemory *memory) {
         typedef void (ABI *Destroy)(FontMemory *, void *, void *);
         Destroy destroy=(Destroy)memory->destroy_callback;
         memory->kind=0;
-        destroy(memory,memory->mspace,memory->destroy_object);
+        guest_cpu_call((uintptr_t)destroy,3,(const uint64_t[]){(uintptr_t)memory,(uintptr_t)memory->mspace,(uintptr_t)memory->destroy_object});
         return FONT_OK;
     }
     memset(memory,0,sizeof(*memory));

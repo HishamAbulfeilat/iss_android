@@ -287,10 +287,12 @@ def prepare(game, out):
     (out / 'entry.bin').write_bytes(image[:1024])
     resources = collections.Counter()
     total_bytes = 0
-    # TLG ships loose files in dvdroot_ps4/; TLG ships *.psarc archives at the root.
-    for path in [*(game / 'dvdroot_ps4').rglob('*'), *game.glob('*.psarc')]:
+    # inFAMOUS Second Son stores content in art/{cache,movies,ui,...} rather than
+    # the GoW3/Last Guardian dvdroot_ps4/ or *.psarc layouts.
+    for path in (game / 'art').rglob('*'):
         if path.is_file():
-            key = path.suffix if path.suffix == '.psarc' else path.relative_to(game / 'dvdroot_ps4').parts[0]
+            relative = path.relative_to(game / 'art')
+            key = relative.parts[0]
             resources[key] += 1
             total_bytes += path.stat().st_size
     report = dict(source_sha256=hashlib.sha256(source).hexdigest(), source_bytes=len(source),

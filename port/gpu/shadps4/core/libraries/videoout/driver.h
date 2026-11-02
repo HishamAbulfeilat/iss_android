@@ -4,6 +4,7 @@
 #pragma once
 
 #include <deque>
+#include <atomic>
 #include <functional>
 
 #include "common/debug.h"
@@ -34,7 +35,7 @@ struct VideoOutPort {
     std::mutex port_mutex;
     std::condition_variable vo_cv;
     std::condition_variable vblank_cv;
-    int flip_rate = 0;
+    std::atomic<int> flip_rate{0};
     int prev_index = -1;
     bool is_open = false;
     bool is_hdr = false;

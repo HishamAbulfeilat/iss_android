@@ -1,0 +1,350 @@
+package ro.cobrabm.fexdroid;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.*;
+import android.widget.*;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.regex.*;
+
+/** Only the Bionic APK uses this activity.
+ * No Xvfb, FEXDroid bridge, rootfs or Linux/glibc Vulkan loader.
+ * Keeps the existing gamepad overlay, virtual graffiti and fullscreen modes.
+ */
+public final class BionicGameActivity extends Activity implements SurfaceHolder.Callback {
+ @Override protected void attachBaseContext(android.content.Context base){super.attachBaseContext(AppLanguage.attach(base));}
+
+ private FrameLayout frame;
+ private SurfaceView surface;
+ private TextView status;
+ private TouchControllerOverlay controller;
+ private BionicPlayerMenu menu;
+ private BionicThermal thermal;
+ private BionicPerfHint perfHint;
+ private boolean restarting,edgeGesture,swipeConsumed;
+ private float edgeX,edgeY;
+ private android.app.AlertDialog graffitiGuideDialog;
+ private PadBridge pad;
+ private AudioBridge audio;
+ private final Handler main=new Handler(Looper.getMainLooper());
+ private final ExecutorService worker=Executors.newSingleThreadExecutor();
+ private volatile Process game;
+ private boolean destroyed,started,failed;
+ private String files,base,screenMode;
+ private long lastFrames=-1;
+ private float lastObservedRefresh=-1;
+ private synchronized void record(String line){
+  try(FileOutputStream f=new FileOutputStream(new File(files,"iss.log"),true)){
+   f.write(("[Bionic] "+line+"\n").getBytes(StandardCharsets.UTF_8));
+  }catch(Exception ignored){}
+ }
+ @Override public void onCreate(Bundle saved){
+  super.onCreate(saved);
+  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  applyFullscreen();
+  files=getFilesDir().getPath();base=files+"/issport";
+  screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
+  try{FramegenSettings.write(this);BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
+  new File(base,"framegen.stats").delete();
+  try(FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),false)){
+   out.write("inFAMOUS Second Son — Daedalus 0.4.6 · Android Bionic\n".getBytes(StandardCharsets.UTF_8));
+  }catch(Exception ignored){}
+  pad=new PadBridge(new File(base,"android-pad.state"));
+  audio=new AudioBridge(new File(base,"audio.fifo"));
+  frame=new FrameLayout(this);frame.setBackgroundColor(0xff000000);
+  surface=new SurfaceView(this);frame.addView(surface);
+  updateDisplayRate();
+  controller=new TouchControllerOverlay(this,pad,false);frame.addView(controller);
+  status=new TextView(this);status.setText(AppLanguage.text("Starting inFAMOUS Bionic…","Iniciando inFAMOUS Bionic…"));
+  status.setGravity(Gravity.CENTER);status.setTextColor(0xffe0c891);status.setTextSize(18);
+
+  frame.addView(status);
+  menu=new BionicPlayerMenu(this,frame,controller,pad,this::restartGame);
+  setContentView(frame);
+  // Controller sticks are delivered as they arrive, not batched to the next display frame.
+  frame.requestUnbufferedDispatch(InputDevice.SOURCE_JOYSTICK|InputDevice.SOURCE_GAMEPAD);
+  frame.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or_,ob)->updateVideoSize());
+  frame.post(this::updateVideoSize);
+  surface.getHolder().addCallback(this);
+  record("Activity initialized");
+  recordPreviousExit();
+  thermal=new BionicThermal(this,this::record);thermal.start();
+  if(BionicPerfHint.enabled(getSharedPreferences("iss",0)))perfHint=new BionicPerfHint(this,this::record);else record("Performance hint: off (Renderer corrections)");
+ }
+ private void applyFullscreen(){
+  // Fullscreen selects image fill, not the visibility of Android's system bars.
+  // Keep the whole landscape area available in fit (16:9), crop and stretch modes.
+  getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+  getWindow().getDecorView().setSystemUiVisibility(5894);
+  screenMode=BionicVideoSettings.gameDisplayMode(getSharedPreferences("iss",0));
+  if(frame!=null)frame.post(this::updateVideoSize);
+ }
+ @Override public void onWindowFocusChanged(boolean focused){super.onWindowFocusChanged(focused);if(focused)applyFullscreen();}
+ void updateDisplayRate(){
+  try{BionicPerformanceSettings.write(this);}catch(IOException e){record(e.toString());}
+  float hz=BionicDisplayRate.apply(this);
+  IssPresent.frameRate(hz);
+  int chosen=BionicPerformanceSettings.limit(getSharedPreferences("iss",0)),applied=BionicPerformanceSettings.effective(this);
+  record("Display: requested "+hz+" Hz; source limit="+applied+(applied!=chosen?" (chosen "+chosen+")":""));
+  if(surface!=null&&surface.getHolder().getSurface().isValid())try{surface.getHolder().getSurface().setFrameRate(hz,Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);}catch(Exception e){record("Display frame-rate hint: "+e.getMessage());}
+ }
+ private void updateVideoSize(){
+  if(frame==null||surface==null)return;
+  int w=frame.getWidth(),h=frame.getHeight();if(w<1||h<1)return;
+  float scale="crop".equals(screenMode)?Math.max(w/1280f,h/720f):Math.min(w/1280f,h/720f);
+  int vw="stretch".equals(screenMode)?w:Math.max(1,Math.round(1280*scale));
+  int vh="stretch".equals(screenMode)?h:Math.max(1,Math.round(720*scale));
+  FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)surface.getLayoutParams();
+  if(p.width!=vw||p.height!=vh||p.gravity!=Gravity.CENTER){
+   p.width=vw;p.height=vh;p.gravity=Gravity.CENTER;surface.setLayoutParams(p);
+  }
+ }
+ private Process process(String... command)throws IOException{
+  ProcessBuilder p=new ProcessBuilder(command).redirectErrorStream(true);
+  Map<String,String> e=p.environment();e.put("FXD_FILES",files);
+  e.put("ISS_GAME_DIR",getIntent().getStringExtra("game_dir"));
+  e.put("ISS_APP_LANGUAGE",AppLanguage.gameLanguage());
+  e.put("ISS_BIONIC","1");e.put("ISS_ANDROID_INPUT","1");
+  e.put("ISS_BIONIC_DRIVER",BionicDriverSettings.selection(this));
+  e.put("ISS_CUSTOM_DRIVER",BionicDriverSettings.customLibrary(this).getPath());
+  String outputResolution=BionicVideoSettings.outputResolution(getSharedPreferences("iss",0));
+  String[] dimensions=outputResolution.split("x");
+  e.put("ISS_SCREEN_W",dimensions[0]);e.put("ISS_SCREEN_H",dimensions[1]);
+  e.put("ISS_PRESENT_SOCKET",base+"/present.sock");
+  e.put("TLG_PAD_FILE",base+"/android-pad.state");
+  e.put("TLG_SHOW_FPS","0");
+  e.put("TLG_ANDROID_FPS_ONLY","1");
+  java.util.ArrayList<String> patches=new java.util.ArrayList<>();
+  android.content.SharedPreferences prefs=getSharedPreferences("iss",0);
+  e.put("ISS_PERFORMANCE_STATE_FILE",base+"/performance.state");
+  BionicRendererSettings.environment(prefs,e);
+  // The texture collector follows the driver's live budget, as upstream. A forced 45%-of-RAM budget
+  // (v0.2.1-v0.2.3) evicted nothing (buffers, not textures, fill memory) and kept it in pressure mode.
+  {android.app.ActivityManager.MemoryInfo m=memory();if(m!=null)record("Memory: "+(m.totalMem>>20)+" MiB RAM");}
+  boolean fsr3=prefs.getBoolean("fsr3",false);
+  e.put("TLG_UPSCALER",fsr3?"fsr3":"none");
+  if(fsr3){
+   // The upscaler exclusively owns render resolution while active:
+   //   Performance 640x360 -> 1280x720; Quality 960x540 -> 1280x720.
+   // The corresponding executable patch is still required internally, but
+   // manual resolution-patch preferences must not be combined with it.
+   e.put("TLG_UPSCALE_PRESET",Integer.toString(BionicVideoSettings.fsrEnginePreset(prefs)));
+   e.put("TLG_FSR_SHARPNESS",BionicVideoSettings.fsrSharpnessValue(prefs));
+   e.put("TLG_FSR_SHARPEN",BionicVideoSettings.fsrSharpenEnabled(prefs)?"1":"0");
+   e.put("TLG_REACTIVE","0");
+   e.put("TLG_JITTER","1");
+   e.put("TLG_RENDER_RES",BionicVideoSettings.fsrInputSize(prefs));
+   // Raw input/depth/motion and output capture is armed from the in-game menu.
+   // Capture is off by default, capped to two frames, and stored privately.
+   File captureDir=new File(base,"fsr-capture");
+   if(captureDir.isDirectory()||captureDir.mkdirs()){
+    e.put("TLG_DUMP_TRIGGER",new File(base,"fsr-capture.trigger").getAbsolutePath());
+    e.put("TLG_DUMP_DIR",captureDir.getAbsolutePath());
+    e.put("TLG_DUMP_FRAMES","2");
+   }
+  }
+  String resolution=BionicVideoSettings.effectiveResolutionPatch(prefs);
+  String resolutionPatch=BionicVideoSettings.internalPatchName(resolution);
+  if(resolutionPatch!=null)patches.add(resolutionPatch);
+  if(prefs.getBoolean("patch_motion_blur",false))patches.add("Disable motion blur");
+  if(prefs.getBoolean("patch_dof",false))patches.add("Disable depth of field");
+  if(prefs.getBoolean("patch_depth_blur",false))patches.add("Disable depth blur");
+  if(prefs.getBoolean("patch_shadows",false))patches.add("Disable shadow maps");
+
+  e.put("ISS_PATCHES",android.text.TextUtils.join(";",patches));
+  e.put("TLG_BP09","0");e.put("TLG_BC_TINY","0");
+  e.put("TLG_OUTPUT_RES",outputResolution);
+  return p.start();
+ }
+ @Override public void surfaceCreated(SurfaceHolder h){
+  if(destroyed||started)return;
+  started=true;
+  try{
+   String result=IssPresent.start(h,base+"/present.sock","stretch".equals(screenMode));
+   record(result);
+   updateDisplayRate();
+   if(!result.startsWith("bridge running:")){error(result);return;}
+   audio.start();if(!audio.awaitReady(5000)){error(AppLanguage.text("Audio FIFO did not start","O áudio FIFO não iniciou"));return;}
+   worker.execute(()->{
+    try(BionicSession.Guard ignored=BionicSession.acquire(getFilesDir())){
+     BionicSaveArchive.recover(new File(base,"user/savedata"));
+     synchronized(this){
+      if(destroyed||restarting)return;
+      record("Executing native Bionic inFAMOUS");
+      game=process("/system/bin/sh",base+"/run-bionic.sh");
+     }
+     try{
+     try(InputStream in=game.getInputStream();FileOutputStream out=new FileOutputStream(new File(files,"iss.log"),true)){
+      byte[] buf=new byte[65536];int n;while((n=in.read(buf))>0)out.write(buf,0,n);
+     }
+     int exit=game.waitFor();record("Bionic game exited "+exit);
+     if(!destroyed&&!restarting)error(AppLanguage.text("Game stopped (","O jogo parou (")+exit+AppLanguage.text("). Export log.","). Exporte o log."));
+     }finally{
+      // Hold the save lock until the native writer has actually exited, even on Activity teardown.
+      if(game.isAlive())game.destroyForcibly();
+      boolean interrupted=false;
+      for(;;)try{game.waitFor();break;}catch(InterruptedException e){interrupted=true;}
+      if(interrupted)Thread.currentThread().interrupt();
+     }
+    }catch(Exception ex){if(!destroyed)error(ex.toString());}
+   });
+   poll();
+  }catch(Exception ex){error(ex.toString());}
+ }
+ private void showGraffitiGuideIfRequested(){
+  if(destroyed || failed || graffitiGuideDialog!=null)return;
+  // The native GPU records a guide request without touching an unavailable
+  // ImGui context. Show the full instructions using the Android Activity.
+  final File marker=new File(base,"android-pad.state.guide");
+  if(!marker.isFile())return;
+  graffitiGuideDialog=new android.app.AlertDialog.Builder(this)
+   .setTitle(AppLanguage.text("Graffiti without a gyroscope", "Grafite sem giroscópio"))
+   .setMessage(AppLanguage.text("L3 + R3: toggle sensor mode and hold the can sideways.\n\n", "L3 + R3: ativar ou desativar o modo sensor e segurar a lata de lado.\n\n")
+      +AppLanguage.text("✕ (X): shake the can.\n\n", "✕ (X): sacudir a lata.\n\n")
+      +AppLanguage.text("R2: spray. Aim with the left stick; small movements improve precision.\n\n", "R2: pintar. Mire com o analógico esquerdo; movimentos pequenos dão mais precisão.\n\n")
+      +AppLanguage.text("L3 + R3 again: return to walking.", "L3 + R3 novamente: voltar a andar."))
+   .setPositiveButton(AppLanguage.text("Done","Entendi"),(dialog,which)->{})
+   .create();
+  graffitiGuideDialog.setOnDismissListener(dialog->{
+   if(marker.exists()&&!marker.delete())record("Could not delete graffiti guide marker");
+   graffitiGuideDialog=null;
+  });
+  graffitiGuideDialog.show();
+  record("Native Android graffiti guide displayed (no ImGui Vulkan dependency)");
+ }
+ private android.app.ActivityManager.MemoryInfo memory(){
+  android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE);if(am==null)return null;
+  android.app.ActivityManager.MemoryInfo m=new android.app.ActivityManager.MemoryInfo();am.getMemoryInfo(m);return m;
+ }
+ private int memoryPolls;
+ /** /proc scans and binder calls for the memory log and the performance hint stay off the UI
+  * thread: while the game process is stalled they can block, and Android then reports an ANR. */
+ private final android.os.HandlerThread monitor=new android.os.HandlerThread("iss-monitor");
+ private Handler monitorHandler;
+ /** Low-memory kills leave no native error: keep the system's view of memory in iss.log. */
+ private void recordMemory(String why){
+  android.app.ActivityManager.MemoryInfo m=memory();if(m==null)return;
+  record("Memory: "+why+"; available "+(m.availMem>>20)+" of "+(m.totalMem>>20)+" MiB, low-memory threshold "+(m.threshold>>20)+" MiB"+(m.lowMemory?", LOW":"")+gameMemory());
+ }
+ /** Resident and swapped memory of the native game processes (same UID, not this process). */
+ private static String gameMemory(){
+  long rss=0,swap=0;int count=0;String uid=Integer.toString(android.os.Process.myUid()),self=Integer.toString(android.os.Process.myPid());
+  File[] procs=new File("/proc").listFiles();if(procs==null)return "";
+  for(File d:procs){
+   String pid=d.getName();if(pid.isEmpty()||!Character.isDigit(pid.charAt(0))||pid.equals(self))continue;
+   long r=0,w=0;boolean mine=false;
+   try(BufferedReader in=new BufferedReader(new FileReader(new File(d,"status")))){
+    for(String line;(line=in.readLine())!=null;){
+     if(line.startsWith("Uid:"))mine=line.split("\\s+").length>1&&line.split("\\s+")[1].equals(uid);
+     else if(line.startsWith("VmRSS:"))r=kb(line);else if(line.startsWith("VmSwap:"))w=kb(line);
+    }
+   }catch(Exception ignored){continue;}
+   if(mine&&r>0){rss+=r;swap+=w;count++;}
+  }
+  return count==0?"":"; game processes "+count+" RSS "+(rss>>10)+" MiB, swap "+(swap>>10)+" MiB";
+ }
+ private static long kb(String line){try{return Long.parseLong(line.replaceAll("[^0-9]",""));}catch(Exception e){return 0;}}
+ /** Android keeps why the app last ended: a low-memory kill otherwise leaves no trace in iss.log. */
+ private void recordPreviousExit(){
+  try{
+   android.app.ActivityManager am=(android.app.ActivityManager)getSystemService(ACTIVITY_SERVICE);if(am==null)return;
+   java.util.List<android.app.ApplicationExitInfo> exits=am.getHistoricalProcessExitReasons(getPackageName(),0,1);
+   if(exits.isEmpty())return;android.app.ApplicationExitInfo x=exits.get(0);
+   record("Previous exit: "+exitReason(x.getReason())+" status="+x.getStatus()+" importance="+x.getImportance()
+    +" pss="+(x.getPss()>>10)+" MiB rss="+(x.getRss()>>10)+" MiB at "+new java.util.Date(x.getTimestamp())
+    +(x.getDescription()!=null?" ("+x.getDescription()+")":""));
+  }catch(Exception e){record("Previous exit: unavailable ("+e+")");}
+ }
+ private static String exitReason(int r){
+  switch(r){
+   case android.app.ApplicationExitInfo.REASON_LOW_MEMORY:return "LOW_MEMORY (killed by Android to free RAM)";
+   case android.app.ApplicationExitInfo.REASON_CRASH:return "CRASH (Java)";
+   case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE:return "CRASH_NATIVE";
+   case android.app.ApplicationExitInfo.REASON_ANR:return "ANR";
+   case android.app.ApplicationExitInfo.REASON_SIGNALED:return "SIGNALED";
+   case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE:return "EXCESSIVE_RESOURCE_USAGE";
+   case android.app.ApplicationExitInfo.REASON_USER_REQUESTED:return "USER_REQUESTED";
+   case android.app.ApplicationExitInfo.REASON_EXIT_SELF:return "EXIT_SELF";
+   case android.app.ApplicationExitInfo.REASON_OTHER:return "OTHER";
+   default:return "reason "+r;
+  }
+ }
+ @Override public void onTrimMemory(int level){super.onTrimMemory(level);recordMemory("Android trim level "+level);}
+ private void poll(){
+  if(destroyed)return;
+  if(monitorHandler==null){monitor.start();monitorHandler=new Handler(monitor.getLooper());}
+  final boolean memoryDue=++memoryPolls%10==0;final long shown=IssPresent.frames();
+  final int realLimit=BionicPerformanceSettings.effective(this),multiplier=getSharedPreferences("iss",0).getInt("fg_multiplier",0);
+  monitorHandler.post(()->{
+   if(destroyed)return;
+   if(memoryDue)recordMemory("periodic");
+   if(perfHint!=null)perfHint.tick(shown,realLimit,multiplier);
+  });
+  float refresh=getWindowManager().getDefaultDisplay().getRefreshRate();
+  if(refresh!=lastObservedRefresh){lastObservedRefresh=refresh;record("Display: Android reports "+refresh+" Hz");}
+  showGraffitiGuideIfRequested();
+  long n=IssPresent.frames();
+  if(!failed&&n>0)status.setVisibility(View.GONE);
+  if(n>0&&lastFrames<0){record("Bionic direct AHardwareBuffer frames active");lastFrames=n;}
+  main.postDelayed(this::poll,1000);
+ }
+ private void error(String message){failed=true;record("ERROR: "+message);main.post(()->{status.setText(message);status.setVisibility(View.VISIBLE);});}
+ @Override public void surfaceChanged(SurfaceHolder h,int format,int w,int ht){}
+ @Override public void surfaceDestroyed(SurfaceHolder h){}
+ private void restartGame(){
+  if(restarting||destroyed)return;restarting=true;status.setText(AppLanguage.text("Restarting inFAMOUS…", "Reiniciando inFAMOUS…"));status.setVisibility(View.VISIBLE);
+  synchronized(this){if(game!=null)game.destroyForcibly();}
+  worker.execute(()->main.post(()->{if(!destroyed)recreate();}));
+ }
+ @Override protected void onActivityResult(int request,int result,android.content.Intent data){super.onActivityResult(request,result,data);if(BionicDriverSettings.result(this,request,result,data))return;if(request==FramegenSettings.IMPORT_DLL&&result==RESULT_OK&&data!=null&&data.getData()!=null)FramegenSettings.importDll(this,data.getData(),null);}
+ @Override public void onBackPressed(){if(menu!=null)menu.toggle();}
+ @Override public boolean dispatchKeyEvent(KeyEvent e){
+  int code=e.getKeyCode();
+  if(code==KeyEvent.KEYCODE_BACK||code==KeyEvent.KEYCODE_BUTTON_MODE){if(e.getAction()==KeyEvent.ACTION_UP&&menu!=null)menu.toggle();return true;}
+  if(menu!=null&&menu.opened()){
+   if(code==KeyEvent.KEYCODE_BUTTON_B){if(e.getAction()==KeyEvent.ACTION_UP)menu.close();return true;}
+   return super.dispatchKeyEvent(e);
+  }
+  return pad!=null&&pad.key(e)||super.dispatchKeyEvent(e);
+ }
+ @Override public boolean dispatchTouchEvent(MotionEvent e){
+  float density=getResources().getDisplayMetrics().density;int action=e.getActionMasked();
+  if(action==MotionEvent.ACTION_DOWN){edgeX=e.getX();edgeY=e.getY();edgeGesture=menu!=null&&!menu.opened()&&edgeX<24*density;swipeConsumed=false;}
+  if(swipeConsumed){if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL)swipeConsumed=false;return true;}
+  if(action==MotionEvent.ACTION_MOVE&&menu!=null){float dx=e.getX()-edgeX,dy=e.getY()-edgeY;
+   if((edgeGesture&&dx>55*density&&Math.abs(dy)<80*density)||(menu.opened()&&dx< -70*density&&Math.abs(dy)<80*density)){
+    MotionEvent cancel=MotionEvent.obtain(e);cancel.setAction(MotionEvent.ACTION_CANCEL);super.dispatchTouchEvent(cancel);cancel.recycle();menu.toggle();edgeGesture=false;swipeConsumed=true;return true;
+   }
+  }
+  return super.dispatchTouchEvent(e);
+ }
+ @Override public boolean onGenericMotionEvent(MotionEvent e){return menu!=null&&menu.opened()?super.onGenericMotionEvent(e):pad!=null&&pad.motion(e)||super.onGenericMotionEvent(e);}
+ @Override protected void onPause(){
+  super.onPause();if(menu!=null)menu.pause();
+  if(pad!=null)pad.reset();if(audio!=null)audio.pause();
+ }
+ @Override protected void onResume(){
+  super.onResume();applyFullscreen();
+  if(audio!=null)audio.resume();if(menu!=null)menu.resume();
+ }
+ @Override protected void onDestroy(){
+  synchronized(this){destroyed=true;if(game!=null)game.destroyForcibly();}
+  main.removeCallbacksAndMessages(null);
+  if(graffitiGuideDialog!=null){
+   graffitiGuideDialog.setOnDismissListener(null);
+   graffitiGuideDialog.dismiss();
+   graffitiGuideDialog=null;
+  }
+  if(menu!=null)menu.destroy();
+  if(thermal!=null)thermal.stop();
+  if(monitorHandler!=null)monitorHandler.post(()->{if(perfHint!=null)perfHint.stop();});
+  monitor.quitSafely();
+  IssPresent.stop();if(audio!=null)audio.stop();
+  worker.shutdown();super.onDestroy();
+ }
+}

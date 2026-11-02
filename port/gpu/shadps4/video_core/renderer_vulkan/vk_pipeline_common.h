@@ -6,6 +6,7 @@
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/descriptor_template_data.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -21,6 +22,10 @@ struct PushData;
 } // namespace Shader
 
 namespace Vulkan {
+
+/// tlg: pipelines the driver created (graphics and compute, any thread): the driver cache saver
+/// (BP08) skips its merge and copy of the whole blob while this has not moved.
+extern std::atomic<u64> g_tlg_driver_pipelines_created;
 
 static constexpr auto AllGraphicsStageBits =
     vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eTessellationControl |
@@ -82,9 +87,12 @@ public:
     }
 
     using DescriptorWrites = std::vector<vk::WriteDescriptorSet>;
-    void BindResources(DescriptorWrites& set_writes, const Shader::PushData& push_data) const;
+    // Only count entries belong to this draw; the backing vector retains its high-water size.
+    void BindResources(DescriptorWrites& set_writes, u32 count,
+                       const Shader::PushData& push_data) const;
 
 protected:
+    void BuildDescriptorTemplate(std::span<const vk::DescriptorSetLayoutBinding> bindings);
     [[nodiscard]] std::string GetDebugString() const;
 
     /// tlg: TLG_WAVE_STATS=1: logs the subgroup width the driver compiled each stage of
@@ -113,6 +121,10 @@ protected:
     vk::UniquePipeline pipeline;
     vk::UniquePipelineLayout pipeline_layout;
     vk::UniqueDescriptorSetLayout desc_layout;
+    DescriptorTemplateData descriptor_template_data;
+    std::vector<vk::DescriptorSetLayoutBinding> descriptor_bindings;
+    vk::UniqueDescriptorUpdateTemplate descriptor_update_template;
+    PFN_vkCmdPushDescriptorSetWithTemplateKHR push_descriptor_template{};
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
     bool uses_push_descriptors{};
     bool is_compute;

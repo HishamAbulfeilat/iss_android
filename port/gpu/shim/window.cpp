@@ -44,7 +44,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         SDL_SetHint(SDL_HINT_APP_ID, app_id && *app_id ? app_id : "tlg-pc");
     }
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
-    if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    const char* ai=std::getenv("TLG_ANDROID_INPUT");
+    const bool external_pad=ai && ai[0]=='1';
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO | (external_pad ? 0 : SDL_INIT_GAMEPAD))) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
     // tlg: the window opens at the game's size (1920x1080) unless the screen is smaller: on a
@@ -54,7 +56,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_Rect usable{};
     if (width_ > 0 && height_ > 0 && SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable) &&
         usable.w > 0 && usable.h > 0) {
-        const double fit = std::min({1.0, usable.w * 0.95 / width_, (usable.h - 40) * 0.95 / height_});
+        const double fit = external_pad ? std::min({1.0,double(usable.w)/width_,double(usable.h)/height_}) : std::min({1.0, usable.w * 0.95 / width_, (usable.h - 40) * 0.95 / height_});
         if (fit < 1.0) {
             const s32 w = std::max<s32>(640, s32(width_ * fit)), h = std::max<s32>(360, s32(height_ * fit));
             LOG_INFO(Frontend, "Window {}x{} does not fit the screen ({}x{} usable): opening at {}x{}", width_,

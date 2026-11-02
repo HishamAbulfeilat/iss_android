@@ -132,7 +132,7 @@ _ROWS = (
      ('The most time one frame may spend waiting for compiling pipelines. Only used when the per-draw wait above is on.',
       'O máximo de tempo que um quadro pode gastar esperando pipelines em compilação. Só vale com a espera por draw ligada.'),
      {'lo': 0, 'hi': 100, 'unit': 'ms'}),
-    ('compile', 'DRIVER_CACHE_SAVE_S', 'int', '60', ('Driver cache save interval', 'Intervalo para salvar o cache do driver'),
+    ('compile', 'DRIVER_CACHE_SAVE_S', 'int', '30', ('Driver cache save interval', 'Intervalo para salvar o cache do driver'),
      ('How often the graphics driver cache is written to disk. A crash loses at most this much of what the driver learned.',
       'De quanto em quanto tempo o cache do driver de vídeo é gravado em disco. Um crash perde no máximo esse tempo do que o driver aprendeu.'),
      {'lo': 10, 'hi': 3600, 'unit': 's'}),

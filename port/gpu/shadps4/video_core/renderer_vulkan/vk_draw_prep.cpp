@@ -9,6 +9,7 @@
 
 #include "tlg_threads.h"
 #include "tlg_toggles.h"
+#include "iss_bionic_perf.h"
 #include "common/thread.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -51,6 +52,12 @@ u32 DefaultWorkerCount() {
     if (const char* env = std::getenv("TLG_PREP_WORKERS")) {
         return static_cast<u32>(std::clamp(std::atoi(env), 0, 16));
     }
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+    // Adapted from GoW3 Bionic: avoid replaying guest command buffers speculatively
+    // alongside FEX and the Vulkan recorder on a heterogeneous mobile CPU.
+    // TLG_PREP_WORKERS keeps the existing path available for matched-scene A/B runs.
+    return 0;
+#endif
     // Workers are SCHED_IDLE and claim whole buffers, so more of them only use more idle
     // cores: half the hardware threads (Steam Deck 4, 16-thread desktop 8).
     return std::clamp<u32>(TlgThreads::Available() / 2, 1, 8);
@@ -205,8 +212,8 @@ DrawPreparation::DrawPreparation(PipelineCache& pipeline_cache_)
     for (u32 i = 0; i < worker_count; ++i) {
         workers.emplace_back([this, i](std::stop_token stop) { WorkerLoop(stop, i); });
     }
-    std::printf("GPU: draw preparation workers: %u (+1 scanner, %u hardware threads)\n",
-                worker_count, TlgThreads::Available());
+    std::printf("GPU: draw preparation workers: %u (+%u scanner, %u hardware threads)\n",
+                worker_count, worker_count ? 1u : 0u, TlgThreads::Available());
 }
 
 DrawPreparation::~DrawPreparation() {
@@ -396,6 +403,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
         const u64 gpu = gpu_seq.load(std::memory_order_acquire);
         for (const auto& submission : submissions) {
             if (submission->seq >= gpu && submission->seq >= tail_seq &&
+                submission->num_draws != 0 &&
+                !submission->gpu_done.load(std::memory_order_acquire) &&
                 submission->scanned.load(std::memory_order_acquire) &&
                 !submission->claimed.load(std::memory_order_relaxed)) {
                 return submission;
@@ -443,7 +452,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
             }
             // Past the GPU thread the draws are no longer worth preparing.
             if (ordinal < target->num_draws &&
-                target->seq >= gpu_seq.load(std::memory_order_acquire)) {
+                target->seq >= gpu_seq.load(std::memory_order_acquire) &&
+                !target->gpu_done.load(std::memory_order_acquire)) {
                 auto& draw = target->draws[ordinal];
                 prep_worker.stages.clear();
                 prep_worker.failed = false;
@@ -485,7 +495,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
 
 void DrawPreparation::Count(bool was_used) {
     ++(was_used ? used : unused);
-    static const bool stats = std::getenv("TLG_FRAME_STATS") != nullptr;
+    static const bool stats = TlgStats::enabled || IssBionicPerf::Enabled();
     // The clock is read every 1024 draws: per draw it was 8% of the GPU thread.
     if (!stats || ((used + unused) & 1023) != 0) {
         return;

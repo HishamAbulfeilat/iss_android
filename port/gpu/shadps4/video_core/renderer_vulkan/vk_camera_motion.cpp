@@ -7,6 +7,9 @@
 #include <cstring>
 
 #include "tlg_toggles.h"
+#ifdef ISS_ANDROID_BIONIC
+#include "../../../tlggpu.h"
+#endif
 
 #include "video_core/host_shaders/camera_motion_comp.h"
 #include "video_core/host_shaders/camera_motion_debug_comp.h"
@@ -153,10 +156,16 @@ CameraMotion::CameraMotion(const Instance& instance_, Scheduler& scheduler_,
 CameraMotion::~CameraMotion() = default;
 
 float CameraMotion::VerticalFov() const noexcept {
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) return native_vertical_fov;
+#endif
     return 2.0f * std::atan(1.0f / current.proj[1]);
 }
 
 float CameraMotion::Near() const noexcept {
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) return native_near;
+#endif
     // depth = zs + zo / z is 0 at the near plane.
     return -current.proj[3] / current.proj[2];
 }
@@ -176,20 +185,181 @@ vk::Image CameraMotion::ObjectMotionImage(u32 width, u32 height) const noexcept 
                                                       : vk::Image{};
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void CameraMotion::PrepareIssNativeCamera() {
+    // The fullscreen upscale consumes this game's native scene depth.
+    // Read the latest completed camera update immediately before that pass,
+    // not at OnDisplayPass (which runs after the upscale).
+    if (!for_upscaler || !depth_id) return;
+    TlgIssCameraSnapshot sample{};
+    const u64 sequence = tlggpu_iss_camera_read(&sample);
+    if (!sequence || sequence == native_previous_sequence) return;
+    const bool scalars_ok =
+        std::isfinite(sample.near_plane) && sample.near_plane > 0.0f &&
+        std::isfinite(sample.far_plane) && sample.far_plane > sample.near_plane &&
+        std::isfinite(sample.vertical_fov) && sample.vertical_fov > 0.1f &&
+        sample.vertical_fov < 3.14f &&
+        std::isfinite(sample.aspect) && sample.aspect > 0.2f && sample.aspect < 8.0f;
+    bool inverse_ok = scalars_ok && sample.guest_object != 0;
+    if (inverse_ok) {
+        // Verified against an actual CUSA00004 camera dump: the matrices at
+        // +0x430 and +0x4b0 multiply to identity in ROW-MAJOR order.
+        for (int row = 0; row < 4 && inverse_ok; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                double value = 0.0;
+                for (int k = 0; k < 4; ++k) {
+                    const float a = sample.composite[row * 4 + k];
+                    const float b = sample.inverse[k * 4 + col];
+                    if (!std::isfinite(a) || !std::isfinite(b)) {
+                        inverse_ok = false;
+                        break;
+                    }
+                    value += double(a) * double(b);
+                }
+                if (!inverse_ok || !std::isfinite(value) ||
+                    std::abs(value - (row == col ? 1.0 : 0.0)) > 0.02) {
+                    inverse_ok = false;
+                    break;
+                }
+            }
+        }
+    }
+    if (!inverse_ok) {
+        native_previous_valid = native_motion_valid = false;
+        current.valid = previous.valid = false;
+        ++native_frames_rejected;
+        return;
+    }
+
+    // Native projection row 2 also contains the game's own subpixel TAA
+    // jitter. The Android rasterizer applies a SECOND viewport jitter for FSR.
+    // Motion vectors must exclude the guest jitter step between frames;
+    // otherwise a completely stationary camera creates phantom half-pixel
+    // movement (measured in ISS log 9).
+    const std::array<float, 2> guest_jitter_ndc{
+        sample.projection[8], sample.projection[9]};
+    const bool guest_jitter_ok = std::isfinite(guest_jitter_ndc[0]) &&
+                                 std::isfinite(guest_jitter_ndc[1]) &&
+                                 std::abs(guest_jitter_ndc[0]) < 0.02f &&
+                                 std::abs(guest_jitter_ndc[1]) < 0.02f;
+    if (!guest_jitter_ok) {
+        native_previous_valid = native_motion_valid = false;
+        current.valid = previous.valid = false;
+        ++native_frames_rejected;
+        return;
+    }
+    native_jitter_delta_ndc = native_previous_valid
+        ? std::array<float, 2>{
+              native_previous_jitter_ndc[0] - guest_jitter_ndc[0],
+              native_previous_jitter_ndc[1] - guest_jitter_ndc[1]}
+        : std::array<float, 2>{};
+
+    const bool same_camera = native_previous_valid &&
+                             native_previous_object == sample.guest_object;
+    // Frame IDs advance by several camera-update calls per actual scene frame.
+    // Large gaps (menu/loading/pause) must reset temporal history.
+    const bool consecutive = native_previous_sequence &&
+                             sequence > native_previous_sequence &&
+                             sequence - native_previous_sequence <= 64;
+    native_motion_valid = same_camera && consecutive;
+    if (native_motion_valid) {
+        // PS4/inFAMOUS stores row-vector camera matrices. For a homogeneous
+        // CURRENT clip-space row vector, the PREVIOUS clip coordinate is:
+        //   clip_previous = clip_current * inverse(current) * composite(previous)
+        // The GLSL shader instead computes dot(row, column_vector), so upload
+        // the TRANSPOSE of this product. The earlier previous*inverse product
+        // was mathematically incorrect despite passing camera-inverse checks.
+        // For a captured static-camera jitter pair the correct transform has
+        // about (+0.00104,-0.00185) XY translation in its last row; the old
+        // product wrongly placed motion in the Z-dependent matrix entries.
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                double value = 0.0;
+                for (int k = 0; k < 4; ++k) {
+                    value += double(sample.inverse[k * 4 + row]) *
+                             double(native_previous_composite[col * 4 + k]);
+                }
+                if (!std::isfinite(value) || std::abs(value) > 1.0e6) {
+                    native_motion_valid = false;
+                    break;
+                }
+                native_reprojection[row * 4 + col] = float(value);
+            }
+            if (!native_motion_valid) break;
+        }
+    }
+    std::memcpy(native_previous_composite.data(), sample.composite,
+                sizeof(sample.composite));
+    native_previous_object = sample.guest_object;
+    native_previous_sequence = sequence;
+    native_previous_jitter_ndc = guest_jitter_ndc;
+    native_previous_valid = true;
+    native_near = sample.near_plane;
+    native_far = sample.far_plane;
+    native_vertical_fov = sample.vertical_fov;
+
+    // A verified native camera sample is a valid frame anchor even when
+    // the PREVIOUS frame is not yet available. The first sample seeds the
+    // temporal history; it is intentionally NOT ready for reprojection.
+    // Without this flag OnDisplayPass calls InvalidateHistory(), destroys the
+    // seed every frame, and native_motion_valid can never become true.
+    frame_has_camera = true;
+    if (native_motion_valid) {
+        previous.valid = current.valid = true;
+        ++native_frames_valid;
+    } else {
+        previous.valid = current.valid = false;
+        ++native_frames_rejected;
+    }
+}
+#endif
+
 void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_view,
                                 vk::ImageView motion_view, u32 width, u32 height) {
     bool object_valid = false;
     const vk::ImageView object_view = object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(cmdbuf, width, height, object_valid) : depth_view;
-    const PushConstants push{
+#ifdef ISS_ANDROID_BIONIC
+    const bool object_only = !Ready() && object_valid;
+    if (object_only) {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            std::printf("FSR3 ISS: using depth-matched object motion without camera "
+                        "(experimental, uncovered pixels use zero vectors)\n");
+        }
+    }
+#endif
+    PushConstants push{
         .reproject = Multiply(previous.view, current.inv_view),
         .proj = current.proj,
         .prev_proj = previous.proj,
         .size = {float(width), float(height)},
         .jitter = jitter,
         .previous_jitter = previous_jitter,
+#ifdef ISS_ANDROID_BIONIC
+        .mode = native_motion_valid ? (object_valid ? 3u : 4u) :
+                (object_only ? 2u : (object_valid ? 1u : 0u)),
+#else
         .mode = object_valid ? 1u : 0u,
+#endif
     };
+#ifdef ISS_ANDROID_BIONIC
+    if (native_motion_valid) {
+        // Reuse existing 80-byte push-constant space for the full 4x4
+        // current-clip -> previous-clip matrix. No larger Vulkan push range.
+        std::memcpy(push.reproject.data(), native_reprojection.data(),
+                    12 * sizeof(float));
+        std::memcpy(push.proj.data(), native_reprojection.data() + 12,
+                    4 * sizeof(float));
+        // The previous_jitter slot is unused by the normal FSR motion
+        // shader. In native mode it carries the guest's PREV-CURRENT
+        // projection jitter delta, converted from NDC into render pixels.
+        push.previous_jitter = {
+            native_jitter_delta_ndc[0] * (float(width) * 0.5f),
+            -native_jitter_delta_ndc[1] * (float(height) * 0.5f)};
+    }
+#endif
     const vk::DescriptorImageInfo depth_info{.imageView = depth_view,
                                              .imageLayout = vk::ImageLayout::eGeneral};
     const vk::DescriptorImageInfo motion_info{.imageView = motion_view,
@@ -218,12 +388,35 @@ void CameraMotion::RecordMotion(vk::CommandBuffer cmdbuf, vk::ImageView depth_vi
     cmdbuf.dispatch((width + 7) / 8, (height + 7) / 8, 1);
 }
 
+#ifdef ISS_ANDROID_BIONIC
+void CameraMotion::ObserveGBufferBinding(u64 hash, u32 slot, u32 size, const void* bytes) {
+    if (!NeedGBufferSamples() || !bytes || size < 24 || size > 65536) return;
+    for (u32 i = 0; i < android_binding_sample_count; ++i) {
+        const auto& item = android_binding_samples[i];
+        if (item.shader_hash == hash && item.size == size) return;
+    }
+    auto& item = android_binding_samples[android_binding_sample_count++];
+    item.shader_hash = hash;
+    item.slot = slot;
+    item.size = size;
+    // A source buffer can be smaller than 128 bytes; never read beyond its size.
+    std::memcpy(item.first.data(), bytes,
+                std::min<u32>(size, static_cast<u32>(sizeof(item.first))));
+}
+#endif
+
 void CameraMotion::OnConstants(const float* data) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_constants;
+#endif
     // Scene constants: far plane 3000, 1/far, and the render size.
     if (data[0] != 3000.0f || data[4] < 64.0f || data[5] < 64.0f ||
         std::abs(data[1] * data[0] - 1.0f) > 1e-3f) {
         return;
     }
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_signature;
+#endif
     if (frame_has_camera) {
         return; // the first one of a frame is the main camera
     }
@@ -241,10 +434,117 @@ void CameraMotion::OnConstants(const float* data) {
 }
 
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_probe_gbuffer;
+#endif
     depth_id = depth;
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
+#ifdef ISS_ANDROID_BIONIC
+    if (for_upscaler) {
+        // Read exactly one completed guest camera sample at this frame boundary,
+        // after G-buffer draws but before depth_id is reset. We intentionally
+        // do NOT feed these raw matrices into the FSR motion shader: which camera
+        // owns the drawn depth, matrix order and jitter must first be verified.
+        TlgIssCameraSnapshot sample{};
+        const u64 sequence = tlggpu_iss_camera_read(&sample);
+        if (sequence && sequence != android_camera_last_sequence) {
+            const u64 update_delta = sequence - android_camera_last_sequence;
+            android_camera_last_sequence = sequence;
+            ++android_camera_frame_updates;
+            const bool finite = std::isfinite(sample.near_plane) &&
+                std::isfinite(sample.far_plane) &&
+                std::isfinite(sample.vertical_fov) && std::isfinite(sample.aspect);
+            const bool plausible = finite && sample.near_plane > 0 &&
+                sample.far_plane > sample.near_plane && sample.vertical_fov > 0.1f &&
+                sample.vertical_fov < 3.14f && sample.aspect > 0.2f &&
+                sample.aspect < 8.0f;
+            const bool print_sample = android_camera_log_count < 3 ||
+                (android_probe_frames == 179 && android_camera_log_count < 9);
+            if (print_sample) {
+                ++android_camera_log_count;
+                std::printf("FSR3 ISS camera capture: seq=%llu delta=%llu object=0x%llx "
+                            "depth=%u valid_scalars=%u near=%.9g far=%.9g "
+                            "vfov=%.9g aspect=%.9g tan_h=%.9g tan_v=%.9g\n",
+                            static_cast<unsigned long long>(sequence),
+                            static_cast<unsigned long long>(update_delta),
+                            static_cast<unsigned long long>(sample.guest_object),
+                            unsigned(bool(depth_id)), unsigned(plausible),
+                            sample.near_plane, sample.far_plane, sample.vertical_fov,
+                            sample.aspect, sample.tangent_horizontal,
+                            sample.tangent_vertical);
+                const auto dump_matrix = [](const char* name, const float* matrix) {
+                    for (u32 row = 0; row < 4; ++row) {
+                        std::printf("FSR3 ISS camera %s row%u = %.9g, %.9g, %.9g, %.9g\n",
+                                    name, row, matrix[row * 4], matrix[row * 4 + 1],
+                                    matrix[row * 4 + 2], matrix[row * 4 + 3]);
+                    }
+                };
+                dump_matrix("projection", sample.projection);
+                dump_matrix("view_transform", sample.view_transform);
+                dump_matrix("composite", sample.composite);
+                dump_matrix("inverse", sample.inverse);
+            }
+        }
+        if (android_probe_frames == 179) {
+            std::printf("FSR3 ISS camera capture: %u frame-boundary updates / 180 frames, "
+                        "last_sequence=%llu samples_logged=%u\n",
+                        android_camera_frame_updates,
+                        static_cast<unsigned long long>(android_camera_last_sequence),
+                        android_camera_log_count);
+            std::printf("FSR3 ISS native reprojection: frames_valid=%u rejected=%u "
+                        "current_native=%u\n",
+                        native_frames_valid, native_frames_rejected,
+                        unsigned(native_motion_valid));
+            native_frames_valid = native_frames_rejected = 0;
+            android_camera_frame_updates = 0;
+        }
+
+        if (Ready()) ++android_probe_ready;
+        if (++android_probe_frames >= 180) {
+            std::printf("FSR3 camera: frames=%u gbuffer=%u constants864=%u "
+                        "signature3000=%u ready=%u\n",
+                        android_probe_frames, android_probe_gbuffer,
+                        android_probe_constants, android_probe_signature, android_probe_ready);
+            android_probe_frames = android_probe_gbuffer = android_probe_constants = 0;
+            android_probe_signature = android_probe_ready = 0;
+            if (!android_binding_samples_done && android_binding_sample_count) {
+                // One bounded, game-specific trace after the first observed G-buffer.
+                // Unlike Bloodborne's 864-byte constants, ISS has no matching
+                // signature; record actual bound lengths and a few copied floats.
+                std::printf("FSR3 ISS binding layouts: %u distinct shader buffers\n",
+                            android_binding_sample_count);
+                for (u32 i = 0; i < android_binding_sample_count; ++i) {
+                    const auto& v = android_binding_samples[i];
+                    std::printf("FSR3 ISS CB: shader=%016llx slot=%u bytes=%u "
+                                "f0..15=%g,%g,%g,%g | %g,%g,%g,%g | "
+                                "%g,%g,%g,%g | %g,%g,%g,%g "
+                                "f16..23=%g,%g,%g,%g,%g,%g,%g,%g\n",
+                                static_cast<unsigned long long>(v.shader_hash), v.slot,
+                                v.size, v.first[0], v.first[1], v.first[2], v.first[3],
+                                v.first[4], v.first[5], v.first[6], v.first[7],
+                                v.first[8], v.first[9], v.first[10], v.first[11],
+                                v.first[12], v.first[13], v.first[14], v.first[15],
+                                v.first[16], v.first[17], v.first[18], v.first[19],
+                                v.first[20], v.first[21], v.first[22], v.first[23]);
+                    std::printf("FSR3 ISS CB matrices: shader=%016llx slot=%u bytes=%u "
+                                "f24..31=%g,%g,%g,%g,%g,%g,%g,%g "
+                                "f48..63=%g,%g,%g,%g | %g,%g,%g,%g | "
+                                "%g,%g,%g,%g | %g,%g,%g,%g\\n",
+                                static_cast<unsigned long long>(v.shader_hash), v.slot, v.size,
+                                v.first[24], v.first[25], v.first[26], v.first[27],
+                                v.first[28], v.first[29], v.first[30], v.first[31],
+                                v.first[48], v.first[49], v.first[50], v.first[51],
+                                v.first[52], v.first[53], v.first[54], v.first[55],
+                                v.first[56], v.first[57], v.first[58], v.first[59],
+                                v.first[60], v.first[61], v.first[62], v.first[63]);
+                }
+                android_binding_samples_done = true;
+            }
+        }
+    }
+#endif
     if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }

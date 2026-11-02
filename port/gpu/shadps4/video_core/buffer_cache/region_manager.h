@@ -8,15 +8,15 @@
 #include <chrono>
 #include <cstdlib>
 
+#include "tlg_shared_heaps.h"
 #include "tlg_toggles.h"
 #include "common/div_ceil.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
 
+#include "common/spin_lock.h"
 #ifdef __unix__
 #include "common/adaptive_mutex.h"
-#else
-#include "common/spin_lock.h"
 #endif
 #include "common/debug.h"
 #include "common/types.h"
@@ -25,7 +25,7 @@
 
 namespace VideoCore {
 
-#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+#if defined(PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP) || defined(__ANDROID__)
 using LockType = Common::AdaptiveMutex;
 #else
 using LockType = Common::SpinLock;
@@ -46,6 +46,19 @@ public:
     }
     explicit RegionManager() = default;
 
+    // Experimental ISS: retain Relaxed publication, but trap guest reads of GPU-dirty pages.
+    // Off by default; requires explicit TLG_ISS_HYBRID_READ_PROTECT=1.
+    static bool HybridReadProtectionEnabled() {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        static const bool enabled = [] {
+            const char* value = std::getenv("TLG_ISS_HYBRID_READ_PROTECT");
+            return value && value[0] == '1';
+        }();
+        return enabled && EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Relaxed;
+#else
+        return false;
+#endif
+    }
     void SetCpuAddress(VAddr new_cpu_addr) {
         cpu_addr = new_cpu_addr;
     }
@@ -98,6 +111,9 @@ public:
             CountWriteFaults(start_page, end_page);
             NoteCpuBitsSet();
         }
+        if constexpr (type == Type::GPU && enable) {
+            NoteGpuBitsSet();
+        }
         if constexpr (enable) {
             bits.SetRange(start_page, end_page);
         } else {
@@ -108,8 +124,14 @@ public:
                 NoteCpuBitsCleared();
             }
             UpdateProtection<!enable, false>();
-        } else if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise) {
-            UpdateProtection<enable, true>();
+        } else {
+            if constexpr (!enable) {
+                NoteGpuBitsCleared();
+            }
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise ||
+                HybridReadProtectionEnabled()) {
+                UpdateProtection<enable, true>();
+            }
         }
     }
 
@@ -167,8 +189,11 @@ public:
                 KeepHotPagesModified(start_page, end_page);
                 NoteCpuBitsCleared();
                 UpdateProtection<true, false>();
-            } else if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Disabled) {
-                UpdateProtection<false, true>();
+            } else {
+                NoteGpuBitsCleared();
+                if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Disabled) {
+                    UpdateProtection<false, true>();
+                }
             }
         }
 
@@ -200,6 +225,13 @@ public:
             if (!cpu_any.load(std::memory_order_acquire)) {
                 return false;
             }
+        } else {
+            // tlg: the same early-out for the GPU bits: they are empty for most regions
+            // between two frames, and this is asked for every guest memcpy/memset into the
+            // range (BufferCache::CpuWriteMerge) and for every read fault (see gpu_any).
+            if (!gpu_any.load(std::memory_order_acquire)) {
+                return false;
+            }
         }
         const RegionBits& bits = GetRegionBits<type>();
         return bits.AnyInRange(start_page, end_page);
@@ -228,6 +260,27 @@ private:
             readable = ~gpu;
         } else {
             writeable = cpu;
+        }
+        // tlg: shared heaps are never write-protected: the GPU reads the game's memory itself,
+        // so there is nothing to upload and the game's stores there cost no faults. With shared
+        // GPU writes they are never read-protected either: the GPU wrote the game's memory, so
+        // there is nothing to copy back, and the game waits on its fences (which wait for the
+        // GPU) as on a PS4.
+        if (!is_read || TlgSharedHeaps::GpuWrites()) {
+            if (TlgSharedHeaps::Overlaps(cpu_addr, cpu_addr + TRACKER_HIGHER_PAGE_SIZE)) {
+                for (std::size_t i = 0, n = TlgSharedHeaps::Count(); i < n; ++i) {
+                    const auto piece = TlgSharedHeaps::At(i);
+                    const u64 lo = std::max<u64>(piece.start, cpu_addr);
+                    const u64 hi = std::min<u64>(piece.end, cpu_addr + TRACKER_HIGHER_PAGE_SIZE);
+                    if (lo < hi) {
+                        mask.UnsetRange((lo - cpu_addr) / TRACKER_BYTES_PER_PAGE,
+                                        (hi - cpu_addr) / TRACKER_BYTES_PER_PAGE);
+                    }
+                }
+                if (mask.None()) {
+                    return;
+                }
+            }
         }
         tracker->UpdatePageWatchersForRegion<track, is_read>(cpu_addr, mask);
     }
@@ -290,6 +343,20 @@ private:
         cpu_any.store(cpu.Any(), std::memory_order_release);
     }
 
+    // tlg: gpu_any is the mirror of cpu_any for the GPU bits, with the same contract: set
+    // before the bits on every path that sets them (all under `lock`, ChangeRegionState and
+    // ForEachModifiedRange are the only writers), so a reader without the lock that sees a set
+    // bit also sees the flag; a reader racing with a clear sees a stale true and falls back to
+    // the exact scan.
+    void NoteGpuBitsSet() {
+        if (!gpu_any.load(std::memory_order_relaxed)) {
+            gpu_any.store(true, std::memory_order_seq_cst);
+        }
+    }
+    void NoteGpuBitsCleared() {
+        gpu_any.store(gpu.Any(), std::memory_order_release);
+    }
+
     void KeepHotPagesModified(size_t start_page, size_t end_page) {
         if (num_hot == 0) {
             return;
@@ -315,6 +382,7 @@ private:
     PageManager* tracker;
     VAddr cpu_addr = 0;
     std::atomic<bool> cpu_any{true}; ///< see NoteCpuBitsSet; the constructor fills `cpu`
+    std::atomic<bool> gpu_any{false}; ///< see NoteGpuBitsSet; the constructor clears `gpu`
     RegionBits cpu;
     RegionBits gpu;
     RegionBits writeable;

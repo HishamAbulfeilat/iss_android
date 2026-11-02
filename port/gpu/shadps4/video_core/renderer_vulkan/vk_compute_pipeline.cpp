@@ -96,6 +96,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     ASSERT_MSG(layout_result == vk::Result::eSuccess,
                "Failed to create compute pipeline layout: {}", vk::to_string(layout_result));
     pipeline_layout = std::move(layout);
+    BuildDescriptorTemplate({bindings.data(), bindings.size()});
     SetObjectName(device, *pipeline_layout, "Compute PipelineLayout {}", debug_str);
 
     // Runs on the compiler threads too: it only uses what stays fixed after construction and
@@ -126,6 +127,9 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         if (created.result == vk::Result::ePipelineCompileRequired &&
             (flags & vk::PipelineCreateFlagBits::eFailOnPipelineCompileRequired)) {
             return {};
+        }
+        if (created.result == vk::Result::eSuccess) {
+            g_tlg_driver_pipelines_created.fetch_add(1, std::memory_order_relaxed);
         }
         ASSERT_MSG(created.result == vk::Result::eSuccess, "Failed to create compute pipeline: {}",
                    vk::to_string(created.result));

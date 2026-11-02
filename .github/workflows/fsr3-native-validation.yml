@@ -1,0 +1,82 @@
+name: FidelityFX FSR3 native backend validation
+on:
+  push:
+    branches: [experimental-bionic]
+    paths:
+      - 'port/gpu/patches/fsr-vulkan/**'
+      - 'port/gpu/shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp'
+      - '.github/workflows/fsr3-native-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fsr3-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install software Vulkan test environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libvulkan-dev mesa-vulkan-drivers ninja-build cmake spirv-tools
+          find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*.json' -print
+          test -n "$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name '*.json' -print -quit)"
+      - name: Apply actual Android FSR3 backend patches
+        run: |
+          set -euo pipefail
+          mod=port/gpu/third_party/fsr-vulkan
+          for name in 0004-ffx-vk-compact-descriptor-pool-for-mobile.patch 0007-fsr3-direct-hal-dispatch.patch 0008-ffx-vk-compatible-memory-fallback.patch; do
+            git -C "$mod" apply --check "$PWD/port/gpu/patches/fsr-vulkan/$name"
+            git -C "$mod" apply "$PWD/port/gpu/patches/fsr-vulkan/$name"
+          done
+      - name: Pinpoint native backend failure inside CI only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("port/gpu/third_party/fsr-vulkan/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp")
+          data = path.read_text()
+          begin = data.index("FfxErrorCode CreateBackendContextVK(", data.index("FFX_API size_t ffxGetScratchMemorySizeVK"))
+          end = data.index("FfxErrorCode GetDeviceCapabilitiesVK(", begin)
+          block = data[begin:end]
+          needle = "return FFX_ERROR_BACKEND_API_ERROR;"
+          assert block.count(needle) >= 6, block.count(needle)
+          block = block.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI backend failure line=%d\\n", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
+          data = data[:begin] + block + data[end:]
+          # The context can fail on the very first SDK resource even if
+          # backend context creation itself succeeded.
+          for start_name, end_name in (
+              ("FfxErrorCode allocateDeviceMemory(", "void setVKObjectName("),
+              ("FfxErrorCode CreateResourceVK(", "FfxErrorCode DestroyResourceVK("),
+              ("FfxErrorCode CreatePipelineVK(", "FfxErrorCode DestroyPipelineVK("),
+          ):
+              start_at = data.index(start_name, data.index("FFX_API size_t ffxGetScratchMemorySizeVK"))
+              end_at = data.index(end_name, start_at)
+              part = data[start_at:end_at]
+              count = part.count(needle)
+              assert count, start_name
+              part = part.replace(needle, 'return (std::fprintf(stderr, "FSR3 CI %s line=%d\\n", "' + start_name + '", __LINE__), FFX_ERROR_BACKEND_API_ERROR);')
+              data = data[:start_at] + part + data[end_at:]
+          data = data.replace("#include <vulkan/vulkan.h>", "#include <vulkan/vulkan.h>\n#include <cstdio>", 1)
+          path.write_text(data)
+          PY
+      - name: Compile and run real FidelityFX context creation tests
+        run: |
+          if [[ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]]; then
+            export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          fi
+          set -euo pipefail
+          cmake -S port/gpu/third_party/fsr-vulkan -B /tmp/iss-fsr3-smoke -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFFX_VK_PORTABLE_BUILD_TESTS=ON \
+            -DFFX_VK_PORTABLE_BUILD_PROBE=OFF \
+            -DFFX_VK_PORTABLE_BUILD_FSR3_HOST=ON \
+            -DFFX_VK_PORTABLE_BUILD_FSR3_VK_BACKEND=ON \
+            -DFFX_VK_PORTABLE_BUILD_FSR3_3_1_5_SCAFFOLD=OFF \
+            -DFFX_VK_PORTABLE_BUILD_FSR4_V07_VULKAN=OFF
+          cmake --build /tmp/iss-fsr3-smoke --target \
+            ffx_vk_fsr3_portable_api_smoke ffx_vk_fsr3_backend_smoke \
+            ffx_vk_fsr3_shader_blob_test --parallel 3
+          ctest --test-dir /tmp/iss-fsr3-smoke --output-on-failure \
+            -R '^ffx_vk_fsr3_(portable_api_smoke|backend_smoke|shader_blob_test)$'

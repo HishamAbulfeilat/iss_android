@@ -9,7 +9,7 @@
 
 namespace Common {
 
-#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+#if defined(PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP) || defined(__ANDROID__)
 class AdaptiveMutex {
 public:
     AdaptiveMutex() = default;
@@ -30,8 +30,13 @@ public:
     }
 
 private:
+#ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
     pthread_mutex_t mutex = PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP;
+#else
+    // Bionic has the standard futex-backed mutex, but not glibc's adaptive initializer.
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
 };
-#endif // PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
+#endif // adaptive mutex or native Android mutex
 
 } // namespace Common

@@ -24,7 +24,13 @@ namespace AmdGpu {
 struct Liverpool;
 }
 
+#ifdef __ANDROID__
+#include "iss_lsfg_state.h"
+#endif
 namespace Vulkan {
+#ifdef __ANDROID__
+class Lsfg;
+#endif
 
 struct Frame {
     u32 width;
@@ -105,6 +111,14 @@ public:
 
 private:
     Frame* GetRenderFrame();
+#ifdef __ANDROID__
+    void PollLsfgState();
+    void WriteLsfgStats();
+    void ApplyLsfgState(const IssLsfgState::State& next);
+    void ApplyLsfgOutputMode();
+    void ApplyFramesCap();
+    bool PresentWithLsfg(Frame* frame);
+#endif
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 
@@ -126,6 +140,14 @@ private:
     std::deque<u64> recent_frame_ticks; ///< tlg: TLG_FRAMES_AHEAD bound (PrepareFrame)
     Scheduler present_scheduler;
     Scheduler flip_scheduler;
+#ifdef __ANDROID__
+    IssLsfgState::State lsfg_requested{IssLsfgState::Initial()};
+    IssLsfgState::Watcher lsfg_watch{lsfg_requested};
+    std::unique_ptr<Lsfg> lsfg;
+    std::atomic<u32> frames_cap{0};
+    std::chrono::steady_clock::time_point lsfg_stats_ts{};
+    bool lsfg_stats_active{false}, lsfg_stats_cleared{false};
+#endif
     Swapchain swapchain;
     Runtime runtime;
     std::unique_ptr<Rasterizer> rasterizer;

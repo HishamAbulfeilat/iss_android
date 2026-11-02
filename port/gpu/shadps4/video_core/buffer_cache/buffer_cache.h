@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -20,7 +21,10 @@
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
+#include "video_core/buffer_cache/hybrid_staging_window.h"
 #include "video_core/buffer_cache/range_set.h"
+#include "video_core/buffer_cache/readback_copy_pages.h"
+#include "video_core/buffer_cache/write_tick_tracker.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 
@@ -61,7 +65,13 @@ public:
     /// tlg (shadPS4-Infamous-FixBuild a107bf06): uploads larger than this go through staging
     /// memory of this size, a part at a time. Loading a save in inFAMOUS Second Son one draw reads
     /// 2.4 GB the game wrote at once, and staging memory that large could not be allocated.
+    // tlg: 64 MiB parts on Android, where each part's staging buffer is phone RAM held during
+    // the open-world load burst (288-376 MiB uploads on the S25 Ultra).
+#if defined(ISS_ANDROID_GLIBC) || defined(ISS_ANDROID_BIONIC)
+    static constexpr u64 MAX_UPLOAD_PART_BYTES = 64_MB;
+#else
     static constexpr u64 MAX_UPLOAD_PART_BYTES = 256_MB;
+#endif
 
     explicit BufferCache(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                          Vulkan::Runtime& runtime, AmdGpu::Liverpool* liverpool,
@@ -100,7 +110,10 @@ public:
     void ExtendWriteFault(VAddr device_addr);
 
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
-    void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false);
+    // prepare runs once on the cache owner, before recording a readback. True handles
+    // the request completely; false falls through within the same owner command.
+    void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false,
+                    const std::function<bool()>& prepare = {});
     /// tlg: a CPU read fault on pages with no GPU-modified data: lift the read protection on the
     /// faulting thread instead of a round trip through the GPU command thread.
     void ReleaseReadProtection(VAddr device_addr, u64 size);
@@ -163,14 +176,27 @@ private:
     /// for residency failed for lack of device memory.
     void ReleaseMemoryForResidency(u64 bytes);
 
+    /// tlg: writes GPU data (a readback) into guest memory, except into shared heaps.
+    void WriteGpuData(VAddr address, const u8* data, u64 size);
+
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
 public:
-    /// tlg: TLG_WRITE_MERGE=1 (precise readbacks): a guest memcpy/memset into memory with
-    /// GPU-modified pages writes through the backing view without a fault or a GPU wait, and the
+    /// tlg: TLG_RELEASE_IDLE_BUFFERS=1 (opt-in): under memory pressure, residency granules the
+    /// GPU has not used for TLG_RELEASE_IDLE_TICKS submissions and did not write are unbound and
+    /// freed; the guest copy is the truth and is uploaded again on next use. Called per submit.
+    void ReleaseIdleResidency();
+    [[nodiscard]] bool ReleaseIdleEnabled() const noexcept {
+        return release_idle;
+    }
+
+    /// tlg: TLG_WRITE_MERGE=1 (Precise, or native Bionic Relaxed without DMA): guest memcpy/memset into
+    /// GPU-modified pages writes through the backing view without a buffer readback. The
     /// exact byte range is uploaded before the GPU next uses or downloads it. Bytes the GPU
-    /// wrote elsewhere on those pages stay intact. False: the caller writes normally.
+    /// wrote elsewhere on those pages stay intact. Relaxed serializes the write on the owner,
+    /// settles pending images and excludes physical aliases. False: caller writes normally.
     bool CpuWriteMerge(VAddr dst, const void* src, int fill, u64 size);
+    bool CpuStoreOverwrite(VAddr dst, const void* src, u64 size);
 
     /// tlg: TLG_EAGER_READBACK=1 (precise readbacks): pages the guest reads back after GPU
     /// writes are learnt (NoteReadback). At every fence they are copied to host memory if the
@@ -182,6 +208,8 @@ public:
     void EagerCopyAtFence();
 
 private:
+    bool CpuWriteMergeRelaxed(VAddr dst, const void* src, int fill, u64 size);
+    void AddMergedWriteRange(VAddr dst, u64 size);
     /// Uploads the merged guest writes inside [device_addr, device_addr + size) of `arena`.
     void FlushMergedWrites(const Buffer* arena, VAddr device_addr, u64 size);
     std::mutex merge_mutex;
@@ -203,6 +231,7 @@ private:
     void NoteGpuWriteForEager(VAddr addr, u64 size); ///< GPU-side threads, before the write
     void MarkEagerStale(VAddr addr, u64 size);       ///< any thread: CPU bytes the copy lacks
     void ApplyEagerSubtractsLocked();                ///< GPU-side threads, eager_mutex held
+    HybridStagingWindow hybrid_staging_hot_pages; // cache owner, opt-in only
     std::mutex eager_mutex;
     std::map<VAddr, EagerPage> eager_pages; ///< by 4 KiB page address
     std::vector<VAddr> eager_free_offsets;
@@ -216,11 +245,25 @@ private:
     /// and submits it; the guest thread that faulted waits for that copy (not for the whole GPU
     /// to go idle) and writes it back and unmarks it itself. Guest threads touching the same
     /// memory meanwhile wait for the same copy. A GPU write to the memory before the copy is
-    /// applied marks it stale (before the memory is marked GPU modified again, see
-    /// MemoryTracker::ApplyGpuCopyIf), and so does a CPU write without a fault (CpuWriteMerge):
-    /// then the guest falls back to the old download. From shadPS4-Infamous-FixBuild ee423726
-    /// and 2d2511fe.
+    /// applied invalidates its copied pages. Native Relaxed mapped reads can publish the
+    /// unaffected pages; staging and CPU writes without a fault invalidate the full snapshot.
+    /// Invalidation precedes GPU protection (MemoryTracker::ApplyGpuCopyIf); an invalid
+    /// requested page retries or falls back. From shadPS4-Infamous-FixBuild ee423726/2d2511fe.
     struct DeferredReadback {
+        struct MappedSpan {
+            vk::DeviceMemory memory;
+            u64 offset, size, destination;
+            const u8* source;
+        };
+        bool mapped = false;
+        // Native Relaxed mapping: GPU writes invalidate individual 4-KiB pages.
+        // The owner alone mutates these fields; applied's release/acquire publishes partial.
+        bool page_scoped = false, partial = false;
+        IntervalList<> invalid_pages;
+        boost::container::small_vector<vk::BufferCopy, 8> publication_copies, retry_copies;
+        u64 snapshot_size = 0;
+        std::vector<MappedSpan> mapped_spans;
+        std::vector<u8> mapped_snapshot;
         Vulkan::StagingBufferRef staging;
         /// Source offsets into the arena, destination offsets into the staging buffer.
         boost::container::small_vector<vk::BufferCopy, 8> copies;
@@ -233,6 +276,14 @@ private:
         /// Won't be applied; its ranges are back in gpu_modified_ranges.
         std::atomic<bool> recovered{};
         std::mutex mutex;
+        // Guest threads sharing a Relaxed snapshot also share its GPU wait and
+        // owner-thread publication. Only guest callers enter this once flag.
+        std::once_flag relaxed_completion;
+        // Only pages actually copied from the GPU can become stale. The 512 KiB
+        // prefetch window is a scheduling envelope, not a set of copied bytes.
+        bool CopiesTouchPages(VAddr addr, VAddr end) const noexcept {
+            return ReadbackCopyPagesOverlap(arena_base, copies, addr, end);
+        }
         bool Done() const noexcept {
             return applied.load(std::memory_order_acquire) ||
                    recovered.load(std::memory_order_acquire);
@@ -253,9 +304,15 @@ private:
     /// GPU-side threads.
     void RecoverDeferredReadback(DeferredReadback& readback);
     /// Applies or recovers the copies in flight overlapping [start, end). GPU-side threads.
-    void SettleDeferredReadbacks(VAddr start, VAddr end);
+    /// A nonzero limit recovers mapped prefetches that would extend the requested GPU wait.
+    void SettleDeferredReadbacks(VAddr start, VAddr end, u64 wait_tick_limit = 0);
     /// Recovers stale copies and frees the staging memory of finished ones. GPU-side threads.
     void PruneDeferredReadbacks();
+    bool PrepareMappedReadback(DeferredReadback& readback, u64 bytes, bool allow_current = false,
+                               u64 wait_tick_limit = 0);
+    bool CaptureMappedReadback(DeferredReadback& readback);
+    static bool MappedReadbackPolicy();
+    void NoteDeviceWrite(VAddr address, u64 size, u64 tick);
     /// Marks the copies in flight overlapping a range stale. `cpu`: a guest thread is about to
     /// write the memory without a fault, so an apply in progress is waited for. Any thread.
     void MarkDeferredStale(VAddr addr, u64 size, bool cpu);
@@ -328,6 +385,28 @@ private:
     vk::DeviceMemory residency_chunk{};
     u64 residency_chunk_used{};
     u64 residency_allocations{};
+
+    struct ResidencyMapping {
+        u64 size = 0;
+        const u8* data = nullptr;
+        bool failed = false;
+    };
+    std::map<vk::DeviceMemory, ResidencyMapping> residency_mappings;
+    // tlg: TLG_RELEASE_IDLE_BUFFERS state (see ReleaseIdleResidency).
+    bool release_idle = false;
+    u64 release_idle_ticks = 0;
+    u32 release_calls = 0;
+    std::unique_ptr<std::atomic<u64>[]> granule_use;
+    struct DeferredFree {
+        vk::DeviceMemory memory;
+        u64 tick;
+    };
+    std::vector<DeferredFree> deferred_frees;
+    void TouchGranules(VAddr device_addr, u64 size);
+    void DropPendingUnbinds(const Buffer* arena, u64 offset, u64 size);
+    WriteTickTracker write_ticks;
+    bool mapped_readbacks_enabled = false;
+    bool residency_coherent = false;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

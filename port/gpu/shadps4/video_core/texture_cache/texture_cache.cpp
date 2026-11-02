@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
 #include <filesystem>
 #include <xxhash.h>
 #include "video_core/amdgpu/liverpool.h"
@@ -44,6 +45,7 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
                 deferred_readbacks ? "enabled" : "disabled",
                 stale_readbacks ? "; CPU reads use the previous frame's copy" : "");
 
+    if(gc_batch_downloads) std::printf("GPU: batched collector write-backs, staging target 64 MiB\n");
     u32 max_samplers = instance.GetMaxSamplerAllocationCount();
     trigger_gc_samplers = max_samplers * 3 / 4;
     pressure_gc_samplers = max_samplers * 7 / 8;
@@ -113,7 +115,17 @@ void TextureCache::WatchReadback(VAddr address, u64 size) {
 }
 
 void TextureCache::RetireReadbacks() {
-    pending_readbacks.Retire([this](u64 tick) { return scheduler.IsFree(tick); },
+    // One timeline refresh per retirement pass, rather than a driver query for each pending copy.
+    auto* timeline = scheduler.GetWorkSemaphore();
+    bool refreshed = false;
+    pending_readbacks.Retire([&](u64 tick) {
+        if (timeline->IsFree(tick)) return true;
+        if (!refreshed) {
+            timeline->Refresh();
+            refreshed = true;
+        }
+        return timeline->IsFree(tick);
+    },
         [this](auto& entry) {
             if (entry.valid) {
                 entry.payload.Invalidate();
@@ -124,7 +136,7 @@ void TextureCache::RetireReadbacks() {
             }
             runtime.GetStagingPool().FreeDeferred(entry.payload);
         });
-    has_pending_readbacks.store(pending_readbacks.Bytes() != 0, std::memory_order_release);
+    has_pending_readbacks.store(!pending_readbacks.Empty(), std::memory_order_release);
 }
 
 bool TextureCache::ResolveReadbacks(VAddr address, u64 size, bool assume_locks,
@@ -169,7 +181,7 @@ bool TextureCache::ResolveReadbacks(VAddr address, u64 size, bool assume_locks,
             waited = !scheduler.IsFree(tick);
             const auto start = diag ? std::chrono::steady_clock::now()
                                     : std::chrono::steady_clock::time_point{};
-            scheduler.Wait(tick);
+            if (waited) scheduler.Wait(tick);
             if (diag) {
                 wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                               std::chrono::steady_clock::now() - start).count();
@@ -264,6 +276,13 @@ void TextureCache::ProcessDownloadImages() {
     if (Vulkan::WaitDiagnostics::Enabled()) {
         ReportImageCreates();
     }
+    // Avoid waiting for upload workers and taking readback locks when there is no work.
+    const bool report_due = deferred_readbacks && Vulkan::WaitDiagnostics::Enabled() &&
+        std::chrono::steady_clock::now() - readback_report >= std::chrono::seconds(5);
+    if (!has_download_images.load(std::memory_order_acquire) &&
+        !has_pending_readbacks.load(std::memory_order_acquire) && !report_due) {
+        return;
+    }
     if (deferred_readbacks) {
         // Upload workers must finish reading RAM before these pages become inaccessible.
         scheduler.WaitHostCopies();
@@ -311,6 +330,7 @@ void TextureCache::ProcessDownloadImages() {
             }
         }
         download_images.clear();
+        has_download_images.store(false, std::memory_order_release);
         if (Vulkan::WaitDiagnostics::Enabled()) {
             const auto now = std::chrono::steady_clock::now();
             if (now - readback_report >= std::chrono::seconds(5)) {
@@ -353,6 +373,7 @@ void TextureCache::ProcessDownloadImages() {
         }
     }
     download_images.clear();
+    has_download_images.store(false, std::memory_order_release);
     if (pending.empty()) {
         return;
     }
@@ -1066,6 +1087,15 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
 
+    // Protect the enlarged guest range before either upload. Tracking only after recording
+    // the copy let a concurrent guest write escape invalidation while this new view was filled.
+    // The new watcher also keeps the old range protected when FreeImage drops its watcher.
+    TrackImage(new_image_id);
+
+    // A pool write may have dirtied the old view before a larger array/mip view is requested.
+    // Copying that stale host image over the freshly uploaded destination resurrects old texels.
+    // Refresh the source first; clean GPU-authored images take the existing no-op path.
+    RefreshImage(src_image);
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
 
@@ -1074,7 +1104,6 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     }
 
     FreeImage(image_id);
-    TrackImage(new_image_id);
     return new_image_id;
 }
 
@@ -1314,6 +1343,7 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
             image.info.guest_address != 0) {
             std::unique_lock lk{download_images_mutex};
             download_images.emplace(image_id);
+            has_download_images.store(true, std::memory_order_release);
         }
     }
     if (refresh) {
@@ -1344,6 +1374,7 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
         std::unique_lock lk{download_images_mutex};
         download_images.emplace(image_id);
+        has_download_images.store(true, std::memory_order_release);
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
@@ -1417,17 +1448,11 @@ void TextureCache::RefreshImage(Image& image) {
 
     if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
         False(image.flags & ImageFlagBits::CpuDirty)) {
-        // The image size should be less than page size to be considered MaybeCpuDirty
-        // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
+        // MarkAsMaybeDirty hashes the whole guest range. Comparing only an 8x8 prefix
+        // both mismatched that baseline and missed later changes to mips/layers or other texels.
+        // This rare path covers images whose page tracking was removed by neighboring writes.
         const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
-
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+        const u64 hash = XXH3_64bits(addr, image.info.guest_size);
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
             return;
@@ -1579,7 +1604,7 @@ void TextureCache::UploadDecodedImage(Image& image) {
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
                                      AmdGpu::BorderColorBuffer border_color_base,
-                                     const bool is_depth, float extra_lod_bias) {
+                                     const bool is_depth, float extra_lod_bias, u64* lru_id) {
     // Compare and plain uses of one S# need separate samplers; so do extra LOD biases.
     const u64 hash = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
                                  u64(std::bit_cast<u32>(extra_lod_bias)));
@@ -1592,8 +1617,22 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     } else {
         sampler_lru_cache.Touch(it->second.lru_id, gc_tick);
     }
+    if (lru_id) {
+        *lru_id = it->second.lru_id;
+    }
 
     return it->second.Handle();
+}
+
+bool TextureCache::TouchSamplers(const u64* lru_ids, u32 count, u64 generation) {
+    std::scoped_lock lock{samplers_mutex};
+    if (sampler_generation.load(std::memory_order_relaxed) != generation) {
+        return false;
+    }
+    for (u32 i = 0; i < count; ++i) {
+        sampler_lru_cache.Touch(static_cast<size_t>(lru_ids[i]), gc_tick);
+    }
+    return true;
 }
 
 void TextureCache::RegisterImage(ImageId image_id) {
@@ -1764,10 +1803,39 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers<false>(addr, size);
 }
 
+#ifdef __ANDROID__
+// tlg: Android's MemAvailable in bytes, read at most every 250 ms (0 when unreadable). The
+// driver's budget does not shrink as Android runs out of RAM, so the low-memory killer ends the
+// game while the collector still sees room.
+static u64 AndroidAvailableMemory() {
+    static std::chrono::steady_clock::time_point last{};
+    static u64 available = 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::milliseconds(250)) {
+        return available;
+    }
+    last = now;
+    available = 0;
+    if (std::FILE* f = std::fopen("/proc/meminfo", "r")) {
+        char line[128];
+        unsigned long long kb = 0;
+        while (std::fgets(line, sizeof(line), f)) {
+            if (std::sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+                available = u64(kb) << 10;
+                break;
+            }
+        }
+        std::fclose(f);
+    }
+    return available;
+}
+#endif
+
 void TextureCache::GarbageCollectImages() {
     TlgStats::Timer gc_timer{TlgStats::t_gc};
     if (instance.CanReportMemoryUsage()) {
-        total_used_memory = instance.GetDeviceMemoryUsage();
+        const auto memory_budget = instance.GetMemoryBudgetSnapshot();
+        total_used_memory = memory_budget.usage;
         // tlg: on integrated GPUs (Steam Deck) the usage covers system-memory heaps holding
         // much more than images (buffers backing guest memory), and the startup budget left
         // ~1 GB after its 8 GB system reserve: usage stayed above the critical mark, so the
@@ -1779,7 +1847,9 @@ void TextureCache::GarbageCollectImages() {
             return env ? std::strtoull(env, nullptr, 10) << 20 : 0;
         }();
         if (instance.IsIntegrated() || forced_budget) {
-            const u64 budget = forced_budget ? forced_budget : instance.GetDeviceMemoryBudgetNow();
+            const u64 budget = forced_budget && memory_budget.budget && instance.IsIntegrated()
+                                   ? std::min(forced_budget,memory_budget.budget)
+                                   : forced_budget ? forced_budget : memory_budget.budget;
             if (budget != 0) {
                 trigger_gc_memory = budget / 10 * 7;
                 pressure_gc_memory = budget / 100 * 85;
@@ -1790,6 +1860,33 @@ void TextureCache::GarbageCollectImages() {
             }
         }
     }
+#ifdef __ANDROID__
+    // tlg: TLG_GC_ANDROID_FREE_MB (default 1500, 0 = off): below this much free RAM, the
+    // collector treats the missing amount as over its critical mark, so images unused for the
+    // last submissions go before Android kills the game. Images it cannot evict stay.
+    static const u64 android_free_mark = [] {
+        const char* env = std::getenv("TLG_GC_ANDROID_FREE_MB");
+        const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 1500;
+        if (mb) {
+            std::printf("Texture cache: old images are freed when Android has under %llu MiB "
+                        "free (TLG_GC_ANDROID_FREE_MB, 0 = off)\n",
+                        static_cast<unsigned long long>(mb));
+        }
+        return mb << 20;
+    }();
+    bool android_low = false;
+    if (android_free_mark != 0 && instance.CanReportMemoryUsage() && instance.IsIntegrated()) {
+        const u64 available = AndroidAvailableMemory();
+        if (available != 0 && available < android_free_mark) {
+            const u64 deficit = android_free_mark - available;
+            const u64 target = total_used_memory > deficit ? total_used_memory - deficit : 0;
+            critical_gc_memory = std::min(critical_gc_memory, target);
+            pressure_gc_memory = std::min(pressure_gc_memory, critical_gc_memory);
+            trigger_gc_memory = std::min(trigger_gc_memory, pressure_gc_memory);
+            android_low = true;
+        }
+    }
+#endif
     if (total_used_memory < trigger_gc_memory) {
         return;
     }
@@ -1799,9 +1896,39 @@ void TextureCache::GarbageCollectImages() {
     u64 ticks_to_destroy = 0;
     size_t num_deletions = 0;
 
+    // tlg: TLG_GC_BATCH_DOWNLOAD=1: selected images are only recorded (their copies too) and
+    // freed by evict(): one GPU wait, then per image, in selection order, the write-back while it
+    // still protects its pages and FreeImage. Their memory counts as freed from the selection on.
+    // Everything runs under `mutex` on the GPU side, so nothing else frees or changes them.
+    struct Eviction {
+        ImageId image_id;
+        std::optional<PendingDownload> download;
+    };
+    boost::container::small_vector<Eviction, 64> evictions;
+    u64 evicting_bytes = 0;
+    u64 evicting_downloads = 0;
+    const auto used_memory = [&] { return total_used_memory - evicting_bytes; };
+    const auto evict = [&] {
+        if (evicting_downloads != 0) {
+            scheduler.Finish();
+        }
+        for (const Eviction& eviction : evictions) {
+            if (const auto& download = eviction.download) {
+                download->staging.Invalidate();
+                Core::Memory::Instance()->TryWriteBacking(
+                    std::bit_cast<u8*>(download->guest_address), download->staging.mapped,
+                    download->size);
+                runtime.GetStagingPool().FreeDeferred(download->staging);
+            }
+            FreeImage(eviction.image_id);
+        }
+        evictions.clear();
+        evicting_bytes = evicting_downloads = 0;
+    };
+
     const auto configure = [&](bool allow_aggressive) {
-        pressured = total_used_memory >= pressure_gc_memory;
-        aggresive = allow_aggressive && total_used_memory >= critical_gc_memory;
+        pressured = used_memory() >= pressure_gc_memory;
+        aggresive = allow_aggressive && used_memory() >= critical_gc_memory;
         ticks_to_destroy = aggresive ? 160 : pressured ? 80 : 16;
         ticks_to_destroy = std::min(ticks_to_destroy, gc_tick);
         num_deletions = aggresive ? 40 : pressured ? 20 : 10;
@@ -1812,10 +1939,23 @@ void TextureCache::GarbageCollectImages() {
     // with every area visited. A pass also stops after looking at 256 images.
     u32 visited = 0;
     const auto clean_up = [&](ImageId image_id) {
-        if (num_deletions == 0 || ++visited > 256) {
+        if (num_deletions == 0) {
+            return true;
+        }
+        if (std::ranges::find(evictions, image_id, &Eviction::image_id) != evictions.end()) {
+            // Selected by the first pass, freed by evict().
+            return false;
+        }
+        if (++visited > 256) {
             return true;
         }
         auto& image = slot_images[image_id];
+        // Retained GPU images need neither a CPU readback wait nor staging invalidation.
+        // Pending copies are retired by ProcessDownloadImages even when this GC skips them.
+        if (image.SafeToDownload() && (image.info.IsTiled() || !pressured)) {
+            lru_cache.Touch(image.lru_id, gc_tick);
+            return false;
+        }
         ResolveReadbacks(image.info.guest_address, image.info.guest_size, true,
                          ReadbackSource::CacheCleanup);
         const bool download = image.SafeToDownload();
@@ -1827,22 +1967,40 @@ void TextureCache::GarbageCollectImages() {
             return false;
         }
         --num_deletions;
-        if (download) {
-            // tlg: synchronously, while the image still protects its pages. A deferred
-            // write-back landed after FreeImage had unprotected them, over whatever the game
-            // had meanwhile stored there (e.g. its heap after unloading an area).
-            DownloadImageMemory(image_id, true);
-            ++gc_downloads;
+        if (gc_batch_downloads) {
+            evictions.push_back(Eviction{image_id, std::nullopt});
+            if (download) {
+                // Recorded now, written back by evict() before FreeImage (see below).
+                evictions.back().download = RecordImageDownload(image_id);
+                if (evictions.back().download) {
+                    evicting_downloads += evictions.back().download->size;
+                }
+                ++gc_downloads;
+            }
+            ++gc_evictions;
+            evicting_bytes += Common::AlignUp(image.info.guest_size, 1024);
+            // Bounds the staging memory held at once.
+            if (evicting_downloads >= 64_MB) {
+                evict();
+            }
+        } else {
+            if (download) {
+                // tlg: synchronously, while the image still protects its pages. A deferred
+                // write-back landed after FreeImage had unprotected them, over whatever the game
+                // had meanwhile stored there (e.g. its heap after unloading an area).
+                DownloadImageMemory(image_id, true);
+                ++gc_downloads;
+            }
+            ++gc_evictions;
+            FreeImage(image_id);
         }
-        ++gc_evictions;
-        FreeImage(image_id);
-        if (total_used_memory < critical_gc_memory) {
+        if (used_memory() < critical_gc_memory) {
             if (aggresive) {
                 num_deletions >>= 2;
                 aggresive = false;
                 return false;
             }
-            if (pressured && total_used_memory < pressure_gc_memory) {
+            if (pressured && used_memory() < pressure_gc_memory) {
                 num_deletions >>= 1;
                 pressured = false;
             }
@@ -1854,19 +2012,25 @@ void TextureCache::GarbageCollectImages() {
     configure(false);
     lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
 
-    if (total_used_memory >= critical_gc_memory) {
+    if (used_memory() >= critical_gc_memory) {
         // If we are still over the critical limit, run an aggressive GC
         configure(true);
         visited = 0;
         lru_cache.ForEachItemBelow(gc_tick - ticks_to_destroy, clean_up);
     }
+    evict();
     // tlg: evictions under memory pressure, at most every 5 s (TLG_FRAME_STATS or not).
     if (pressured || gc_downloads != 0) {
         const auto now = std::chrono::steady_clock::now();
         if (now - gc_report_time >= std::chrono::seconds(5)) {
-            std::printf("Texture cache: memory pressure, %llu of %llu MiB (critical %llu): "
+#ifdef __ANDROID__
+            const char* reason = android_low ? " (Android low on free RAM)" : "";
+#else
+            const char* reason = "";
+#endif
+            std::printf("Texture cache: memory pressure%s, %llu of %llu MiB (critical %llu): "
                         "%llu images evicted, %llu written back since the last report\n",
-                        (unsigned long long)(total_used_memory >> 20),
+                        reason, (unsigned long long)(total_used_memory >> 20),
                         (unsigned long long)(pressure_gc_memory >> 20),
                         (unsigned long long)(critical_gc_memory >> 20),
                         (unsigned long long)gc_evictions, (unsigned long long)gc_downloads);
@@ -1902,6 +2066,7 @@ void TextureCache::GarbageCollectSamplers() {
         const size_t lru_id = samplers.at(hash).lru_id;
         samplers.erase(hash);
         sampler_lru_cache.Free(lru_id);
+        sampler_generation.fetch_add(1, std::memory_order_release);
         return false;
     };
 
@@ -2015,6 +2180,7 @@ void TextureCache::DeleteImage(ImageId image_id) {
         std::unique_lock lk{download_images_mutex};
         if (download_images.contains(image_id)) {
             download_images.erase(image_id);
+            has_download_images.store(!download_images.empty(), std::memory_order_release);
         }
     }
 

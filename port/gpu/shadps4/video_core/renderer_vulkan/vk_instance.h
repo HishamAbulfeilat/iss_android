@@ -137,6 +137,16 @@ public:
         return vk12_features.shaderInt8;
     }
 
+    /// tlg: occlusion queries may count the exact number of samples (TLG_OCCLUSION_MODE=4).
+    bool IsOcclusionQueryPreciseSupported() const {
+        return features.occlusionQueryPrecise;
+    }
+
+    /// tlg: queries may be reset from the host (vkResetQueryPool).
+    bool IsHostQueryResetSupported() const {
+        return vk12_features.hostQueryReset;
+    }
+
     /// Returns true if VK_KHR_maintenance8 is supported
     bool IsMaintenance8Supported() const {
         return maintenance_8;
@@ -504,6 +514,18 @@ public:
         return supports_memory_budget;
     }
 
+    /// tlg: VK_KHR_external_memory_fd and VK_EXT_external_memory_dma_buf (shared heaps).
+    bool IsDmaBufExportSupported() const {
+        return dma_buf_export;
+    }
+
+    struct MemoryBudgetSnapshot {
+        u64 usage{};
+        u64 budget{};
+    };
+    /// Usage and budget from a single driver query of the same heaps.
+    [[nodiscard]] MemoryBudgetSnapshot GetMemoryBudgetSnapshot() const;
+
     /// Returns the amount of memory used.
     [[nodiscard]] u64 GetDeviceMemoryUsage() const;
 
@@ -602,6 +624,7 @@ private:
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // tlg: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
     bool supports_memory_budget{};
+    bool dma_buf_export{};
     bool pageable_device_local_memory{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

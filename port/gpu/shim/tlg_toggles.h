@@ -60,6 +60,9 @@ enum : std::uint64_t {
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
     UpdateImageFastPath = 1u << 30,
+    /// A texture-set hit reuses the samplers it resolved (one lock to mark them used) instead of
+    /// hashing and looking up every sampler (vk_rasterizer.h).
+    SamplerSetMemo = 1ull << 31,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
     TaaClip = 1ull << 52,
@@ -146,8 +149,14 @@ inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, 
     copy_threads_wait_ns{0}, host_copy_waits{0};
 struct WaitTimer {
     std::atomic<std::uint64_t>& total;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    // Avoid two clock_gettime calls plus an atomic for every scheduler wait
+    // when TLG_FRAME_STATS is off. Preserve the original measurements on demand.
+    std::chrono::steady_clock::time_point start =
+        enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     ~WaitTimer() {
+        if (!enabled) {
+            return;
+        }
         total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::steady_clock::now() - start).count(),
                         std::memory_order_relaxed);

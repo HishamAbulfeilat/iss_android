@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <cctype>
+#include <chrono>
+#include "iss_performance_state.h"
 #include "tlg_settings.h"
 #include "tlg_orbs.h"
 #include "tlg_graphics.h"
@@ -213,6 +215,24 @@ Values& Get() {
     return values;
 }
 
+void PollAndroidPerformance() {
+#ifdef ISS_ANDROID_BIONIC
+    static const char* path=std::getenv("ISS_PERFORMANCE_STATE_FILE");
+    if(!path || !*path)return;
+    static auto last=std::chrono::steady_clock::time_point{};
+    const auto now=std::chrono::steady_clock::now();
+    if(now-last<std::chrono::milliseconds(250))return;
+    last=now;
+    IssPerformance::State state;
+    if(IssPerformance::Read(path,state)) {
+        auto& v=Get();
+        if(v.fps_limit!=state.fps || v.vsync!=state.vsync)
+            std::printf("Android performance: limit=%d FPS, vsync=%d\n",state.fps,int(state.vsync));
+        v.fps_limit=state.fps;v.vsync=state.vsync;
+    }
+#endif
+}
+
 void Load() {
     auto& v = Get();
     if (FILE* file = std::fopen(Path(), "r")) {
@@ -237,14 +257,16 @@ void Load() {
         }
     }
     const std::pair<const char*, const char*> env_keys[] = {
-        {"TLG_FSR_SHARPNESS", "sharpness"},        {"TLG_JITTER", "jitter"},
+        {"TLG_FSR_SHARPNESS", "sharpness"},        {"TLG_FSR_SHARPEN", "sharpen"},
+        {"TLG_JITTER", "jitter"},
         {"TLG_REACTIVE", "reactive"},              {"TLG_REACTIVE_SCALE", "reactive_scale"},
         {"TLG_REACTIVE_THRESHOLD", "reactive_threshold"}, {"TLG_REACTIVE_MAX", "reactive_max"},
         {"TLG_UPSCALE_PRESET", "preset"},            {"TLG_OBJECT_MOTION", "object_motion"},
         {"TLG_ASYNC_SHADERS", "async_shaders"},      {"TLG_DEFERRED_READBACK", "deferred_readback"},
         {"TLG_STALE_READBACK", "stale_readback"},     {"TLG_FSR1", "fsr1"},
         {"TLG_RCAS", "rcas"},                        {"TLG_FRAMES_AHEAD", "frames_queued"},
-        {"TLG_SHOW_FPS", "show_fps"},             {"TLG_SENSOR_AIM", "sensor_aim"},
+        {"TLG_SHOW_FPS", "show_fps"},           {"TLG_OUTPUT_RES", "output_res"},
+        {"TLG_SENSOR_AIM", "sensor_aim"},
         {"TLG_MOUSE", "mouse_enabled"},           {"TLG_MOUSE_SENS", "mouse_sensitivity"},
         {"TLG_MOUSE_INVERT_Y", "mouse_invert_y"}, {"TLG_MOUSE_SMOOTHING", "mouse_smoothing"},
         {"TLG_MOUSE_ACCEL", "mouse_accel"},       {"TLG_MOUSE_DEADZONE", "mouse_deadzone"},
@@ -258,6 +280,24 @@ void Load() {
             Set(v, key, value);
         }
     }
+    // Android launcher uses the game's actual presenter FPS, not the
+    // Android/Xvfb bridge refresh rate. Show only FPS for a compact HUD.
+    if (const char* android = std::getenv("TLG_ANDROID_FPS_ONLY"); android && *android == '1') {
+        v.overlay_items = TlgPerfStats::Fps;
+        v.overlay_corner = 1;
+        v.overlay_scale = 140;
+    }
+#ifdef ISS_ANDROID_BIONIC
+    // Only the Android launcher's explicit FSR 3.1 choice may activate temporal work.
+    // This also prevents stale desktop tlg.ini settings from enabling unsupported providers.
+    const char* android_fsr = std::getenv("TLG_UPSCALER");
+    const bool fsr3 = android_fsr && std::strcmp(android_fsr,"fsr3")==0;
+    v.upscaler = fsr3 ? UpscalerFsr3 : UpscalerOff;
+    v.fsr1 = false;
+    v.rcas = false;
+    v.object_motion = fsr3;
+    v.jitter = fsr3;
+#endif
     v.startup_preset = v.preset;
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;

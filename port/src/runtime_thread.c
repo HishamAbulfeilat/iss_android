@@ -21,7 +21,7 @@
 #else
 #include <sys/syscall.h>
 #include <sys/mman.h>
-#include <asm/prctl.h>
+
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define ATTR_MAGIC UINT32_C(0x41545452)
@@ -48,6 +48,8 @@ typedef struct GuestThread {
     char name[32];
     int detached, finished, joined, host_owned;
     uint64_t os_tid;  /* freeze report: matches the OS thread list */
+    unsigned char *guest_stack;
+    size_t guest_stack_size;
     uint32_t fp_mxcsr; uint16_t fp_x87cw; /* the creator's FP control: see host_start */
     RuntimeWait wait; /* freeze report: what the thread is blocked on */
 #ifdef _WIN32
@@ -87,9 +89,7 @@ static void set_gs(void *base) {
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
 #else
-static void set_gs(void *base) {
-    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
-}
+static void set_gs(void *base) { guest_cpu_set_gs(base); }
 #define tls_block_alloc(size) aligned_alloc(64,size)
 #endif
 static uint64_t os_thread_id(void) {
@@ -370,10 +370,13 @@ static void *host_start(void *p) {
      * inFAMOUS turns on flush-to-zero (MXCSR bit 15) in a thread, then creates its job workers
      * from it; without the bit there, denormals reach divisions in the particle/light code
      * (overexposed fire and smoke, flickering headlights, Windows only). */
-    __asm__ volatile("ldmxcsr %0\n\tfldcw %1" : : "m"(t->fp_mxcsr), "m"(t->fp_x87cw));
+    guest_cpu_set_fp_control(t->fp_mxcsr,t->fp_x87cw);
     set_host_name(t->name);
-    if (!exit_setjmp(t)) t->result=t->entry(t->argument);
+    if (t->guest_stack) guest_cpu_thread_stack(t->guest_stack+t->guest_stack_size,t->guest_stack_size);
+    if (!exit_setjmp(t)) t->result=(void *)(uintptr_t)guest_cpu_call((uintptr_t)t->entry,1,(const uint64_t[]){(uintptr_t)t->argument});
+    else guest_cpu_abandon();
     runtime_thread_keys_cleanup();
+    guest_cpu_thread_end();
     pthread_mutex_lock(&lock); t->finished=1; ++exited; pthread_mutex_unlock(&lock);
     return t->result;
 }
@@ -385,7 +388,7 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     if (!t) return ERR(12);
     if (a) { t->attr=*a; t->attr.next=NULL; }
     t->entry=entry; t->argument=argument; t->detached=t->attr.detached;
-    __asm__ volatile("stmxcsr %0\n\tfnstcw %1" : "=m"(t->fp_mxcsr), "=m"(t->fp_x87cw));
+    guest_cpu_get_fp_control(&t->fp_mxcsr,&t->fp_x87cw);
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "guest");
     pthread_attr_t host;
     pthread_attr_init(&host);
@@ -398,8 +401,14 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     pthread_attr_setstacksize(&host,stack_bytes);
 #else
     void *stack_memory=runtime_low_map(stack_bytes,PROT_READ|PROT_WRITE);
+#ifdef GUEST_CPU_NATIVE
     if (stack_memory) pthread_attr_setstack(&host,stack_memory,stack_bytes);
     else pthread_attr_setstacksize(&host,stack_bytes);
+#else
+    if (!stack_memory) { fputs("STOP: cannot allocate guest stack\n",stderr); exit(21); }
+    t->guest_stack=stack_memory; t->guest_stack_size=stack_bytes;
+    pthread_attr_setstacksize(&host,stack_bytes);
+#endif
 #endif
     publish(t);
     /* Publish the handle before the thread can run and inspect itself. */

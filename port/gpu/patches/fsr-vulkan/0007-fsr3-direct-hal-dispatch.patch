@@ -1,0 +1,94 @@
+From: ISS Android Bionic
+Subject: [PATCH] FidelityFX 1.1.4 use the same Vulkan HAL dispatch as the renderer
+
+diff --git a/include/ffx_vk_portable.h b/include/ffx_vk_portable.h
+--- a/include/ffx_vk_portable.h
++++ b/include/ffx_vk_portable.h
+@@ -163,7 +163,9 @@
+     /* Required by the checked FSR3 accumulate shaders. Physical-device
+      * support is insufficient: this must have been enabled in the owner's
+      * VkPhysicalDeviceFeatures chain when creating the logical device. */
+-    VkBool32 shaderStorageImageWriteWithoutFormatEnabled;
++    VkBool32 shaderStorageImageWriteWithoutFormatEnabled;
++    /* Same Vulkan instance resolver as the native HAL renderer. */
++    PFN_vkGetInstanceProcAddr getInstanceProcAddr;
+ } FfxVkPortableDeviceInfo;
+ 
+ typedef struct FfxVkPortableUpscaleCreateInfo {
+diff --git a/src/ffx_vk_fsr3_portable.cpp b/src/ffx_vk_fsr3_portable.cpp
+--- a/src/ffx_vk_fsr3_portable.cpp
++++ b/src/ffx_vk_fsr3_portable.cpp
+@@ -12,7 +12,9 @@
+ #pragma GCC diagnostic ignored "-Wunused-variable"
+ #endif
+ 
+-#include <FidelityFX/host/backends/vk/ffx_vk.h>
++#include <FidelityFX/host/backends/vk/ffx_vk.h>
++extern void ffxUseVulkanInstanceDispatchVK(VkInstance instance,
++                                          PFN_vkGetInstanceProcAddr getProcAddr);
+ #include <FidelityFX/host/ffx_frameinterpolation.h>
+ #include <FidelityFX/host/ffx_fsr3upscaler.h>
+ #include <FidelityFX/host/ffx_opticalflow.h>
+@@ -420,7 +422,10 @@
+         (createInfo->flags & ~kKnownContextFlags) != 0)
+         return FFX_VK_PORTABLE_ERROR_INVALID_ARGUMENT;
+ 
+-    FfxVkPortableDeviceCapabilities capabilities{};
++    if (deviceInfo->getInstanceProcAddr != nullptr)
++        ffxUseVulkanInstanceDispatchVK(deviceInfo->instance, deviceInfo->getInstanceProcAddr);
++
++    FfxVkPortableDeviceCapabilities capabilities{};
+     capabilities.structSize = sizeof(capabilities);
+     const FfxVkPortableResult capabilityResult =
+         ffxVkPortableQueryDeviceCapabilities(deviceInfo->physicalDevice, &capabilities);
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -62,7 +62,36 @@
+ void                   RegisterConstantBufferAllocatorVK(FfxInterface* backendInterface, FfxConstantBufferAllocator fpConstantAllocator);
+ 
+ 
+-static VkDeviceContext sVkDeviceContext = {};
++static VkDeviceContext sVkDeviceContext = {};
++
++// A direct Android Vulkan HAL and the system loader can refer to different
++// dispatch chains. Use the physical device's own instance entry points.
++static VkInstance sFfxVkInstance = VK_NULL_HANDLE;
++static PFN_vkGetInstanceProcAddr sFfxInstanceProcAddr = nullptr;
++
++void ffxUseVulkanInstanceDispatchVK(VkInstance instance,
++                                    PFN_vkGetInstanceProcAddr getProcAddr) {
++    sFfxVkInstance = instance;
++    sFfxInstanceProcAddr = getProcAddr;
++}
++
++template <typename Function, typename... Arguments>
++static auto ffxInstanceDispatch(const char* name, Function fallback,
++                                Arguments... args) -> decltype(fallback(args...)) {
++    Function function = fallback;
++    if (sFfxInstanceProcAddr && sFfxVkInstance) {
++        function = reinterpret_cast<Function>(sFfxInstanceProcAddr(sFfxVkInstance, name));
++    }
++    return function(args...);
++}
++
++#define vkEnumerateDeviceExtensionProperties(...) ffxInstanceDispatch("vkEnumerateDeviceExtensionProperties", &::vkEnumerateDeviceExtensionProperties, __VA_ARGS__)
++#define vkGetPhysicalDeviceMemoryProperties(...) ffxInstanceDispatch("vkGetPhysicalDeviceMemoryProperties", &::vkGetPhysicalDeviceMemoryProperties, __VA_ARGS__)
++#define vkGetPhysicalDeviceProperties(...) ffxInstanceDispatch("vkGetPhysicalDeviceProperties", &::vkGetPhysicalDeviceProperties, __VA_ARGS__)
++#define vkGetPhysicalDeviceProperties2(...) ffxInstanceDispatch("vkGetPhysicalDeviceProperties2", &::vkGetPhysicalDeviceProperties2, __VA_ARGS__)
++#define vkGetPhysicalDeviceFeatures(...) ffxInstanceDispatch("vkGetPhysicalDeviceFeatures", &::vkGetPhysicalDeviceFeatures, __VA_ARGS__)
++#define vkGetPhysicalDeviceFeatures2(...) ffxInstanceDispatch("vkGetPhysicalDeviceFeatures2", &::vkGetPhysicalDeviceFeatures2, __VA_ARGS__)
++
+ 
+ #define MAX_PIPELINE_USAGE_PER_FRAME      (10) // Required to make sure passes that are called more than once per-frame don't have their descriptors overwritten.
+ #define MAX_DESCRIPTOR_SET_LAYOUTS        (64)
+@@ -1730,7 +1759,8 @@
+             bufferInfo.pQueueFamilyIndices = nullptr;
+ 
+             VkBuffer testBuffer = VK_NULL_HANDLE;
+-            if (vkCreateBuffer(backendContext->device, &bufferInfo, nullptr, &testBuffer) != VK_SUCCESS)
++            if (backendContext->vkFunctionTable.vkCreateBuffer(
++                    backendContext->device, &bufferInfo, nullptr, &testBuffer) != VK_SUCCESS)
+             {
+                 FFX_ASSERT_FAIL("Cannot create test Breadcrumbs buffer to find memory requirements!");
+                 return FFX_ERROR_BACKEND_API_ERROR;

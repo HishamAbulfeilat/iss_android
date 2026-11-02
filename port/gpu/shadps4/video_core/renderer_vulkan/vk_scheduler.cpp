@@ -12,6 +12,7 @@
 #include <functional>
 
 #include "tlg_copy.h"
+#include "iss_bionic_perf.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "tlg_toggles.h"
 #include "video_core/renderer_vulkan/vk_wait_diagnostics.h"
@@ -32,19 +33,46 @@ Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
     // tlg: TLG_VK_RECORD_THREAD=0 records on the calling thread.
     const char* env = std::getenv("TLG_VK_RECORD_THREAD");
     if (threaded_recording && !(env && env[0] == '0')) {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC) && !TRACY_GPU_ENABLED
+        const char* parallel = std::getenv("TLG_PARALLEL_RECORDING");
+        if (TlgThreads::Available() >= 8 && !(parallel && *parallel == '0')) {
+            parallel_pool = std::make_unique<CommandPool>(instance, &work_semaphore);
+            parallel_recording = std::make_unique<ParallelRecordQueue<RecordChunk, vk::CommandBuffer>>(
+                [this](unsigned lane) {
+                    auto& pool = lane ? *parallel_pool : command_pool;
+                    const auto buffer = pool.Commit();
+                    Check(buffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+                    return buffer;
+                }, [](unsigned lane) {
+                    IssBionicPerf::RegisterThread(lane ? IssBionicPerf::Thread::Recorder2
+                                                     : IssBionicPerf::Thread::Recorder);
+                    Common::SetCurrentThreadName(lane ? "tlg:VkRecorder1" : "tlg:VkRecorder");
+                });
+            std::printf("GPU: 2 Vulkan recorders; at most 2 primary buffers per submit, natural pass boundaries\n");
+        }
+#endif
         record_chunk = AcquireChunk();
-        recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
+        if (!parallel_recording) {
+            recorder_thread = std::jthread(std::bind_front(&Scheduler::RecorderThread, this));
+        }
         recording_threaded = true;
     }
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
 #endif
     AllocateWorkerCommandBuffers();
+    if (IssBionicPerf::Enabled()) {
+        std::printf("GPU: host copy range tracking: %s\n", HostCopyRangesEnabled() ? "on" : "off");
+    }
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
 }
 
 Scheduler::~Scheduler() {
+    if (parallel_recording) {
+        SyncRecording();
+        parallel_recording.reset();
+    }
     if (recorder_thread.joinable()) {
         SyncRecording();
         recorder_thread.request_stop();
@@ -139,6 +167,9 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
             RecordFullBarrier(current_cmdbuf);
         }
         current_cmdbuf.beginRendering(rendering_info);
+        if (rendering_observer) {
+            rendering_observer->OnBeginRendering();
+        }
         return;
     }
     // The attachment infos live on this stack frame: the recorded closure keeps copies.
@@ -156,6 +187,9 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         }
         cmdbuf.beginRendering(info);
     });
+    if (rendering_observer) {
+        rendering_observer->OnBeginRendering();
+    }
 }
 
 void Scheduler::EndRendering() {
@@ -167,6 +201,9 @@ void Scheduler::EndRendering() {
     if (!is_rendering) {
         return;
     }
+    if (rendering_observer) {
+        rendering_observer->OnEndRendering();
+    }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) {
         cmdbuf.endRendering();
@@ -174,6 +211,40 @@ void Scheduler::EndRendering() {
             RecordFullBarrier(cmdbuf);
         }
     });
+}
+
+void Scheduler::RecordVertexInput(
+    std::span<const vk::VertexInputBindingDescription2EXT> bindings,
+    std::span<const vk::VertexInputAttributeDescription2EXT> attributes) {
+    CheckOwner(__builtin_return_address(0));
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_VERTEX_INPUT_CACHE");
+        const bool on = !(env && *env == '0');
+        std::printf("GPU: vertex input state reuse: %s\n", on ? "on" : "off");
+        return on;
+#else
+        return false;
+#endif
+    }();
+    if (enabled && vertex_input_state.Matches(bindings, attributes)) {
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::vertex_input_skipped.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    ReserveRecordData(bindings.size_bytes() + attributes.size_bytes() + 128);
+    const auto saved_bindings = RecordData(bindings);
+    const auto saved_attributes = RecordData(attributes);
+    Record([saved_bindings, saved_attributes](vk::CommandBuffer cmdbuf) {
+        cmdbuf.setVertexInputEXT(saved_bindings, saved_attributes);
+    });
+    if (enabled) {
+        vertex_input_state.Store(bindings, attributes);
+    }
+    if (IssBionicPerf::Enabled()) {
+        IssBionicPerf::vertex_input_issued.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void Scheduler::TraceDirectRecording(void* caller) {
@@ -214,6 +285,7 @@ void Scheduler::TraceDirectRecording(void* caller) {
 }
 
 std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
+    if (parallel_recording) return parallel_recording->Acquire();
     std::scoped_lock lk{recorder_mutex};
     if (free_chunks.empty()) {
         return std::make_unique<RecordChunk>();
@@ -224,6 +296,7 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
 }
 
 void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
+    CheckOwner(__builtin_return_address(0));
     if (!IsRecordingDeferred()) {
         WaitHostCopies();
         signal();
@@ -231,10 +304,13 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     }
     TlgCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
-    Record([signal = std::move(signal), done = deferred_signals_done](vk::CommandBuffer) mutable {
-        TlgCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
-            signal();
-            done->fetch_add(1, std::memory_order_release);
+    Record([signal = std::move(signal), done = deferred_signals_done,
+            this, lane = parallel_lane](vk::CommandBuffer) mutable {
+        AfterRecordingPrefix(lane, [signal = std::move(signal), done = std::move(done)]() mutable {
+            TlgCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
+                signal();
+                done->fetch_add(1, std::memory_order_release);
+            });
         });
     });
     KickRecording(true);
@@ -255,7 +331,45 @@ void Scheduler::WaitDeferredSignals() {
     }
 }
 
+bool Scheduler::HostCopyRangesEnabled() {
+    static const bool enabled = [] {
+#if defined(__ANDROID__) && defined(ISS_ANDROID_BIONIC)
+        const char* env = std::getenv("TLG_HOST_COPY_RANGES");
+        return !(env && *env == '0');
+#else
+        return false;
+#endif
+    }();
+    return enabled;
+}
+
+void Scheduler::NoteHostCopySource(u64 address, u64 size) {
+    if (HostCopyRangesEnabled()) host_copy_sources.Note(address, size);
+}
+
+void Scheduler::WaitHostCopiesFor(u64 address, u64 size) {
+    if (HostCopyRangesEnabled() && !host_copy_sources.Overlaps(address, size)) {
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::host_copy_skipped.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    if (IssBionicPerf::Enabled()) {
+        IssBionicPerf::host_copy_required.fetch_add(1, std::memory_order_relaxed);
+    }
+    WaitHostCopies();
+}
+
 void Scheduler::WaitHostCopies() {
+    const IssBionicPerf::Scope host_timer{IssBionicPerf::Stage::HostCopies};
+    // A copy registered while this wait runs must not be forgotten by its completion.
+    auto* sources = HostCopyRangesEnabled() ? &host_copy_sources : nullptr;
+    const u64 seen = sources ? sources->Snapshot() : 0;
+    struct Retire {
+        HostCopySources* sources;
+        u64 seen;
+        ~Retire() { if (sources) sources->RetireThrough(seen); }
+    } retire{sources, seen};
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
         TlgStats::WaitTimer timer{TlgStats::host_copies_wait_ns};
         TlgStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
@@ -280,6 +394,10 @@ void Scheduler::KickRecording(bool force) {
         return;
     }
     if (full_chunks.empty() && record_chunk->Empty()) {
+        return;
+    }
+    if (parallel_recording) {
+        HandOverParallel();
         return;
     }
     bool wake;
@@ -308,13 +426,83 @@ void Scheduler::SyncRecording() {
     if (!recording_threaded) {
         return;
     }
+    const IssBionicPerf::Scope record_timer{IssBionicPerf::Stage::RecorderSync};
     KickRecording(true);
+    if (parallel_recording) {
+        parallel_recording->Sync();
+        current_cmdbuf = parallel_recording->Current(parallel_lane);
+        return;
+    }
     TlgStats::WaitTimer timer{TlgStats::sync_recording_ns};
     std::unique_lock lk{recorder_mutex};
     recorder_idle_cv.wait(lk, [this] { return recorder_queue.empty() && !recorder_busy; });
 }
 
+void Scheduler::HandOverParallel() {
+    for (auto& chunk : full_chunks) {
+        parallel_bytes += chunk->Size();
+        parallel_recording->Push(parallel_lane, std::move(chunk));
+    }
+    full_chunks.clear();
+    if (!record_chunk->Empty()) {
+        parallel_bytes += record_chunk->Size();
+        parallel_recording->Push(parallel_lane, std::move(record_chunk));
+        record_chunk = AcquireChunk();
+    }
+}
+
+void Scheduler::SplitRecordingAtBoundary(const RenderState& next_state) {
+    CheckOwner(__builtin_return_address(0));
+    if (!parallel_recording || parallel_lane || !IsRecordingDeferred() ||
+        !WillBeginRendering(next_state)) return;
+    size_t bytes = parallel_bytes + record_chunk->Size();
+    for (const auto& chunk : full_chunks) bytes += chunk->Size();
+    if (bytes < parallel_target) return;
+    // This pass must end for the next draw anyway. Cut BEFORE its vertex/index,
+    // descriptors, push constants and dynamic state, never in BeginRendering.
+    EndRendering();
+    SplitRecording();
+}
+
+void Scheduler::SplitRecording() {
+    Record([queue = parallel_recording.get()](vk::CommandBuffer) { queue->CompletePrefix(); });
+    HandOverParallel();
+    parallel_lane = 1;
+    dynamic_state.Invalidate();
+    vertex_input_state.Invalidate();
+}
+
+void Scheduler::BeginParallelBatch() {
+    if (!parallel_recording) return;
+    if (parallel_bytes) {
+        parallel_target = std::clamp(parallel_bytes / 2, size_t{64 * 1024}, size_t{2 * 1024 * 1024});
+    }
+    parallel_recording->Start(current_cmdbuf);
+    parallel_lane = 0;
+    parallel_bytes = 0;
+}
+
+std::span<const vk::CommandBuffer> Scheduler::EndRecordingBuffers() {
+    unsigned count = 0;
+    if (parallel_recording && parallel_lane) {
+        submission_buffers[count++] = parallel_recording->First();
+        Check(submission_buffers[0].end());
+        if (IssBionicPerf::Enabled()) {
+            IssBionicPerf::parallel_splits.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    Check(current_cmdbuf.end());
+    submission_buffers[count++] = current_cmdbuf;
+    if (parallel_recording && IssBionicPerf::Enabled()) {
+        IssBionicPerf::parallel_batches.fetch_add(1, std::memory_order_relaxed);
+        IssBionicPerf::parallel_deferred_host.fetch_add(
+            parallel_recording->DeferredHost(), std::memory_order_relaxed);
+    }
+    return {submission_buffers.data(), count};
+}
+
 void Scheduler::RecorderThread(std::stop_token stoken) {
+    IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Recorder);
     Common::SetCurrentThreadName("tlg:VkRecorder");
     while (true) {
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
@@ -324,7 +512,7 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
             TlgThreads::Available() >= 12 ? 200 : 20);
         const auto spin_until = std::chrono::steady_clock::now() + spin_time;
         for (u32 spins = 1; queued_chunks.load(std::memory_order_acquire) == 0; ++spins) {
-            __builtin_ia32_pause();
+            Common::HostPause();
             // The clock is read every 256 pauses, not per iteration.
             if (!(spins & 255) &&
                 (stoken.stop_requested() || std::chrono::steady_clock::now() >= spin_until)) {
@@ -378,6 +566,10 @@ void Scheduler::Finish(std::source_location caller) {
     const u64 submit_ns = diagnose ? std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count() : 0;
     Wait(presubmit_tick, caller, submit_ns);
+#ifdef ISS_ANDROID_BIONIC
+    // The explicit wait advanced the cached timeline; reclaim without another driver query.
+    PopPendingOperations();
+#endif
 }
 
 void Scheduler::WaitSubmitted(std::source_location caller) {
@@ -397,7 +589,7 @@ void Scheduler::Wait(u64 tick, std::source_location caller, u64 submit_ns) {
     }
     TlgStats::WaitTimer timer{TlgStats::tick_wait_ns};
     const auto submitted = diagnose ? std::chrono::steady_clock::now() : start;
-    work_semaphore.Wait(tick);
+    work_semaphore.Wait(tick, caller);
     if (diagnose) {
         const auto completed = std::chrono::steady_clock::now();
         WaitDiagnostics::Get().Add(caller.file_name(), caller.line(),
@@ -411,18 +603,19 @@ void Scheduler::PopPendingOperations() {
         return; // every draw comes here
     }
     std::unique_lock lk(pending_ops_mutex);
-    // tlg: this runs on every draw and dispatch. Querying the timeline semaphore is an
-    // ioctl, so it is skipped when nothing waits and done once per 32 calls (~0.3 ms; reading
-    // the clock per draw instead was itself a hot spot).
     if (pending_ops.empty()) {
         return;
     }
+#ifndef ISS_ANDROID_BIONIC
+    // Legacy platforms poll at most once per 32 draw/dispatch calls when a callback waits.
+    // Bionic uses completion cached by the submission window, waits and resource-pool misses.
     if (!work_semaphore.IsFree(pending_ops.front().gpu_tick)) {
         if ((++pending_polls & 31) != 0 && !TlgToggle::Disabled(TlgToggle::PendingPollLimit)) {
             return;
         }
         work_semaphore.Refresh();
     }
+#endif
     // tlg: a callback can submit (the fault buffer's ObtainBuffer, which may upload in parts or
     // wait for the GPU to free memory) and so come back here on this thread while it is still
     // the front op: running it again, or popping it, would corrupt the queue. The outer loop
@@ -449,6 +642,8 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
+    vertex_input_state.Invalidate();
+    BeginParallelBatch();
 
 #if TRACY_GPU_ENABLED
     auto* profiler_ctx = instance.GetProfilerContext();
@@ -461,8 +656,18 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    const IssBionicPerf::Scope submit_timer{IssBionicPerf::Stage::Submission};
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
+#ifdef ISS_ANDROID_BIONIC
+    // Keep up to eight submitted command buffers in flight. Unlike a counter query after
+    // every submit, Wait first checks cached completion, so one query can retire a batch.
+    // Bound the backlog before reusing command buffers/descriptors or running callbacks.
+    constexpr u64 MaxInFlightSubmissions = 8;
+    if (signal_value > MaxInFlightSubmissions) {
+        work_semaphore.Wait(signal_value - MaxInFlightSubmissions);
+    }
+#endif
     work_since_submit.store(0, std::memory_order_relaxed);
 
 #if TRACY_GPU_ENABLED
@@ -485,7 +690,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
-    Check(current_cmdbuf.end());
+    FlushHostReadBarrier();
+    const auto command_buffers = EndRecordingBuffers();
 
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
@@ -507,21 +713,40 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .waitSemaphoreCount = info.num_wait_semas,
         .pWaitSemaphores = info.wait_semas.data(),
         .pWaitDstStageMask = wait_stage_masks.data(),
-        .commandBufferCount = 1U,
-        .pCommandBuffers = &current_cmdbuf,
+        .commandBufferCount = static_cast<u32>(command_buffers.size()),
+        .pCommandBuffers = command_buffers.data(),
         .signalSemaphoreCount = info.num_signal_semas,
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    vk::Result submit_result;
+    {
+        const IssBionicPerf::Scope driver_timer{IssBionicPerf::Stage::DriverSubmit};
+        submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
+#ifndef ISS_ANDROID_BIONIC
     work_semaphore.Refresh();
+#endif
     AllocateWorkerCommandBuffers();
 
     // Apply pending operations
     PopPendingOperations();
+}
+
+void Scheduler::FlushHostReadBarrier() {
+    if (!std::exchange(host_read_barrier, false)) return;
+    const vk::MemoryBarrier2 barrier{
+        .srcStageMask = std::exchange(host_read_src_stages, {}),
+        .srcAccessMask = std::exchange(host_read_src_access, {}),
+        .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+        .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+    };
+    current_cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+        .memoryBarrierCount = 1, .pMemoryBarriers = &barrier,
+    });
 }
 
 void Scheduler::PriorityPendingOpsThread(std::stop_token stoken) {

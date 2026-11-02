@@ -243,6 +243,24 @@ bool TemporalUpscaler::ReactiveOn() const {
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.scene_colors;
+    // At the first HDR lighting pass the geometry depth is still valid.
+    // Subsequent passes reuse that same guest D32S8 image for HUD primitives,
+    // destroying the per-pixel scene depth before RunScaled() normally reads it.
+    if (scaled_session && Active() &&
+        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        !iss_scene_depth_snapshot_valid && camera_motion.Depth()) {
+        const auto& scene = texture_cache.GetImage(color);
+        const auto& depth = texture_cache.GetImage(camera_motion.Depth());
+        if (scene.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
+            RenderTarget(scene.info.size.width, scene.info.size.height) &&
+            scene.info.size.width == depth.info.size.width &&
+            scene.info.size.height == depth.info.size.height) {
+            SnapshotIssSceneDepth(camera_motion.Depth());
+        }
+    }
+#endif
     scene_color = color;
 }
 
@@ -263,6 +281,43 @@ bool TemporalUpscaler::ReducedScene(const VideoCore::Image& color) const {
 
 bool TemporalUpscaler::RasterScaling() const {
     return !scaled_session && scene_targets.Reduced() && !done_this_frame;
+}
+
+void TemporalUpscaler::OnDisplayPassStart() {
+#ifdef ISS_ANDROID_BIONIC
+    // Bloodborne's Android port can finish a frame at its display boundary
+    // when no Scaleform/UI trigger was found. Never invent camera/motion
+    // inputs: with the current ISS camera-signature mismatch this is inert.
+    if (!Scaled() || ui_phase || done_this_frame || failed || !Active() ||
+        !ldr_target) {
+        return;
+    }
+    // Scene depth and the completed game's camera must belong to the SAME
+    // frame. Latch a native CUSA00004 camera pair here, BEFORE RunScaled()
+    // records motion; OnDisplayPass runs too late (after RunScaled).
+    camera_motion.PrepareIssNativeCamera();
+    const bool calibrated_camera = camera_motion.Ready();
+    const auto& color = texture_cache.GetImage(ldr_target);
+    const bool object_fallback =
+        TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3 &&
+        camera_motion.IssObjectMotionReady(color.info.size.width, color.info.size.height);
+    if (!calibrated_camera && !object_fallback) {
+        return;
+    }
+    if (object_fallback && !calibrated_camera) {
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            std::printf("FSR3 ISS: fullscreen frame boundary, valid native object-motion "
+                        "attachment %ux%u (no camera history; experimental)\n",
+                        color.info.size.width, color.info.size.height);
+        }
+    }
+    RunScaled();
+    if (!ui_phase) {
+        RunUiOnly(ldr_target, camera_motion.Depth());
+    }
+#endif
 }
 
 bool TemporalUpscaler::OnFrameStart() {
@@ -289,6 +344,51 @@ bool TemporalUpscaler::OnFrameStart() {
         }
     }
     const auto& settings = TlgSettings::Get();
+#ifdef ISS_ANDROID_BIONIC
+    if (Active() && ++android_fsr_probe.frames >= 180) {
+        const auto& d = android_fsr_probe;
+        std::printf("FSR3 probe: frames=%u scene_color=%u ldr_target=%u draws=%u "
+                    "native_viewport=%u ui_candidates=%u camera_ready=%u ldr_match=%u "
+                    "dispatch=%u render=%ux%u out=%ux%u preset=%d\n",
+                    d.frames, d.scene_colors, d.ldr_targets, d.ui_draws,
+                    d.native_viewport_draws, d.rgba_ui_candidates, d.camera_ready_draws,
+                    d.ldr_match_draws, d.dispatched, render_width, render_height,
+                    target_width, target_height, TlgSettings::RenderPreset());
+        // Single bounded line per 180 frames: determines whether softness
+        // comes from guest scene/UI resolution or disabled FSR sharpening.
+        // These are counters/metadata only: no extra GPU copy or shader pass.
+        const float strength = std::clamp(settings.sharpness.load(), 0.0f, 2.0f);
+        std::printf("FSR3 ISS visual: source=%ux%u fmt=%u depth=%ux%u fmt=%u "
+                    "output=%ux%u ui_only=%u ui_draws_after_fsr=%u "
+                    "color_redirects=%u sampled_redirects=%u "
+                    "sharpen_enabled=%u strength=%.2f sdk_rcas=%.2f "
+                    "rcas_dispatches=%u extra_strength=%.2f extra_dispatches=%u "
+                    "jitter=%u native_camera_dispatches=%u fallback_motion_dispatches=%u depth_reversed=1\n",
+                    d.source_width, d.source_height, d.source_format,
+                    d.depth_width, d.depth_height, d.depth_format,
+                    target_width, target_height, d.ui_only_copies,
+                    d.ui_draws_after_fsr, d.redirected_color, d.redirected_samples,
+                    unsigned(settings.sharpen.load()), strength,
+                    settings.sharpen.load() ? std::min(strength, 1.0f) : 0.0f,
+                    d.rcas_dispatches,
+                    settings.sharpen.load() ? std::max(0.0f, strength - 1.0f) : 0.0f,
+                    d.extra_sharpen_dispatches, unsigned(settings.jitter.load()),
+                    d.native_camera_dispatches, d.fallback_motion_dispatches);
+        android_fsr_probe = {};
+    }
+    if (!android_ui_samples_printed && android_ui_sample_count &&
+        android_fsr_probe.frames == 0) {
+        std::printf("FSR3 ISS fullscreen passes: %u distinct candidates\n",
+                    android_ui_sample_count);
+        for (u32 i = 0; i < android_ui_sample_count; ++i) {
+            const auto& v = android_ui_samples[i];
+            std::printf("FSR3 ISS UI: vertex=%016llx target=%ux%u fmt=%u ldr=%u\n",
+                        static_cast<unsigned long long>(v.vertex_hash),
+                        v.width, v.height, v.format, unsigned(v.same_ldr_target));
+        }
+        android_ui_samples_printed = true;
+    }
+#endif
     // The guest's startup resolution patch remains in effect until restart. Keep the FSR
     // model at the applied preset while the menu saves the requested one for run.sh.
     const int preset = TlgSettings::RenderPreset();
@@ -333,11 +433,34 @@ bool TemporalUpscaler::OnFrameStart() {
     last_jitter = jitter_on;
     dispatched_last_frame = false;
 
+#ifdef ISS_ANDROID_BIONIC
+    // The ISS 540p->1080p FSR context used to be allocated at the first
+    // full-screen scene boundary, after the game's texture cache had reached
+    // its critical Vulkan memory budget. Reserve the AMD SDK history images
+    // and native compute pipelines at the first frame instead, while memory
+    // is still available. Do not touch UI, Readback, or guest render patches.
+    // For explicit render-resolution sessions the sizes are known from boot.
+    if (active && scaled_session &&
+        upscaler == TlgSettings::UpscalerFsr3 &&
+        render_width && render_height &&
+        render_width <= target_width && render_height <= target_height &&
+        !resources_ready && !context && !failed) {
+        // RunScaled uses the tonemapped (non-HDR) context for these sessions.
+        if (!EnsureResources(render_width, render_height,
+                             target_width, target_height, false)) {
+            failed = true;
+        }
+    }
+#endif
+
     // The display pass of an upscaled frame reads the upscaled UI image.
     display_redirect = ui_phase;
     ui_phase = false;
     ui_read_barrier = false;
     done_this_frame = false;
+#ifdef ISS_ANDROID_BIONIC
+    iss_scene_depth_snapshot_valid = false;
+#endif
     ldr_target = {};
     scene_color = {};
     snapshot_taken = false;
@@ -353,7 +476,30 @@ bool TemporalUpscaler::OnFrameStart() {
     const u32 phases = Scaled() ? Motion::JitterPhases(render_width, target_width)
         : Motion::JitterPhases(scene_targets.Size().width, 1920);
     jitter_index = jitter_index % phases + 1;
-    jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
+#ifdef ISS_ANDROID_BIONIC
+    // Prior to the verified FXAA hook, the guest added its own SMAA T2x
+    // +/-0.25 px projection jitter. We halved Vulkan's Halton sequence to
+    // prevent two jitters accumulating. The FXAA hook now bypasses the guest
+    // jitter function entirely (confirmed native=0 in the Oct 29 capture).
+    // Restore full subpixel Halton coverage when the hook installed, else
+    // keep the previous half-amplitude behavior for unpatched games.
+    if (scaled_session && upscaler == TlgSettings::UpscalerFsr3) {
+        const char* native_t2x_disabled = std::getenv("ISS_FSR3_NATIVE_T2X_DISABLED");
+        const bool full_halton = native_t2x_disabled && native_t2x_disabled[0] == '1';
+        const float amplitude = full_halton ? 1.0f : 0.5f;
+        jitter = {amplitude * (Halton(jitter_index, 2) - 0.5f),
+                  amplitude * (Halton(jitter_index, 3) - 0.5f)};
+        static bool reported_full_halton = false;
+        if (full_halton && !reported_full_halton) {
+            reported_full_halton = true;
+            std::printf("FSR3 ISS: guest SMAA T2x jitter disabled; native=0, "
+                        "full-strength Vulkan Halton phase enabled (1.0x)\\n");
+        }
+    } else
+#endif
+    {
+        jitter = {Halton(jitter_index, 2) - 0.5f, Halton(jitter_index, 3) - 0.5f};
+    }
     return changed;
 }
 
@@ -401,12 +547,14 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     device_info.physicalDevice = instance.GetPhysicalDevice();
     device_info.device = device;
     device_info.getDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr;
+    device_info.getInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr;
     device_info.queue = instance.GetGraphicsQueue();
     device_info.queueFamilyIndex = instance.GetGraphicsQueueFamilyIndex();
     device_info.shaderFloat16Enabled = instance.IsShaderFloat16Enabled();
     device_info.subgroupSizeControlEnabled = instance.IsSubgroupSizeControlEnabled();
     device_info.synchronization2Enabled = VK_TRUE;
-    device_info.shaderStorageImageWriteWithoutFormatEnabled = VK_TRUE;
+    device_info.shaderStorageImageWriteWithoutFormatEnabled =
+        instance.IsStorageImageWriteWithoutFormatEnabled() ? VK_TRUE : VK_FALSE;
 
     FfxVkPortableUpscaleCreateInfo create_info{};
     create_info.structSize = sizeof(create_info);
@@ -414,6 +562,21 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     create_info.flags = hdr ? FFX_VK_PORTABLE_CONTEXT_HDR_COLOR_INPUT |
                                   FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE
                             : 0;
+#ifdef ISS_ANDROID_BIONIC
+    // inFAMOUS PS4 projection has z_clip/w = near/z - near/far:
+    // D32 depth is ~1 at the near plane and ~0 at the far plane.
+    // The FSR3 SDK otherwise interprets this reversed-Z depth as normal,
+    // poisoning depth clipping, disocclusion and temporal accumulation.
+    // Real near/far come from the native camera snapshot in RunScaled().
+    create_info.flags |= FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED;
+    // In scaled ISS/Android the input is already tonemapped LDR, and the game
+    // supplies NO 1x1 exposure texture. FSR3 requires either explicit exposure
+    // or its auto-exposure flag; missing exposure corrupts the luminance-based
+    // accumulation and can suppress detail even with strong RCAS.
+    if (!hdr && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3) {
+        create_info.flags |= FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;
+    }
+#endif
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     // FSR 4 has its own model context (vk_fsr4); the images below are shared.
@@ -422,9 +585,143 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
             PrintIssues("create info", issues);
             return false;
         }
-        if (ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context) !=
-            FFX_VK_PORTABLE_OK) {
-            std::printf("Upscaler: FSR 3 context creation failed\n");
+        const auto create_result =
+            ffxVkPortableUpscaleContextCreate(&device_info, &create_info, &context);
+        if (create_result != FFX_VK_PORTABLE_OK) {
+#ifdef ISS_ANDROID_BIONIC
+            // FidelityFX's native Vulkan adapter has multiple distinct failure
+            // paths (unsupported formats/subgroups, backend init, Vk allocation).
+            // Record the exact one once, without GPU readbacks or additional work
+            // on successful frames. The previous unqualified message hid it.
+            FfxVkPortableDeviceCapabilities caps{};
+            caps.structSize = sizeof(caps);
+            const auto cap_result =
+                ffxVkPortableQueryDeviceCapabilities(device_info.physicalDevice, &caps);
+            std::printf("FSR3 ISS logical device: storage_write_without_format=%u "
+                        "float16=%u subgroup_control=%u synchronization2=%u\n",
+                        unsigned(device_info.shaderStorageImageWriteWithoutFormatEnabled),
+                        unsigned(device_info.shaderFloat16Enabled),
+                        unsigned(device_info.subgroupSizeControlEnabled),
+                        unsigned(device_info.synchronization2Enabled));
+            std::printf("FSR3 ISS create failure: code=%d capabilities_code=%d "
+                        "compute=%u subgroup=%u formats=%u prerequisites=%u "
+                        "float16=%u subgroup_control=%u subgroup_size=%u "
+                        "size=%ux%u->%ux%u\n",
+                        int(create_result), int(cap_result),
+                        unsigned(caps.hasComputeQueue),
+                        unsigned(caps.subgroupOperations),
+                        unsigned(caps.requiredFsr3StorageFormats),
+                        unsigned(caps.fsr3ComputePrerequisites),
+                        unsigned(caps.shaderFloat16),
+                        unsigned(caps.subgroupSizeControl), caps.subgroupSize,
+                        w, h, ow, oh);
+            // The ISS Android Vulkan HAL is accessed directly rather than via
+            // libvulkan's normal loader. Compare the portable AMD capability
+            // result against the actual HAL function pointers: this separates a
+            // missing Turnip format from a mismatched Vulkan dispatch table.
+            static constexpr struct {
+                VkFormat format;
+                VkFormatFeatureFlags required;
+                const char* label;
+            } required_formats[] = {
+                {VK_FORMAT_R8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                      VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                      VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                      VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R8Unorm"},
+                {VK_FORMAT_R8G8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RG8Unorm"},
+                {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RGBA8Unorm"},
+                {VK_FORMAT_R16_SNORM, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                        VK_FORMAT_FEATURE_TRANSFER_DST_BIT, "R16Snorm"},
+                {VK_FORMAT_R16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R16Float"},
+                {VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "RG16Float"},
+                {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                                VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "RGBA16Float"},
+                {VK_FORMAT_R16G16_SINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                          VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                          VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                          VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RG16Sint"},
+                {VK_FORMAT_R32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                         VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                         VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT, "R32Float"},
+                {VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                            VK_FORMAT_FEATURE_TRANSFER_DST_BIT, "RG32Float"},
+                {VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                                VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                                VK_FORMAT_FEATURE_TRANSFER_SRC_BIT, "RGBA32Float"},
+                {VK_FORMAT_R32_UINT, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_TRANSFER_DST_BIT |
+                                       VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_TRANSFER_SRC_BIT |
+                                       VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT, "R32Uint"}
+            };
+            u32 supported = 0;
+            const auto direct_fmt =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFormatProperties;
+            if (direct_fmt) {
+                for (const auto& item : required_formats) {
+                    VkFormatProperties fp{};
+                    direct_fmt(device_info.physicalDevice, item.format, &fp);
+                    if ((fp.optimalTilingFeatures & item.required) == item.required) {
+                        ++supported;
+                    } else {
+                        std::printf("FSR3 ISS HAL missing format=%s required=0x%x available=0x%x\n",
+                                    item.label, unsigned(item.required),
+                                    unsigned(fp.optimalTilingFeatures));
+                    }
+                }
+            }
+            std::printf("FSR3 ISS HAL direct capability: format_checks=%u/%zu "
+                        "vkGetPhysicalDeviceFormatProperties=%u\n",
+                        supported, std::size(required_formats), unsigned(direct_fmt != nullptr));
+            VkPhysicalDeviceSubgroupProperties subgroup{};
+            subgroup.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+            VkPhysicalDeviceProperties2 properties{};
+            properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties.pNext = &subgroup;
+            const auto direct_properties =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2;
+            if (direct_properties) {
+                direct_properties(device_info.physicalDevice, &properties);
+            }
+            VkPhysicalDeviceFeatures2 features{};
+            features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            const auto direct_features =
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceFeatures2;
+            if (direct_features) {
+                direct_features(device_info.physicalDevice, &features);
+            }
+            std::printf("FSR3 ISS HAL subgroup: size=%u operations=0x%x stages=0x%x "
+                        "writeWithoutFormat=%u native_property_fn=%u native_feature_fn=%u\n",
+                        subgroup.subgroupSize, unsigned(subgroup.supportedOperations),
+                        unsigned(subgroup.supportedStages),
+                        unsigned(features.features.shaderStorageImageWriteWithoutFormat),
+                        unsigned(direct_properties != nullptr),
+                        unsigned(direct_features != nullptr));
+#else
+            std::printf("Upscaler: FSR 3 context creation failed (code=%d)\n",
+                        int(create_result));
+#endif
             context = nullptr;
             return false;
         }
@@ -814,6 +1111,9 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
     cmdbuf.pushConstants(*taa_sharpen_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(extra), &extra);
     cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.extra_sharpen_dispatches;
+#endif
     image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                   vk::AccessFlagBits2::eShaderStorageWrite, all, rw);
 }
@@ -1281,7 +1581,22 @@ float TemporalUpscaler::SceneMipBias() const {
     if (!Active() || TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa) return 0.0f;
     const float render = float(TlgSettings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
-    return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
+    if (!(render > 0.0f && render < output)) return 0.0f;
+    const float resolution_bias = std::log2(render / output);
+#ifdef ISS_ANDROID_BIONIC
+    // FidelityFX FSR3 integration guide: mipBias = log2(render/output) - 1.
+    // ISS previously used only log2(render/output), losing a full mip level
+    // of material texture detail BEFORE FSR could reconstruct it.
+    // For the actual 640->1280 performance mode this restores -2.0 (was -1.0);
+    // for 960->1280 quality it is -1.415 (was -0.415).
+    // Keep this strictly within native Bionic FSR3; never sharpen depth,
+    // shadows, HUD or post effects (those passes do not enter the G-buffer
+    // sampler-bias path in vk_rasterizer.cpp).
+    if (Scaled() && TlgSettings::Get().upscaler == TlgSettings::UpscalerFsr3) {
+        return resolution_bias - 1.0f;
+    }
+#endif
+    return resolution_bias;
 }
 
 bool TemporalUpscaler::Scaled() const {
@@ -1297,17 +1612,29 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
     if (image.info.pixel_format == vk::Format::eR8G8B8A8Unorm &&
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.ldr_targets;
+#endif
         ldr_target = color;
     }
 }
 
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.ui_draws;
+    if (native_viewport) ++android_fsr_probe.native_viewport_draws;
+    if (camera_motion.Ready()) ++android_fsr_probe.camera_ready_draws;
+    if (ldr_target && ldr_target == color) ++android_fsr_probe.ldr_match_draws;
+#endif
     if (!Scaled() && vs_hash == ui_trigger_vs) done_this_frame = true;
     if (!Scaled() || !color) {
         return;
     }
     if (ui_phase) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.ui_draws_after_fsr;
+#endif
         // A UI movie can start without stencil and enable it for later text/masks.
         if (color == ui_color && depth && depth != ui_depth) {
             EnsureUiResources(ui_width, ui_height, ui_format,
@@ -1318,6 +1645,33 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         return;
     }
     const auto& image = texture_cache.GetImage(color);
+#ifdef ISS_ANDROID_BIONIC
+    // The original Bloodborne probe required a known LDR target here.
+    // ISS draws its fullscreen passes before that target is identified,
+    // so sample the actual vertex hashes irrespective of LDR availability.
+    if (android_fsr_probe.scene_colors > 0 &&
+        (native_viewport || (ldr_target && ldr_target == color)) &&
+        !android_ui_samples_printed &&
+        android_ui_sample_count < android_ui_samples.size()) {
+        bool known = false;
+        for (u32 i = 0; i < android_ui_sample_count; ++i) {
+            if (android_ui_samples[i].vertex_hash == vs_hash &&
+                android_ui_samples[i].width == image.info.size.width &&
+                android_ui_samples[i].height == image.info.size.height) {
+                known = true;
+                break;
+            }
+        }
+        if (!known) {
+            auto& record = android_ui_samples[android_ui_sample_count++];
+            record.vertex_hash = vs_hash;
+            record.width = image.info.size.width;
+            record.height = image.info.size.height;
+            record.format = static_cast<u32>(image.info.pixel_format);
+            record.same_ldr_target = ldr_target == color;
+        }
+    }
+#endif
     const bool movie = vs_hash == ui_trigger_vs || UiComposition::MovieShader(vs_hash) ||
                        (scaled_session && native_viewport);
     const bool ui_draw = movie &&
@@ -1325,6 +1679,9 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
          image.info.pixel_format == vk::Format::eR8G8B8A8Srgb) &&
         RenderTarget(image.info.size.width, image.info.size.height) &&
         !FrameCapture::IsDisplayBuffer(image.info.guest_address);
+#ifdef ISS_ANDROID_BIONIC
+    if (ui_draw) ++android_fsr_probe.rgba_ui_candidates;
+#endif
     switch (UiComposition::Choose(Scaled(), ui_draw,
                                   camera_motion.Ready() && ldr_target == color,
                                   Active() && !failed)) {
@@ -1342,6 +1699,93 @@ void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
         return;
     }
 }
+
+#ifdef ISS_ANDROID_BIONIC
+void TemporalUpscaler::SnapshotIssSceneDepth(VideoCore::ImageId depth_id) {
+    if (iss_scene_depth_snapshot_valid || !depth_id || !scaled_session) return;
+    auto& depth = texture_cache.GetImage(depth_id);
+    const auto format = depth.info.pixel_format;
+    const u32 w = depth.info.size.width, h = depth.info.size.height;
+    if (!RenderTarget(w, h) ||
+        (format != vk::Format::eD32Sfloat &&
+         format != vk::Format::eD32SfloatS8Uint)) {
+        return;
+    }
+    const auto device = instance.GetDevice();
+    const auto allocator = instance.GetAllocator();
+    if (!iss_scene_depth_image || iss_scene_depth_format != format ||
+        iss_scene_depth_width != w || iss_scene_depth_height != h) {
+        // Allocation only when the size/format changes. Never force a GPU
+        // finish or allocate a new image every frame.
+        scheduler.Finish();
+        iss_scene_depth_view.reset();
+        iss_scene_depth_image = VideoCore::UniqueImage(device, allocator);
+        iss_scene_depth_image.Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = format,
+            .extent = {w, h, 1},
+            .mipLevels = 1, .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eTransferDst |
+                     vk::ImageUsageFlagBits::eTransferSrc |
+                     vk::ImageUsageFlagBits::eSampled,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        iss_scene_depth_view = Check(device.createImageViewUnique({
+            .image = vk::Image(iss_scene_depth_image),
+            .viewType = vk::ImageViewType::e2D,
+            .format = format,
+            .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1},
+        }));
+        iss_scene_depth_format = format;
+        iss_scene_depth_width = w;
+        iss_scene_depth_height = h;
+    }
+
+    scheduler.EndRendering();
+    runtime.Transit(&depth, vk::ImageLayout::eTransferSrcOptimal,
+                    vk::PipelineStageFlagBits2::eTransfer,
+                    vk::AccessFlagBits2::eTransferRead);
+    runtime.FlushBarriers();
+    const auto cmd = scheduler.CommandBuffer();
+    const vk::ImageMemoryBarrier2 prepare{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryRead |
+                         vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eTransferDstOptimal,
+        .image = vk::Image(iss_scene_depth_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1},
+    };
+    cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &prepare});
+    const vk::ImageCopy region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+        .dstSubresource = {vk::ImageAspectFlagBits::eDepth, 0, 0, 1},
+        .extent = {w, h, 1},
+    };
+    cmd.copyImage(depth.GetImage(), vk::ImageLayout::eTransferSrcOptimal,
+                  vk::Image(iss_scene_depth_image), vk::ImageLayout::eTransferDstOptimal,
+                  region);
+    auto ready = prepare;
+    ready.srcStageMask = vk::PipelineStageFlagBits2::eTransfer;
+    ready.srcAccessMask = vk::AccessFlagBits2::eTransferWrite;
+    ready.dstStageMask = vk::PipelineStageFlagBits2::eComputeShader;
+    ready.dstAccessMask = vk::AccessFlagBits2::eShaderRead;
+    ready.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    ready.newLayout = vk::ImageLayout::eGeneral;
+    cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ready});
+    iss_scene_depth_snapshot_valid = true;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        std::printf("FSR3 ISS: copying G-buffer scene depth %ux%u before HUD reuse; "
+                    "FSR receives preserved depth, not the later UI depth\n", w, h);
+    }
+}
+#endif
 
 void TemporalUpscaler::EnsureUiResources(u32 w, u32 h, vk::Format color, vk::Format depth) {
     const bool resized = w != ui_width || h != ui_height;
@@ -1459,6 +1903,9 @@ void TemporalUpscaler::PrepareUiDepth(VideoCore::ImageId depth_id) {
 }
 
 void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId depth_id) {
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.ui_only_copies;
+#endif
     if (auto* profiler = GpuProfiler::Get()) {
         profiler->Mark(0xF5A1'0000ull, [] { return std::string{"upscaler RunUiOnly"}; });
     }
@@ -1525,6 +1972,51 @@ void TemporalUpscaler::RunUiOnly(VideoCore::ImageId color_id, VideoCore::ImageId
     ui_depth = depth_id;
 }
 
+void TemporalUpscaler::OnIssAaOutputMarker(u64 gpu_addr, u32 width, u32 height) {
+#ifndef ISS_ANDROID_BIONIC
+    (void)gpu_addr; (void)width; (void)height;
+#else
+    static u32 markers = 0, used = 0;
+    ++markers;
+    if (!Scaled() || !scaled_session || done_this_frame || failed || !Active() ||
+        TlgSettings::Get().upscaler != TlgSettings::UpscalerFsr3 ||
+        !camera_motion.Ready() || !camera_motion.Depth()) return;
+    if (width != render_width || height != render_height) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: dimensions %ux%u vs render %ux%u; fallback\\n",
+                                      width,height,render_width,render_height);
+        return;
+    }
+    const auto image_id = texture_cache.FindImageFromRange(gpu_addr, 4, false);
+    if (!image_id) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: no matching Vulkan target at 0x%llx; fallback\\n",
+            (unsigned long long)gpu_addr);
+        return;
+    }
+    auto& image = texture_cache.GetImage(image_id);
+    const auto& depth = texture_cache.GetImage(camera_motion.Depth());
+    if (image.info.guest_address != gpu_addr ||
+        image.info.pixel_format != vk::Format::eR8G8B8A8Unorm ||
+        image.info.size.width != depth.info.size.width ||
+        image.info.size.height != depth.info.size.height ||
+        image.info.size.width != width || image.info.size.height != height ||
+        !(image.usage_flags & vk::ImageUsageFlagBits::eSampled) ||
+        FrameCapture::IsDisplayBuffer(gpu_addr)) {
+        if (markers <= 4) std::printf("FSR3 ISS AA marker: unsuitable colour image at 0x%llx (fmt=%u, size=%ux%u); fallback\\n",
+            (unsigned long long)gpu_addr, unsigned(image.info.pixel_format),
+            image.info.size.width, image.info.size.height);
+        return;
+    }
+    // The game has FINISHED its AA composite at this exact marker. Do not run
+    // on the G-buffer or before colour tonemapping (the former cyan regression).
+    ldr_target = image_id;
+    RunScaled();
+    if (ui_phase && ++used <= 4) {
+        std::printf("FSR3 ISS AA marker: reconstructed at AA boundary, GPU=0x%llx, size=%ux%u\\n",
+                    (unsigned long long)gpu_addr,width,height);
+    }
+#endif
+}
+
 void TemporalUpscaler::RunScaled() {
     if (auto* profiler = GpuProfiler::Get()) {
         const char* label = TlgSettings::Get().upscaler == TlgSettings::UpscalerTaa
@@ -1541,6 +2033,20 @@ void TemporalUpscaler::RunScaled() {
     if (depth.info.size.width != iw || depth.info.size.height != ih || w > ow || h > oh) {
         return;
     }
+#ifdef ISS_ANDROID_BIONIC
+    android_fsr_probe.source_width = iw;
+    android_fsr_probe.source_height = ih;
+    android_fsr_probe.depth_width = depth.info.size.width;
+    android_fsr_probe.depth_height = depth.info.size.height;
+    android_fsr_probe.source_format = static_cast<u32>(color.info.pixel_format);
+    android_fsr_probe.depth_format = static_cast<u32>(depth.info.pixel_format);
+#endif
+#ifdef ISS_ANDROID_BIONIC
+    // Some scenes complete from UiComposition::Background::Temporal rather
+    // than the fullscreen display boundary. Both routes must latch the camera
+    // immediately before the motion-vector pass of this exact scene frame.
+    camera_motion.PrepareIssNativeCamera();
+#endif
     if (!EnsureResources(w, h, ow, oh, false)) {
         failed = true;
         return;
@@ -1565,10 +2071,34 @@ void TemporalUpscaler::RunScaled() {
         source_width = w;
         source_height = h;
     } else {
+#ifdef ISS_ANDROID_BIONIC
+        // The captured ZIP exposed the late guest depth image containing HUD
+        // lettering and only four distinct depths (96.3% zero) while the
+        // associated color held an entire 3D scene. Use the G-buffer snapshot
+        // captured before its physical depth attachment was reused for UI.
+        const bool saved_scene_depth = iss_scene_depth_snapshot_valid &&
+            iss_scene_depth_format == depth_format &&
+            iss_scene_depth_width == iw && iss_scene_depth_height == ih;
+        if (saved_scene_depth) {
+            depth_image = vk::Image(iss_scene_depth_image);
+            depth_view = *iss_scene_depth_view;
+        } else {
+            depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
+            runtime.Transit(&depth, vk::ImageLayout::eGeneral,
+                            vk::PipelineStageFlagBits2::eComputeShader,
+                            vk::AccessFlagBits2::eShaderRead);
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                std::printf("FSR3 ISS WARNING: no G-buffer depth snapshot for this frame\n");
+            }
+        }
+#else
         depth_view = CachedView(depth, depth_format, vk::ImageAspectFlagBits::eDepth);
-        color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&depth, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
+#endif
+        color_view = CachedView(color, color.info.pixel_format, vk::ImageAspectFlagBits::eColor);
         runtime.Transit(&color, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
         runtime.FlushBarriers();
@@ -1722,15 +2252,38 @@ void TemporalUpscaler::RunScaled() {
 
     info.transparencyAndCompositionMask.structSize = sizeof(info.transparencyAndCompositionMask);
     const float sign = TlgToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+#ifdef ISS_ANDROID_BIONIC
+    // The rendered scene is displaced twice: by the game's native projection
+    // jitter and by the Vulkan viewport. Feeding only the viewport jitter to
+    // FidelityFX makes its history reconstruction sample an incorrect location
+    // (visible as excessive blur even with RCAS sharpening enabled).
+    // CameraMotion removes the guest-jitter DELTA from motion vectors, which
+    // is correct: jitter belongs in jitterOffset, not in scene velocity.
+    const auto native_jitter_pixels = camera_motion.IssNativeJitterPixels(w, h);
+    info.jitterOffset = {sign * jitter[0] + native_jitter_pixels[0],
+                         sign * jitter[1] + native_jitter_pixels[1]};
+#else
     info.jitterOffset = {sign * jitter[0], sign * jitter[1]};
+#endif
     info.motionVectorScale = {1.0f, 1.0f};
     info.renderSize = {w, h};
     info.outputSize = {ow, oh};
     info.frameTimeMilliseconds = frame_ms;
     info.preExposure = 1.0f;
+#ifdef ISS_ANDROID_BIONIC
+    // The FSR context needs finite camera metadata even when motion comes from
+    // per-object screen vectors. These values are conservative placeholders;
+    // they are NOT reconstructed camera parameters for inFAMOUS.
+    const bool camera_valid = camera_motion.Ready();
+    info.cameraNear = camera_valid ? camera_motion.Near() : 0.1f;
+    info.cameraFar = camera_motion.IssNativeCameraReady() ?
+                         camera_motion.IssNativeFar() : 3000.0f;
+    info.cameraVerticalFovRadians = camera_valid ? camera_motion.VerticalFov() : 1.04719755f;
+#else
     info.cameraNear = camera_motion.Near();
     info.cameraFar = 3000.0f;
     info.cameraVerticalFovRadians = camera_motion.VerticalFov();
+#endif
     info.viewSpaceToMeters = 1.0f;
     info.sharpness = std::min(settings.sharpness.load(), 1.0f);
     info.enableSharpening = settings.sharpen ? VK_TRUE : VK_FALSE;
@@ -1739,6 +2292,11 @@ void TemporalUpscaler::RunScaled() {
 
     FfxVkPortableUpscaleCreateInfo create_info{};
     create_info.structSize = sizeof(create_info);
+#ifdef ISS_ANDROID_BIONIC
+    // Match the actual pre-created LDR context for dispatch validation.
+    create_info.flags = FFX_VK_PORTABLE_CONTEXT_DEPTH_INVERTED |
+                        FFX_VK_PORTABLE_CONTEXT_AUTO_EXPOSURE;
+#endif
     create_info.maxRenderSize = {w, h};
     create_info.maxOutputSize = {ow, oh};
     bool ok = false;
@@ -1752,7 +2310,44 @@ void TemporalUpscaler::RunScaled() {
         ok = true;
         reset = false;
         dispatched_last_frame = true;
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.dispatched;
+        static bool native_jitter_reported = false;
+        if (!native_jitter_reported && camera_motion.IssNativeCameraReady()) {
+            native_jitter_reported = true;
+            std::printf("FSR3 ISS jitter aligned: native=%.3f,%.3f viewport=%.3f,%.3f "
+                        "sdk=%.3f,%.3f (render pixels)\n",
+                        native_jitter_pixels[0], native_jitter_pixels[1],
+                        sign * jitter[0], sign * jitter[1],
+                        info.jitterOffset.x, info.jitterOffset.y);
+        }
+        // Sample the camera state at the ACTUAL successful FSR dispatch,
+        // not OnFrameStart, where the previous frame's camera is invalidated.
+        // This is a per-scene result and makes the 180-frame summary truthful.
+        if (camera_motion.IssNativeCameraReady()) {
+            ++android_fsr_probe.native_camera_dispatches;
+        } else {
+            ++android_fsr_probe.fallback_motion_dispatches;
+        }
+        if (settings.sharpen.load() && settings.sharpness.load() > 0.0f)
+            ++android_fsr_probe.rcas_dispatches;
+#endif
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
+#ifdef ISS_ANDROID_BIONIC
+        // This is the real LDR FSR3 path (not the unrelated FSR4/HDR path).
+        // Capture a *user-requested*, bounded pair of frames, including exactly
+        // the images consumed by the SDK, so loss of detail can be located
+        // before vs. during temporal reconstruction. No GPU readback otherwise.
+        if (const int dump = DumpFrame(); dump >= 0) {
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{color_image, source_width, source_height, 4, "input", "rgba"},
+                        {vk::Image(motion_image), w, h, 4, "motion", "rg16f"},
+                        {vk::Image(ui_image), ow, oh, 4, "output", "rgba"}});
+            DumpImages(instance, scheduler, cmdbuf, dump,
+                       {{depth_image, source_width, source_height, 4, "depth", "f32",
+                         vk::ImageAspectFlagBits::eDepth}});
+        }
+#endif
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -1792,6 +2387,9 @@ vk::ImageView TemporalUpscaler::Mirror(vk::Image image, std::vector<MirrorView>&
 bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                                      const VideoCore::ImageViewInfo& view_info, Target& target) {
     if (ui_phase && color == ui_color) {
+#ifdef ISS_ANDROID_BIONIC
+        ++android_fsr_probe.redirected_color;
+#endif
         target = {Mirror(vk::Image(ui_image), ui_views, view_info.format, {}),
                   vk::ImageLayout::eGeneral, ui_width, ui_height, true};
         return true;
@@ -1884,6 +2482,9 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
             cmd.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
         });
     }
+#ifdef ISS_ANDROID_BIONIC
+    ++android_fsr_probe.redirected_samples;
+#endif
     view = Mirror(vk::Image(ui_image), ui_views, info.format, info.mapping);
     layout = vk::ImageLayout::eGeneral;
     return true;

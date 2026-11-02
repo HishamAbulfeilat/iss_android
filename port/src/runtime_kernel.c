@@ -12,7 +12,12 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/time.h>
+#if defined(__ANDROID__) && defined(__BIONIC__)
+#include <sys/prctl.h>
+#endif
+#ifdef GUEST_CPU_NATIVE
 #include <x86intrin.h>
+#endif
 #ifndef _WIN32
 #include <sys/random.h>
 #include <sys/resource.h>
@@ -97,18 +102,21 @@ static int tsc_process_clock(void) {
     if (value<0) { const char *e=getenv("TLG_TSC"); value=e && !strcmp(e,"process"); }
     return value;
 }
-static ABI uint64_t read_tsc(void) { return tsc_process_clock() ? process_time_counter() : __rdtsc(); }
+static ABI uint64_t read_tsc(void) { return tsc_process_clock() ? process_time_counter() : guest_cpu_tsc(); }
 static ABI uint64_t tsc_frequency(void) {
     if (tsc_process_clock()) return 1000000000;
+#ifndef GUEST_CPU_NATIVE
+    return guest_cpu_tsc_frequency();
+#endif
     if (!tsc_hz) {
         struct timespec a,b,nap={0,20000000};
-        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=__rdtsc();
+        clock_gettime(CLOCK_MONOTONIC,&a); uint64_t t0=guest_cpu_tsc();
 #ifdef _WIN32
         (void)nap; compat_sleep_ns(20000000);
 #else
         nanosleep(&nap,NULL);
 #endif
-        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=__rdtsc();
+        clock_gettime(CLOCK_MONOTONIC,&b); uint64_t t1=guest_cpu_tsc();
         uint64_t ns=(uint64_t)(b.tv_sec-a.tv_sec)*1000000000+(uint64_t)(b.tv_nsec-a.tv_nsec);
         tsc_hz=(t1-t0)*1000000000/(ns ? ns : 1);
     }
@@ -119,8 +127,35 @@ uint64_t runtime_process_time_us(void) { return process_time(); }
 uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
 uint64_t runtime_tsc_frequency(void) { return tsc_frequency(); }
 uint64_t runtime_read_tsc(void) { return read_tsc(); }
+/* Release 0.2.5 enables this for CUSA00004 (compatibility flag +24).
+ * Its short sleep path, 0xa8393c..0xa83994, sets PR_SET_TIMERSLACK to 1 ns
+ * once per thread for requests below 1 ms. This is independent of shader DMA.
+ * Keep the requested duration and ordinary nanosleep/EINTR behavior unchanged. */
+void runtime_prepare_short_sleep(uint64_t ns) {
+#if defined(__ANDROID__) && defined(__BIONIC__)
+    if (ns >= UINT64_C(1000000)) return;
+    static __thread int attempted;
+    if (attempted) return;
+    attempted=1;
+    const int saved_errno=errno;
+    const char *setting=getenv("TLG_SHORT_SLEEP_SLACK");
+    if (setting && setting[0]=='0') { errno=saved_errno; return; }
+    const long previous=prctl(PR_GET_TIMERSLACK,0UL,0UL,0UL,0UL);
+    const int result=prctl(PR_SET_TIMERSLACK,1UL,0UL,0UL,0UL);
+    const int failure=result<0 ? errno : 0;
+    const long actual=result==0 ? prctl(PR_GET_TIMERSLACK,0UL,0UL,0UL,0UL) : previous;
+    printf("BionicSleep: thread=%lu timer_slack_before_ns=%ld timer_slack_after_ns=%ld "
+           "set_result=%d errno=%d first_request_ns=%llu\n",
+           (unsigned long)pthread_self(),previous,actual,result,failure,
+           (unsigned long long)ns);
+    errno=saved_errno;
+#else
+    (void)ns;
+#endif
+}
 static int sleep_ns(uint64_t ns,uintptr_t frame) {
     int e=0;
+    runtime_prepare_short_sleep(ns);
     runtime_wait_begin("sleep",(const void *)(uintptr_t)(ns/1000),NULL,NULL,frame); /* object: microseconds */
 #ifdef _WIN32
     compat_sleep_ns(ns);
@@ -285,7 +320,7 @@ static ABI int32_t thread_once(int32_t *once,void (ABI *routine)(void)) {
         int32_t state=__atomic_load_n(once,__ATOMIC_ACQUIRE);
         if (state==1) return 0;
         if (state==0 && __atomic_compare_exchange_n(once,&state,2,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE)) {
-            routine();
+            guest_cpu_call((uintptr_t)routine,0,NULL);
             __atomic_store_n(once,1,__ATOMIC_RELEASE);
             return 0;
         }
@@ -329,7 +364,7 @@ void runtime_thread_keys_cleanup(void) {
             void *value=key_values[i];
             if (!value || !keys[i].used || !keys[i].destructor) continue;
             key_values[i]=NULL; any=1;
-            keys[i].destructor(value);
+            guest_cpu_call((uintptr_t)keys[i].destructor,1,(const uint64_t[]){(uintptr_t)value});
         }
         if (!any) break;
     }

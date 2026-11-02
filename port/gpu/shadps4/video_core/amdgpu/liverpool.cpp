@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <pthread.h>
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
 #include <time.h>
 #include "tlg_copy.h"
+#include "iss_bionic_perf.h"
 #include "tlg_toggles.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
@@ -25,6 +28,7 @@
 #include "core/platform.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "tlg_write_log.h"
+#include "tlg_shared_heaps.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_frame_record.h"
@@ -113,6 +117,7 @@ void Liverpool::ProcessCommands() {
 }
 
 void Liverpool::Process(std::stop_token stoken) {
+    IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Command);
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
 #ifndef _WIN32
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
@@ -280,7 +285,15 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
         const char* env = std::getenv("TLG_ASYNC_FENCES");
         return env && env[0] == '1';
     }();
-    if (async_fences && !TlgToggle::Disabled(TlgToggle::AsyncFences)) {
+    if (TlgSharedHeaps::Active()) {
+        // Shared heaps: the GPU reads the game's own memory, with no copy made at recording.
+        // The guest takes this fence as "the GPU is done with the frame" and rewrites what it
+        // drew (skinned and streamed geometry), so it must not see it before the GPU really is,
+        // or the GPU draws half-rewritten geometry (flicker, stretched or missing polygons).
+        rasterizer.WaitHostCopies();
+        rasterizer.WaitDeferredSignals();
+        rasterizer.SignalWhenGpuDone([eop] { SignalEop(eop); });
+    } else if (async_fences && !TlgToggle::Disabled(TlgToggle::AsyncFences)) {
         TlgCopy::AfterCopies([eop] { SignalEop(eop); });
     } else if (Vulkan::DrawPipe::OnStageB() && !TlgToggle::Disabled(TlgToggle::RecorderFences)) {
         // The draw recording thread does not wait: the Vulkan recording thread signals the
@@ -338,7 +351,8 @@ void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
     // Copies deferred to the recording thread, and fences deferred to it (RecorderFences),
     // precede writes the guest sees.
-    rasterizer.WaitHostCopies();
+    rasterizer.WaitHostCopiesFor(write_data->Address<VAddr>(),
+                                 (header->type3.count.Value() - 2) * sizeof(u32));
     rasterizer.WaitDeferredSignals();
     TlgWriteLog::Note(write_data->Address<u64>(), write_data->data,
                      (header->type3.count.Value() - 2) * sizeof(u32), TlgWriteLog::WriteData);
@@ -369,6 +383,37 @@ bool PipelinedComputeOpcode(PM4ItOpcode opcode) {
     }
 }
 
+// tlg: shared GPU writes: compute and end-of-shader fences may wait for the GPU too
+// (TLG_SHARED_COMPUTE_FENCES=1). Off: each such fence then submitted the work so far, hundreds
+// per second (v0.4.2: 4x the submissions, 16 FPS in the open world); the end-of-frame fence,
+// which the game's CPU writes depend on, always waits.
+bool ComputeFencesWaitForGpu() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("TLG_SHARED_COMPUTE_FENCES");
+        return env && env[0] == '1';
+    }();
+    return enabled && TlgSharedHeaps::GpuWrites();
+}
+
+// The game reads what the GPU wrote straight from its memory once a fence says the GPU is done.
+// A GDS store needs the command buffer and stays immediate. Returns true when deferred.
+bool SignalReleaseMemWhenGpuDone(Vulkan::Rasterizer& rasterizer, const u32* packet, u32 pipe_id) {
+    const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(packet);
+    if (!ComputeFencesWaitForGpu() || release_mem->data_sel == DataSelect::GdsMemStore) {
+        return false;
+    }
+    std::array<u32, sizeof(PM4CmdReleaseMem) / sizeof(u32)> copy;
+    std::memcpy(copy.data(), packet, sizeof(PM4CmdReleaseMem));
+    rasterizer.SignalWhenGpuDone([copy, pipe_id] {
+        reinterpret_cast<const PM4CmdReleaseMem*>(copy.data())->SignalFence(
+            [pipe_id] {
+                Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(pipe_id));
+            },
+            [](VAddr, u16, u16) {});
+    });
+    return true;
+}
+
 struct ComputeReleaseMem {
     u32 packet[sizeof(PM4CmdReleaseMem) / sizeof(u32)];
     u32 pipe_id;
@@ -381,6 +426,9 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
     rasterizer.EagerCopyAtFence();
+    if (SignalReleaseMemWhenGpuDone(rasterizer, task.packet, task.pipe_id)) {
+        return;
+    }
     reinterpret_cast<const PM4CmdReleaseMem*>(task.packet)->SignalFence(
         [pipe_id = task.pipe_id] {
             Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(pipe_id));
@@ -390,19 +438,39 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
         });
 }
 
+// tlg: TLG_OCCLUSION_MODE=4: a ZPASS_DONE dump, counted by Vulkan occlusion queries.
+struct OcclusionDumpTask {
+    VAddr address;
+    u32 num_pairs;
+};
+
+void RunOcclusionDump(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    OcclusionDumpTask task;
+    std::memcpy(&task, data, sizeof(task));
+    rasterizer.OcclusionDump(task.address, task.num_pairs);
+}
+
 void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto& event_eos = *reinterpret_cast<const PM4CmdEventWriteEos*>(data);
     // Copies deferred to the recording thread precede writes the guest sees.
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
-    event_eos.SignalFence([](void* address, u64 value, u32 num_bytes) {
+    const auto write_fence = [](void* address, u64 value, u32 num_bytes) {
         auto* memory = Core::Memory::Instance();
         TlgWriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes, TlgWriteLog::Fence);
         if (!memory->TryWriteBacking(address, &value, num_bytes)) {
             memcpy(address, &value, num_bytes);
         }
-    });
+    };
+    // tlg: shared GPU writes: as for ReleaseMem, the fence may wait for the GPU.
+    if (ComputeFencesWaitForGpu() &&
+        event_eos.command == PM4CmdEventWriteEos::Command::SignalFence) {
+        rasterizer.SignalWhenGpuDone(
+            [event_eos, write_fence] { event_eos.SignalFence(write_fence); });
+        return;
+    }
+    event_eos.SignalFence(write_fence);
     if (event_eos.command == PM4CmdEventWriteEos::Command::GdsStore) {
         ASSERT(event_eos.size == 1);
         rasterizer.Finish();
@@ -439,6 +507,40 @@ void Liverpool::NotePendingWrite(const PM4CmdWriteData& write_data, u32 num_byte
     std::memcpy(&data, write_data.data, num_bytes);
     pending_fences.push_back(
         {write_data.Address<VAddr>(), data, num_bytes, rasterizer->DrawPipeHead()});
+}
+
+void Liverpool::NoteOcclusionDump(VAddr address, u32 num_pairs) {
+    const VAddr results = address & ~VAddr{15};
+    const u32 size = std::clamp<u32>(num_pairs, 1, 16) * 2 * sizeof(u64);
+    // A query begun again at these results: not known until its end dump.
+    for (auto& r : occlusion_results) {
+        if (r.size && results < r.address + r.size && r.address < results + size) {
+            r = {};
+        }
+    }
+    if (address % 16 == sizeof(u64)) {
+        occlusion_results[next_occlusion_result] = {results, size};
+        next_occlusion_result = (next_occlusion_result + 1) % occlusion_results.size();
+    }
+}
+
+bool Liverpool::KnownOcclusionValue(VAddr address, u32& value) const {
+    for (const auto& r : occlusion_results) {
+        if (!r.size || address < r.address || address >= r.address + r.size) {
+            continue;
+        }
+        switch ((address - r.address) % (2 * sizeof(u64)) / sizeof(u32)) {
+        case 0: // begin counter, low half
+            value = 0;
+            return true;
+        case 2: // end counter, low half: the samples, known once the GPU is done
+            return false;
+        default: // high halves: valid bit
+            value = 0x80000000U;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Liverpool::PendingFenceValue(VAddr address, u32& value) {
@@ -835,6 +937,20 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     break;
                 }
 
+                // CUSA00004 AA completion NOP: the FEX hook writes this packet
+                // after the game's AA has completed its colour composite.
+                // Do not infer this point from stencil, transparency or UI draw hashes.
+                if (nop->header.count.Value() >= 5 &&
+                    nop->data_block[0] == 0x49534101u && nop->data_block[1] == 1u) {
+                    const u64 gpu_addr = u64(nop->data_block[2]) |
+                                         (u64(nop->data_block[3]) << 32);
+                    const u32 image_width = nop->data_block[4];
+                    const u32 image_height = nop->data_block[5];
+                    if (rasterizer) {
+                        rasterizer->IssAaOutputMarker(gpu_addr, image_width, image_height);
+                    }
+                    break;
+                }
                 switch (nop->data_block[0]) {
                 case PM4CmdNop::PayloadType::PatchedFlip: {
                     // There is no evidence that GPU CP drives flip events by parsing
@@ -1190,6 +1306,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
                         u64* results = event->Address<u64*>();
+                        // tlg: mode 4 = real occlusion queries, in order with the draws.
+                        if (rasterizer && Common::Backports::OcclusionMode() == 4) {
+                            const OcclusionDumpTask task{event->Address<VAddr>(),
+                                                         static_cast<u32>(num_counter_pairs)};
+                            NoteOcclusionDump(task.address, task.num_pairs);
+                            if (rasterizer->RunInOrder(&RunOcclusionDump, &task, sizeof(task))) {
+                                rasterizer->NotePendingGpuWrite(
+                                    task.address & ~VAddr{15},
+                                    std::clamp<u32>(task.num_pairs, 1, 16) * 2 * sizeof(u64) + 16);
+                            }
+                            break;
+                        }
                         // tlg: occlusion probe (TLG_OCCLUSION_LOG=1 logs the events; TLG_OCCLUSION_MODE
                         // 0 = fake counter as before, 1 = both slots equal (nothing visible), 2 = end far
                         // above begin (everything visible), 3 = zero counts: the default).
@@ -1329,6 +1457,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     }
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
                     break;
+                }
+                // tlg: occlusion results (mode 4) whose value is known: no readback; and a wait
+                // that is always met reads nothing (mode 4 only, the other modes as before).
+                if (wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory &&
+                    Common::Backports::OcclusionMode() == 4) {
+                    if (wait_reg_mem->function.Value() == PM4CmdWaitRegMem::Function::Always) {
+                        break;
+                    }
+                    if (u32 value; KnownOcclusionValue(wait_reg_mem->Address<VAddr>(), value) &&
+                                   wait_reg_mem->TestValue(value)) {
+                        break;
+                    }
                 }
                 // tlg: a fence handed to the draw recording thread counts as written: that
                 // thread runs everything in stream order.
@@ -1763,6 +1903,10 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             if (rasterizer) {
                 rasterizer->ProcessDownloadImages();
                 rasterizer->EagerCopyAtFence();
+                if (SignalReleaseMemWhenGpuDone(*rasterizer, reinterpret_cast<const u32*>(header),
+                                                queue.pipe_id)) {
+                    break;
+                }
             }
             release_mem->SignalFence(
                 [pipe_id = queue.pipe_id] {

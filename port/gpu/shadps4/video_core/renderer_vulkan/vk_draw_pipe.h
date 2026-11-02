@@ -13,6 +13,7 @@
 
 #include <cstdlib>
 #include "tlg_threads.h"
+#include "iss_bionic_perf.h"
 
 #include <array>
 #include <atomic>
@@ -20,7 +21,7 @@
 #include <cstring>
 #include <memory>
 #include <thread>
-#include <x86intrin.h>
+#include "common/host_cpu.h"
 
 #include "common/assert.h"
 #include "common/thread.h"
@@ -32,6 +33,16 @@ class DrawPipe {
 public:
     /// Runs a packet on stage B.
     using Handler = void (*)(void* context, const u8* packet, u32 size);
+
+    // Timing is optional. An environment value of "0" must not enable
+    // expensive cycle-counter fences / atomic aggregation on every packet.
+    static bool CollectTiming() {
+        static const bool enabled = [] {
+            const char* value = std::getenv("TLG_FRAME_STATS");
+            return value && value[0] == '1';
+        }();
+        return enabled;
+    }
 
     DrawPipe(Handler handler_, void* context_) : handler{handler_}, context{context_} {
         ring = std::make_unique<u8[]>(Capacity);
@@ -106,13 +117,16 @@ public:
         if (consumed.load(std::memory_order_acquire) == head) {
             return;
         }
-        ++drains;
+        const bool collect_timing = CollectTiming();
         const u32 slot = reason < NumReasons ? reason : ReasonRasterizer;
-        ++drains_by_reason[slot];
-        const u64 start = __rdtsc();
+        if (collect_timing) {
+            ++drains;
+            ++drains_by_reason[slot];
+        }
+        const u64 start = collect_timing ? Common::FencedRDTSC() : 0;
         for (u32 spins = 0; consumed.load(std::memory_order_acquire) != head; ++spins) {
             if (spins < 4096) {
-                __builtin_ia32_pause();
+                Common::HostPause();
             } else if (SleepInDrain()) {
                 SleepUntilDrained();
                 break;
@@ -120,9 +134,11 @@ public:
                 std::this_thread::yield();
             }
         }
-        const u64 waited = __rdtsc() - start;
-        drain_cycles += waited;
-        cycles_by_reason[slot] += waited;
+        if (collect_timing) {
+            const u64 waited = Common::FencedRDTSC() - start;
+            drain_cycles += waited;
+            cycles_by_reason[slot] += waited;
+        }
     }
 
     /// Stage A: position after the last committed packet; Reached(position) once B ran it.
@@ -189,11 +205,12 @@ private:
     }
     void WaitForSpace(u64 at, u64 size) {
         while (at + size - consumed.load(std::memory_order_acquire) > Capacity) {
-            __builtin_ia32_pause();
+            Common::HostPause();
         }
     }
 
     void Run(std::stop_token stop) {
+        IssBionicPerf::RegisterThread(IssBionicPerf::Thread::Draw);
         Common::SetCurrentThreadName("tlg:DrawRec");
         on_stage_b = true;
         stage_b_tid.store(static_cast<u32>(gettid()), std::memory_order_release);
@@ -216,7 +233,7 @@ private:
                     if (stop.stop_requested()) {
                         return;
                     }
-                    __builtin_ia32_pause();
+                    Common::HostPause();
                     if (!(spins & 255) && std::chrono::steady_clock::now() >= spin_until) {
                         const u32 seen = wake.load(std::memory_order_seq_cst);
                         sleeping.store(true, std::memory_order_seq_cst);
@@ -236,9 +253,13 @@ private:
                 NotifyDrain();
                 continue;
             }
-            const u64 start = __rdtsc();
-            handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
-            busy_cycles.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+            if (CollectTiming()) {
+                const u64 start = Common::FencedRDTSC();
+                handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
+                busy_cycles.fetch_add(Common::FencedRDTSC() - start, std::memory_order_relaxed);
+            } else {
+                handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
+            }
             at += header->size;
             consumed.store(at, std::memory_order_seq_cst);
             NotifyDrain();

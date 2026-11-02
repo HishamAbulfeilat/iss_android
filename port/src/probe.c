@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <time.h>
 #include "runtime.h"
+#include "guest_cpu.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
 #include "orb_hook.h"
@@ -14,8 +15,9 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "view_hook.h"
+#include "iss_menu_state.h"
 #include "gpu/tlggpu.h"
-#if !defined(__x86_64__) || !defined(__GNUC__)
+#if !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
 #ifdef _WIN32
@@ -28,9 +30,31 @@
 #include <ucontext.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#ifdef __ANDROID__
+#include <unwind.h>
+#else
 #include <execinfo.h>
+#endif
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#endif
+
+#if defined(__ANDROID__) && !defined(_WIN32)
+// Android Bionic does not export glibc backtrace(). Retain native fault
+// diagnostics through the NDK's unwinder, as in the GoW3 Bionic runtime.
+typedef struct { void **frames; int count, max; } IssUnwindState;
+static _Unwind_Reason_Code iss_unwind_step(struct _Unwind_Context *ctx, void *user) {
+    IssUnwindState *state = user;
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (!pc || state->count >= state->max) return _URC_END_OF_STACK;
+    state->frames[state->count++] = (void *)pc;
+    return _URC_NO_REASON;
+}
+static int backtrace(void **frames, int max) {
+    IssUnwindState state = {frames, 0, max};
+    _Unwind_Backtrace(iss_unwind_step, &state);
+    return state.count;
+}
 #endif
 
 typedef struct { uint64_t address, size, flags; } Segment;
@@ -45,11 +69,17 @@ static uint64_t module_count;
 static int entered_game;
 static int gpu_enabled;
 static unsigned cpu_missing_sets; /* CPU_SET_* the host lacks; the guest code needs them rewritten */
-static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handlers and the report read it */
-#ifndef _WIN32
-static uintptr_t guest_code_end; /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
+#ifdef GUEST_CPU_NATIVE
+static IsaTable *isa_table; /* native PC instruction rewrites */
 #endif
+#ifndef _WIN32
+#ifdef GUEST_CPU_NATIVE
+static uintptr_t guest_code_end;
+#endif /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
+#endif
+#ifdef GUEST_CPU_NATIVE
 static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
+#endif
 int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
@@ -91,8 +121,8 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     printf("STOP: first unsupported PS4 import: %s (index %u)\n", names[id], id);
     printf("API: %s\n", runtime_import_name(names[id]));
     printf("Caller return offset: 0x%" PRIxPTR "; first argument: 0x%" PRIxPTR "\n",
-           (uintptr_t)__builtin_return_address(0) - (uintptr_t)image, argument);
-    uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
+           guest_cpu_return_address((uintptr_t)__builtin_return_address(0)) - (uintptr_t)image, argument);
+    uintptr_t caller=guest_cpu_return_address((uintptr_t)__builtin_return_address(0))-(uintptr_t)image;
     for (uint64_t m=0;m<module_count;++m)
         if (caller>=modules[m].base && caller-modules[m].base<modules[m].size)
             printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",caller-modules[m].base);
@@ -125,7 +155,7 @@ static uintptr_t trace_stub(uint64_t index, uintptr_t target) {
     *p++ = 0xbf; memcpy(p, &id, 4); p += 4;
     static const unsigned char lea[] = {0x48,0x8d,0xb4,0x24,0x80,0,0,0};
     memcpy(p, lea, sizeof(lea)); p += sizeof(lea);
-    uintptr_t logger = (uintptr_t)trace_import;
+    uintptr_t logger = guest_cpu_host_function((void *)trace_import);
     *p++ = 0x48; *p++ = 0xb8; memcpy(p, &logger, 8); p += 8;
     *p++ = 0xff; *p++ = 0xd0;
     for (int x = 0; x < 8; ++x) { unsigned char m[] = {0xf3,0x0f,0x6f,(unsigned char)(0x44|(x<<3)),0x24,(unsigned char)(x*16)}; memcpy(p, m, 6); p += 6; }
@@ -136,7 +166,7 @@ static uintptr_t trace_stub(uint64_t index, uintptr_t target) {
     if (p - t > TRACE_STUB_SIZE) fail("trace stub too large");
     return trace_made[index] = (uintptr_t)t;
 }
-#ifndef _WIN32
+#if defined(GUEST_CPU_NATIVE) && !defined(_WIN32)
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
 __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
@@ -272,6 +302,7 @@ static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
 }
 #endif
 #ifndef _WIN32
+#ifdef GUEST_CPU_NATIVE
 /* ucontext gregs of IsaRegs.gpr (x86 numbering). */
 static const int isa_gregs[16]={REG_RAX,REG_RCX,REG_RDX,REG_RBX,REG_RSP,REG_RBP,REG_RSI,REG_RDI,
                                 REG_R8,REG_R9,REG_R10,REG_R11,REG_R12,REG_R13,REG_R14,REG_R15};
@@ -433,6 +464,70 @@ static void fault(int sig, siginfo_t *info, void *context) {
     if (isa_table) { isa_rewrite_report(isa_table, stderr); fflush(stderr); }
     _exit(128 + sig);
 }
+#else
+static unsigned clobber_red_zone;
+static void clobber_thread_init(void) {}
+static void fault(int sig, siginfo_t *info, void *context) {
+    /* GPU page tracking (write-protected guest pages) is resolved first. */
+    if (gpu_enabled && sig == SIGSEGV && tlggpu_handle_fault(context, info->si_addr)) return;
+    /* Faults the guest CPU itself raises (JIT bookkeeping) are handled and resumed. */
+    if (guest_cpu_handle_fault(sig, info, context)) return;
+    /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
+    if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
+        sigjmp_buf *recover = runtime_fault_recover;
+        runtime_fault_recover = NULL;
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, sig);
+        pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
+        siglongjmp(*recover, 1);
+    }
+    /* The process is terminating: dladdr/snprintf are acceptable here. */
+    GuestRegs regs;
+    const int in_guest = guest_cpu_signal_regs(context, &regs);
+    uintptr_t rip = in_guest == GUEST_CPU_IN_GUEST ? (uintptr_t)regs.rip : guest_cpu_host_pc(context);
+    char line[512];
+    Dl_info where;
+    if (rip - (uintptr_t)image < 0x10000000)
+        snprintf(line, sizeof(line), "Guest fault (signal %d) at guest offset 0x%lx, address %p\n",
+                 sig, (unsigned long)(rip - (uintptr_t)image), info->si_addr);
+    else if (dladdr((void *)rip, &where) && where.dli_fname)
+        snprintf(line, sizeof(line), "Host fault (signal %d) in %s+0x%lx (%s), address %p\n", sig, where.dli_fname,
+                 (unsigned long)(rip - (uintptr_t)where.dli_fbase), where.dli_sname ? where.dli_sname : "?", info->si_addr);
+    else
+        snprintf(line, sizeof(line), "Fault (signal %d) at RIP %p, address %p\n", sig, (void *)rip, info->si_addr);
+    { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+#if defined(__ANDROID__) && defined(__aarch64__)
+    // PC=0: LR points at the native callsite that jumped through NULL.
+    // Print a single symbolized return address in the crash report.
+    const ucontext_t *arm = (const ucontext_t *)context;
+    uintptr_t lr = (uintptr_t)arm->uc_mcontext.regs[30];
+    if (lr) {
+        if (dladdr((void *)(lr - 4), &where) && where.dli_fname)
+            snprintf(line, sizeof(line), "  native caller LR: %s+0x%lx (%s)\n",
+                     where.dli_fname, (unsigned long)(lr - 4 - (uintptr_t)where.dli_fbase),
+                     where.dli_sname ? where.dli_sname : "?");
+        else
+            snprintf(line, sizeof(line), "  native caller LR: %p\n", (void *)lr);
+        { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
+    }
+#endif
+    if (gpu_enabled) tlggpu_dump_guest_writes(context);
+    /* Host call chain (frames with unwind info; guest frames end it). */
+    void *frames[32];
+    int depth = backtrace(frames, 32);
+    for (int i = 2; i < depth; ++i) {
+        if (dladdr(frames[i], &where) && where.dli_fname)
+            snprintf(line, sizeof(line), "  #%d %s+0x%lx (%s)\n", i, where.dli_fname,
+                     (unsigned long)((uintptr_t)frames[i] - (uintptr_t)where.dli_fbase), where.dli_sname ? where.dli_sname : "?");
+        else
+            snprintf(line, sizeof(line), "  #%d %p\n", i, frames[i]);
+        ssize_t written_=write(2, line, strlen(line)); (void)written_;
+    }
+    _exit(128 + sig);
+}
+#endif
+
 #endif
 #ifndef _WIN32
 /* Watchdog: dump RIP and the rbp frame chain of every thread (guest offsets
@@ -444,11 +539,12 @@ static void write_hex(char *out, uint64_t v) {
 }
 static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
-    uintptr_t rip=(uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rbp=(uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    GuestRegs regs; guest_cpu_signal_regs(uc,&regs);
+    uintptr_t rip=regs.rip, rbp=regs.gpr[GUEST_RBP];
     uint64_t tid=(uint64_t)gettid();
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
-    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)uc->uc_mcontext.gregs[REG_RDI]);
+    write_hex(arg+6,tid); write_hex(arg+27,regs.gpr[GUEST_RDI]);
     { ssize_t written_=write(2,arg,sizeof(arg)-1); (void)written_; }
     {   /* Thread name (the process is terminating: stdio-free reads are enough). */
         char path[64], name[32]={0};
@@ -536,6 +632,255 @@ static int mapped(Segment *segments, uint64_t count, uint64_t address, uint64_t 
             address - segments[i].address <= segments[i].size - bytes) return 1;
     return 0;
 }
+/* inFAMOUS camera update, decrypted 1.07 SELF SHA256 2d1ca796...
+ * 0x582514: mov rax,[r15]; the view/projection matrices have just been written
+ * by 0x5821b0..0x582513. The FEX hook must execute the replaced load itself
+ * before continuing at 0x582517. Never intercept unknown executable revisions.
+ */
+#if !defined(GUEST_CPU_NATIVE)
+enum { ISS_CAMERA_FUNCTION = 0x5821b0, ISS_CAMERA_HOOK = 0x582514,
+       ISS_CAMERA_FUNCTION_LENGTH = 0x37d };
+static void iss_camera_updated(GuestRegs *regs) {
+    const uintptr_t object = (uintptr_t)regs->gpr[GUEST_RBX];
+    if (object) {
+        TlgIssCameraSnapshot sample = {0};
+        sample.guest_object = object;
+        memcpy(sample.projection, (const void *)(object + 0x1c0), sizeof(sample.projection));
+        memcpy(sample.view_transform, (const void *)(object + 0x200), sizeof(sample.view_transform));
+        memcpy(sample.composite, (const void *)(object + 0x430), sizeof(sample.composite));
+        memcpy(sample.inverse, (const void *)(object + 0x4b0), sizeof(sample.inverse));
+        memcpy(&sample.near_plane, (const void *)(object + 0x584), sizeof(float));
+        memcpy(&sample.far_plane, (const void *)(object + 0x588), sizeof(float));
+        memcpy(&sample.vertical_fov, (const void *)(object + 0x590), sizeof(float));
+        memcpy(&sample.aspect, (const void *)(object + 0x59c), sizeof(float));
+        memcpy(&sample.tangent_horizontal, (const void *)(object + 0x5a0), sizeof(float));
+        memcpy(&sample.tangent_vertical, (const void *)(object + 0x5a4), sizeof(float));
+        tlggpu_iss_camera_publish(&sample);
+    }
+    /* Preserve guest RAX: the replaced instruction is exactly mov rax,[r15].
+     * No x86 flags, vector register or stack content are modified. */
+    const uintptr_t canary = (uintptr_t)regs->gpr[GUEST_R15];
+    if (canary) memcpy(&regs->gpr[GUEST_RAX], (const void *)canary, sizeof(uint64_t));
+    regs->rip += 3;
+}
+static void install_iss_camera_capture(const char *app0, Segment *segments,
+                                       uint64_t count, uint64_t size) {
+    char path[4096], serial[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    if (strcmp(serial, "CUSA00004") && strcmp(serial, "CUSA00223") &&
+        strcmp(serial, "CUSA00263")) return;
+    if (size < ISS_CAMERA_FUNCTION + ISS_CAMERA_FUNCTION_LENGTH ||
+        !mapped(segments, count, ISS_CAMERA_FUNCTION, ISS_CAMERA_FUNCTION_LENGTH)) {
+        puts("FSR3 ISS camera: unsupported image range, no hook installed");
+        return;
+    }
+    const unsigned char *function = image + ISS_CAMERA_FUNCTION;
+    uint64_t fingerprint = UINT64_C(0xcbf29ce484222325);
+    for (size_t i = 0; i < ISS_CAMERA_FUNCTION_LENGTH; ++i) {
+        fingerprint ^= function[i];
+        fingerprint *= UINT64_C(0x100000001b3);
+    }
+    static const unsigned char original[] = {0x49, 0x8b, 0x07};
+    if (fingerprint != UINT64_C(0x63f0e204edc47713) ||
+        memcmp(image + ISS_CAMERA_HOOK, original, sizeof(original))) {
+        puts("FSR3 ISS camera: function identity mismatch, hook disabled");
+        return;
+    }
+    if (!guest_cpu_hook((uintptr_t)(image + ISS_CAMERA_HOOK), sizeof(original),
+                        iss_camera_updated)) {
+        puts("FSR3 ISS camera: FEX hook unavailable");
+        return;
+    }
+    puts("FSR3 ISS camera: verified guest update capture active (post-matrix, 4x4)");
+}
+#else
+static void install_iss_camera_capture(const char *app0, Segment *segments,
+                                       uint64_t count, uint64_t size) {
+    (void)app0; (void)segments; (void)count; (void)size;
+}
+#endif
+
+/* inFAMOUS native SMAA T2x vs FSR3: the verified CUSA00004 eboot has
+ * the same post-processing instruction signatures as upstream iss_temporal_hook,
+ * at the original offsets (verified against SELF SHA-256 2d1ca796...). In the SMAA branch FUN_00472810 applies the game's own
+ * temporal camera window and its AA pass accumulates before Android FSR3.
+ * FSR3 owns temporal reconstruction. Choose the game's FXAA/spatial branch,
+ * WITHOUT skipping the AA pass (which also composites scene colour).
+ *
+ * On FEX the hook replaces cmp [rcx],0 ; je 0x4729e0 in one syscall trap.
+ * HandleSyscall clobbers RCX/R11, so we never read them. The original branch
+ * when the AA mode byte is zero jumps to 0x4729e0. The next instruction
+ * overwrites flags, so the jumped path has the same architectural inputs.
+ *
+ * No texture, depth, velocity, FSR timing, or HUD redirection changes.
+ * Experimental disable: ISS_FSR3_DISABLE_NATIVE_T2X=0. */
+#if !defined(GUEST_CPU_NATIVE)
+enum {
+    ISS_AA_JITTER_BEFORE = 0x47293c,
+    ISS_AA_JITTER_SITE = 0x472944,
+    ISS_AA_JITTER_NEXT = 0x47294d,
+    ISS_AA_JITTER_FXAA = 0x4729e0,
+    ISS_AA_ENTRY = 0x1929c0,
+    ISS_AA_SITE = 0x192c4c,
+    ISS_AA_NEXT = 0x192c59,
+    ISS_AA_DONE = 0x192cff,
+    ISS_AA_MODE = 0xda07f9
+};
+static const unsigned char iss_aa_before_bytes[] = {0x41,0x88,0x9c,0x24,0x2c,0xdc,0x01,0x00};
+static const unsigned char iss_aa_jitter_bytes[] = {0x80,0x39,0x00,0x0f,0x84,0x93,0x00,0x00,0x00};
+static const unsigned char iss_aa_next_bytes[] = {0x41,0xc7,0x84,0x24,0x10,0xcd,0x01,0x00,0x00,0x00,0x00,0x00};
+static const unsigned char iss_aa_entry_bytes[] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,
+    0x48,0x81,0xec,0x18,0x08,0x00,0x00};
+static const unsigned char iss_aa_site_bytes[] = {
+    0x48,0x8d,0x05,0x7d,0x90,0xd8,0x00,0x8a,0x80,0x05,0x0f,0xdf,0x00};
+static const unsigned char iss_aa_after_bytes[] = {
+    0x41,0x0a,0x86,0x8d,0xeb,0x01,0x00,0x0f,0x85,0x99,0x00,0x00,0x00};
+static const unsigned char iss_aa_done_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
+static const unsigned char iss_aa_fx_target_bytes[] = {0x49,0x8b,0x06,0x48,0x3b,0x45,0xd0};
+static const unsigned char iss_aa_done_site_bytes[] = {0x48,0x8d,0x1d,0xa2,0x91,0xbb,0x07};
+static const unsigned char iss_aa_done_next_bytes[] = {0x4c,0x8d,0x3d,0xd3,0xe4,0xd7,0x07};
+
+/* Exact inFAMOUS AA marker. Unlike guessing stencil/UI shader states, this
+ * appears in the PM4 stream immediately after the game's AA/colour composite.
+ * Uses a compact NOP with [magic, version, GPU address lo/hi, width, height].
+ * If the command writer is full, skip the marker and retain the safe late FSR.
+ * If FSR is off or the eboot signature differs, this callback is not installed. */
+enum { ISS_AA_DONE_NEXT = 0x192d06 };
+static unsigned iss_aa_marker_wrote, iss_aa_marker_skipped;
+static void iss_fsr3_aa_done_marker(GuestRegs *regs) {
+    const uintptr_t context = (uintptr_t)regs->gpr[GUEST_R13];
+    const uintptr_t output = (uintptr_t)regs->gpr[GUEST_R15];
+    // Mirror the game's own two "no AA" gates at 0x192c59/0x192c60.
+    // Without these gates the DONE site also fires in menus and photo mode.
+    const uintptr_t post = (uintptr_t)regs->gpr[GUEST_R14];
+    const int aa_enabled = post > 0x10000 && post < (UINT64_C(1) << 40) &&
+        image[0xf1bcd0 + 0xdf0f05] == 0 &&
+        *((const unsigned char *)(post + 0x1eb8d)) == 0;
+    if (aa_enabled && context > 0x10000 && output > 0x10000 &&
+        context < (UINT64_C(1) << 40) && output < (UINT64_C(1) << 40)) {
+        uint32_t descriptor[8];
+        memcpy(descriptor, (const void *)(output + 0xb4), sizeof(descriptor));
+        const uint64_t gpu_address =
+            ((uint64_t)(descriptor[1] & 0x3f) << 32 | descriptor[0]) << 8;
+        const uint32_t width = (descriptor[2] & 0x3fff) + 1;
+        const uint32_t height = ((descriptor[2] >> 14) & 0x3fff) + 1;
+        if (gpu_address && width >= 320 && height >= 180 &&
+            width <= 8192 && height <= 8192) {
+            unsigned char *writer = (unsigned char *)context + 8;
+            unsigned char *end = NULL, *cursor = NULL;
+            memcpy(&end, writer + 8, sizeof(end));
+            memcpy(&cursor, writer + 0x10, sizeof(cursor));
+            if (end && cursor && end >= cursor && (size_t)(end-cursor) >= 28) {
+                const uint32_t marker[7] = {
+                    0xc0051000u, 0x49534101u, 1u,
+                    (uint32_t)gpu_address, (uint32_t)(gpu_address >> 32),
+                    width, height,
+                };
+                memcpy(cursor, marker, sizeof(marker));
+                cursor += sizeof(marker);
+                memcpy(writer + 0x10, &cursor, sizeof(cursor));
+                if (++iss_aa_marker_wrote <= 3) {
+                    fprintf(stderr, "FSR3 ISS AA marker written #%u: GPU=0x%llx %ux%u\n",
+                            iss_aa_marker_wrote, (unsigned long long)gpu_address, width, height);
+                }
+            } else if (++iss_aa_marker_skipped <= 3) {
+                fputs("FSR3 ISS AA marker: command writer has no room; late fallback\n", stderr);
+            }
+        }
+    }
+    /* The replaced instruction is lea rbx,[rip+0x7bb91a2]. */
+    regs->gpr[GUEST_RBX] = (uintptr_t)(image + 0x7d4bea8);
+    regs->rip = (uintptr_t)(image + ISS_AA_DONE_NEXT);
+}
+
+static unsigned iss_aa_reported;
+static void iss_fsr3_avoid_game_t2x(GuestRegs *regs) {
+    /* This guest global is read at 0x192c66 and chooses the SMAA T2x
+     * branch when nonzero. Zero chooses FXAA. Preserve all GPRs. */
+    unsigned char *mode = image + ISS_AA_MODE;
+    const unsigned char original = *mode;
+    *mode = 0;
+    if (!iss_aa_reported++) {
+        fprintf(stderr,
+                "FSR3 ISS native AA: original game mode=%u (%s), forcing FXAA "
+                "instead of SMAA T2x; FSR3 still owns temporal upscale\\n",
+                (unsigned)original, original ? "SMAA T2x" : "already FXAA");
+    }
+    regs->rip = (uintptr_t)(image + ISS_AA_JITTER_FXAA);
+}
+static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
+                                      uint64_t count, uint64_t size) {
+    const char *upscaler = getenv("TLG_UPSCALER");
+    if (!upscaler || strcmp(upscaler,"fsr3")) return;
+    const char *disable = getenv("ISS_FSR3_DISABLE_NATIVE_T2X");
+    if (disable && disable[0] == '0') return;
+    char path[4096], serial[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    if (strcmp(serial,"CUSA00004") && strcmp(serial,"CUSA00223") &&
+        strcmp(serial,"CUSA00263")) return;
+    struct { uint64_t address; const unsigned char *bytes; size_t length; } checks[] = {
+        {ISS_AA_JITTER_BEFORE, iss_aa_before_bytes, sizeof(iss_aa_before_bytes)},
+        {ISS_AA_JITTER_SITE, iss_aa_jitter_bytes, sizeof(iss_aa_jitter_bytes)},
+        {ISS_AA_JITTER_NEXT, iss_aa_next_bytes, sizeof(iss_aa_next_bytes)},
+        {ISS_AA_JITTER_FXAA, iss_aa_fx_target_bytes, sizeof(iss_aa_fx_target_bytes)},
+        {ISS_AA_ENTRY, iss_aa_entry_bytes, sizeof(iss_aa_entry_bytes)},
+        {ISS_AA_SITE, iss_aa_site_bytes, sizeof(iss_aa_site_bytes)},
+        {ISS_AA_NEXT, iss_aa_after_bytes, sizeof(iss_aa_after_bytes)},
+        {ISS_AA_DONE, iss_aa_done_bytes, sizeof(iss_aa_done_bytes)},
+        {ISS_AA_DONE_NEXT, iss_aa_done_next_bytes, sizeof(iss_aa_done_next_bytes)}
+    };
+    if (!mapped(segments,count,ISS_AA_MODE,1) || ISS_AA_MODE >= size) return;
+    for (size_t i=0;i<sizeof(checks)/sizeof(checks[0]);++i) {
+        if (!mapped(segments,count,checks[i].address,checks[i].length) ||
+            checks[i].address+checks[i].length > size ||
+            memcmp(image+checks[i].address,checks[i].bytes,checks[i].length)) {
+            fprintf(stderr,"FSR3 ISS native AA: signature mismatch at guest offset 0x%llx, no change\\n", (unsigned long long)checks[i].address);
+            return;
+        }
+    }
+    if (!guest_cpu_hook((uintptr_t)(image+ISS_AA_JITTER_SITE),
+                        sizeof(iss_aa_jitter_bytes),iss_fsr3_avoid_game_t2x)) {
+        fputs("FSR3 ISS native AA: guest hook unavailable, no change\\n",stderr);
+        return;
+    }
+    // The verified guest hook skips FUN_00581a50, so the native SMAA T2x
+    // projection jitter is no longer applied. Tell the FSR renderer that it
+    // must use its FULL Halton sequence instead of the old 0.5x blend.
+    setenv("ISS_FSR3_NATIVE_T2X_DISABLED", "1", 1);
+    puts("FSR3 ISS native AA: verified AA selection hook installed (FXAA + FSR3)");
+    const char *marker_off = getenv("ISS_FSR3_AA_MARKER");
+    if (!marker_off || marker_off[0] != '0') {
+        if (guest_cpu_hook((uintptr_t)(image + ISS_AA_DONE),
+                           sizeof(iss_aa_done_site_bytes), iss_fsr3_aa_done_marker)) {
+            puts("FSR3 ISS AA PM4 marker installed (after verified AA pass)");
+        } else {
+            puts("FSR3 ISS AA marker hook unavailable; keeping late FSR3 fallback");
+        }
+    }
+}
+#else
+static void install_iss_fsr3_native_aa(const char *app0, Segment *segments,
+                                      uint64_t count, uint64_t size) {
+    (void)app0; (void)segments; (void)count; (void)size;
+}
+#endif
+
+static void install_infamous_menu_watch(const char *app0,Segment *segments,uint64_t count,uint64_t size){
+    char path[4096],serial[32]="";
+    snprintf(path,sizeof(path),"%s/sce_sys/param.sfo",app0?app0:".");
+    sfo_value(path,"TITLE_ID",serial,sizeof(serial),NULL);
+    if(strcmp(serial,"CUSA00004")&&strcmp(serial,"CUSA00223")&&strcmp(serial,"CUSA00263"))return;
+    if(!mapped(segments,count,ISS_MENU_OPEN_SITE,sizeof(iss_menu_open_signature)) ||
+       !mapped(segments,count,ISS_MENU_CLOSE_SITE,sizeof(iss_menu_close_signature)) ||
+       !mapped(segments,count,ISS_MENU_COUNT_OFFSET,4) || !iss_menu_signatures_match(image,size)){
+        puts("Input: game menu state unavailable (executable signature mismatch); Start/manual fallback");return;
+    }
+    runtime_pad_menu_counter((const uint32_t *)(image+ISS_MENU_COUNT_OFFSET));
+    puts("Input: real inFAMOUS menu lifecycle enabled (read-only counter)");
+}
 extern ABI float tlg_orbs_gain(void *player, float requested);
 extern void tlg_orbs_status(int supported);
 extern uintptr_t tlg_cheat_flag(unsigned id);
@@ -584,6 +929,7 @@ static void install_cheats(const char *app0, Segment *segments, uint64_t count, 
             continue;
         }
         protect(stubs, page_size, 5);
+        guest_cpu_code((uintptr_t)stubs, page_size); /* FEX must know this is executable */
         for (unsigned i = 0; i < TLG_CHEAT_HOOK_COUNT; ++i) {
             const TlgCheatHook *hook = &tlg_cheat_hooks[i];
             if (hook->id != id) continue;
@@ -618,6 +964,7 @@ static void install_actor_watch(const char *app0, Segment *segments, uint64_t co
     }
     tlg_actor_build_stub(stub, tlg_actor_slots_address(), (uintptr_t)(image + at + TLG_ACTOR_HOOK_LENGTH));
     protect(stub, page_size, 5);
+    guest_cpu_code((uintptr_t)stub, page_size);
     const int32_t relative = (int32_t)delta;
     image[at] = 0xe9;
     memcpy(image + at + 1, &relative, 4);
@@ -657,6 +1004,7 @@ static void install_orb_multiplier(const char *app0, Segment *segments, uint64_t
     }
     memcpy(stub, code, sizeof(code));
     protect(stub, page_size, 5);
+    guest_cpu_code((uintptr_t)stub, page_size);
     for (unsigned i = 0; i < 3; ++i)
         memcpy(image + tlg_orb_calls[i] + 1, &displacements[i], 4);
     tlg_orbs_status(1);
@@ -697,7 +1045,10 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
                                    tlg_orb_pickup_multiplier(2),
                                    (uintptr_t)(image + pickup_at + TLG_ORB_PICKUP_LENGTH));
     }
-    if (stubs) protect(stubs, page_size, 5);
+    if (stubs) {
+        protect(stubs, page_size, 5);
+        guest_cpu_code((uintptr_t)stubs, page_size);
+    }
     damage = damage && install_jump(damage_at, TLG_DAMAGE_HOOK_LENGTH, stubs);
     pickup = pickup && install_jump(pickup_at, TLG_ORB_PICKUP_LENGTH, stubs + 256);
     tlg_stat_multipliers_status(damage, pickup);
@@ -710,7 +1061,16 @@ extern void tlg_view_attach(unsigned char *guest_image);
 
 /* Draw distance, LOD and clip planes (src/view_hook.h): the menu's values reach the game's data
  * through tlg_view_attach; the regions' LOD_ADJUST and FADE_DISTANCE go through four stubs. */
-static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size) {
+static void install_view_tuning(const char *app0, Segment *segments, uint64_t count, uint64_t size) {
+    /* IMPORTANT: the pre-existing signature test alone matched CUSA00004.
+     * On ARM64/FEX this accidentally installed GoW III x86 code stubs inside
+     * inFAMOUS Second Son, followed by "NoExec instruction in entry block".
+     * Never write GoW III hooks to an inFAMOUS executable. */
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0 ? app0 : ".");
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if (strcmp(serial, "CUSA01623") || strcmp(version, "01.02")) return;
     if (!mapped(segments, count, TLG_VIEW_LOD_TABLE, TLG_VIEW_LOD_ROWS * TLG_VIEW_LOD_STRIDE) ||
         !mapped(segments, count, TLG_VIEW_BANDS, 4 * TLG_VIEW_BAND_COUNT) ||
         !mapped(segments, count, TLG_VIEW_NEAR_CLIP, 8) ||
@@ -735,6 +1095,7 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
         }
     }
     protect(stubs, page_size, 5);
+    guest_cpu_code((uintptr_t)stubs, page_size);
     for (unsigned kind = 0; kind < 2; ++kind)
         for (unsigned i = 0; i < 2; ++i)
             install_jump(sites[kind][i], TLG_VIEW_SITE_LENGTH, stubs + (kind * 2 + i) * 128);
@@ -801,6 +1162,23 @@ void runtime_restart(void) {
     /* The new launch waits for this process's GPU device to go away (run.py --after). */
     TerminateProcess(GetCurrentProcess(),0);
 #else
+    /* Android runs this native Linux/glibc process under an app-owned /system/bin/sh
+     * supervisor, without bash or run.sh. An in-game restart must go through that
+     * original supervisor, keeping stdout/stderr so GameActivity continues to log. */
+    const char *android = getenv("ISS_ANDROID_INPUT");
+    if (android && android[0]=='1') {
+        const char *data = getenv("TLG_DATA_DIR");
+        char script[1024];
+        if (!data || (size_t)snprintf(script,sizeof(script),"%s/run-iss.sh",data)>=sizeof(script)) {
+            fputs("runtime_restart: missing/invalid Android launcher path\\n",stderr);
+            _exit(1);
+        }
+        puts("Runtime: restarting through Android glibc supervisor");
+        fflush(NULL);
+        execl("/system/bin/sh", "sh", script, (char *)NULL);
+        perror("runtime_restart: Android supervisor exec");
+        _exit(1);
+    }
     puts("Runtime: restarting through run.sh");
     syscall(SYS_close_range, 3u, ~0u, 0u);
     execlp("bash", "bash", "run.sh", (char *)NULL);
@@ -814,6 +1192,7 @@ void runtime_restart(void) {
  * in missing. */
 static int cpu_supported(char *missing, size_t size) {
     missing[0] = 0;
+#ifdef GUEST_CPU_NATIVE
     const char *check = getenv("TLG_CPU_CHECK");
     if (check && !strcmp(check, "0")) return 1;
     const CpuFeatureWords words = cpu_feature_words();
@@ -823,6 +1202,9 @@ static int cpu_supported(char *missing, size_t size) {
         return 0;
     }
     cpu_missing_sets = cpu_missing_rewritable(words, missing, size);
+#else
+    (void)size;
+#endif
     return 1;
 }
 
@@ -919,11 +1301,18 @@ int main(int argc, char **argv) {
     alias_port_environment();
     apply_verbose_log();
     boot_step("start");
+    guest_cpu_init(runtime_low_map);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
+#ifdef __ANDROID__
+    /* Scudo has no glibc arena/brk tunables. Guest-visible pointers continue
+       to use runtime_low_map; disable heap tags as in GoW3 Bionic. */
+    mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
+#else
     mallopt(M_ARENA_MAX,1);
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
+#endif
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     char missing[128];
@@ -986,6 +1375,7 @@ int main(int argc, char **argv) {
     /* TLG_ISA_REWRITE=0 never rewrites, =1 rewrites every emulated site (MOVBE, BMI1, LZCNT, F16C, SSE4A:
      * a test on a complete CPU), a list such as "sse4a", "f16c" or "movbe,bmi1" rewrites those sets; by
      * default the sets the CPU lacks. */
+#ifdef GUEST_CPU_NATIVE
     const char *policy = getenv("TLG_ISA_REWRITE");
     int policy_valid;
     const unsigned isa_forced = cpu_sets_named(policy, &policy_valid);
@@ -1009,6 +1399,11 @@ int main(int argc, char **argv) {
     int red_zone_on = !(red_zone_policy && !strcmp(red_zone_policy, "0"));
 #else
     int red_zone_on = red_zone_policy && !strcmp(red_zone_policy, "1");
+#endif
+#else
+    unsigned isa_sets=0;
+    int red_zone_on=0;
+    (void)isa_file;
 #endif
     if (content_profile) {
         FILE *profile=fopen(content_profile,"rb");
@@ -1178,6 +1573,7 @@ int main(int argc, char **argv) {
             if (!executable) fail("native function is not executable");
         }
     }
+#ifdef GUEST_CPU_NATIVE
     isa_table = (isa_sets || red_zone_on) && isa_file ? isa_table_load(isa_file) : NULL;
     if (!isa_table && cpu_missing_sets) { printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing); return 20; }
     /* The stubs follow the image in the same low mapping (rel32 jmps reach them): the emulation
@@ -1206,8 +1602,15 @@ int main(int argc, char **argv) {
         isa_table = NULL;
         red_zone_on = 0;
     }
+#else
+    size_t stub_area=0, red_zone_area=0;
+    (void)isa_sets; (void)red_zone_on;
+    image=allocate(round_page(size));
+    if (fread(image,1,size,f)!=size || fgetc(f)!=EOF) fail("incorrect memory image size");
+    fclose(f);
+#endif
     if (!cpu_only) {
-        char title[128]="God of War III", serial[16]="UNKNOWN", sfo[4096];
+        char title[128]="inFAMOUS Second Son", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0 ? app0 : ".");
         sfo_value(sfo,"TITLE",title,sizeof(title),NULL);
@@ -1225,11 +1628,13 @@ int main(int argc, char **argv) {
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
     unsigned char *data_traps = allocate((import_count + 1) * page_size);
     protect(data_traps, (import_count + 1) * page_size, 0);
+    guest_cpu_code((uintptr_t)image,round_page(size)+stub_area+red_zone_area);
+    guest_cpu_code((uintptr_t)traps,round_page((import_count+1)*32));
     for (uint64_t i = 0; i < import_count; ++i) {
         unsigned char *t = traps + i * 32;
         /* SysV: mov edi, index; movabs rax, handler; jmp rax. No fake return values. */
         uint32_t index = (uint32_t)i;
-        uintptr_t handler = (uintptr_t)unresolved;
+        uintptr_t handler = guest_cpu_host_function((void *)unresolved);
         t[0] = 0x48; t[1] = 0x89; t[2] = 0xfe; /* mov rsi,rdi: preserve arg0 */
         t[3] = 0xbf; memcpy(t + 4, &index, 4);
         t[8] = 0x48; t[9] = 0xb8; memcpy(t + 10, &handler, 8);
@@ -1242,6 +1647,7 @@ int main(int argc, char **argv) {
         trace_made = calloc(import_count + 1, sizeof(*trace_made));
         trace_counts = calloc(import_count + 1, sizeof(*trace_counts));
         if (!trace_made || !trace_counts) fail("allocation failed");
+        guest_cpu_code((uintptr_t)trace_stubs,round_page((import_count+1)*TRACE_STUB_SIZE));
     }
     for (uint64_t i = 0; i < nr; ++i) {
         uintptr_t value = relocs[i].kind == 2 ? (uintptr_t)(data_traps + page_size * relocs[i].value + relocs[i].addend)
@@ -1250,8 +1656,8 @@ int main(int argc, char **argv) {
         if (relocs[i].kind) {
             uintptr_t resolved = runtime_resolve(names[relocs[i].value], relocs[i].kind == 2);
             if (resolved) {
-                value = resolved + relocs[i].addend;
-                if (trace_stubs && relocs[i].kind == 1 && !relocs[i].addend) value = trace_stub(relocs[i].value, resolved);
+                value = relocs[i].kind==1 ? guest_cpu_host_function((void *)resolved) : resolved + relocs[i].addend;
+                if (trace_stubs && relocs[i].kind == 1 && !relocs[i].addend) value = trace_stub(relocs[i].value, guest_cpu_host_function((void *)resolved));
             } else if (native_libc && bindings[relocs[i].value]) {
                 uint64_t address=bindings[relocs[i].value];
                 if (binding_kinds[relocs[i].value]!=relocs[i].kind || !mapped(segments,ns,address,relocs[i].addend+1)) fail("native export kind/range mismatch");
@@ -1279,14 +1685,18 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+    install_infamous_menu_watch(app0,segments,ns,size);
+    if (gpu_enabled) install_iss_camera_capture(app0, segments, ns, size);
+    if (gpu_enabled) install_iss_fsr3_native_aa(app0, segments, ns, size);
     if (gpu_enabled) install_orb_multiplier(app0, segments, ns, size);
     if (gpu_enabled) install_cheats(app0, segments, ns, size);
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
-    if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_view_tuning(app0, segments, ns, size);
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
+#ifdef GUEST_CPU_NATIVE
     if (isa_table) {
         isa_table->protect_red_zone = red_zone_on;
         IsaReport r = isa_rewrite_apply(isa_table, image, stubs, isa_sets);
@@ -1312,6 +1722,7 @@ int main(int argc, char **argv) {
         runtime_set_report_hook(isa_report_hook);
         protect(stubs, stub_area + red_zone_area, 5);
     }
+#endif
     protect(traps, round_page((import_count + 1) * 32), 5);
     if (trace_stubs) protect(trace_stubs, round_page((import_count + 1) * TRACE_STUB_SIZE), 5);
     protect(image, round_page(size), 0);
@@ -1339,8 +1750,7 @@ int main(int argc, char **argv) {
         /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. */
         for (uint64_t m=0;m<module_count;++m) {
             printf("Starting linked module %" PRIu64 " at image offset 0x%" PRIx64 "; native bindings=%" PRIu64 "\n",m,modules[m].init,nb);
-            typedef int (ABI *ModuleInit)(uint64_t,void *,void *);
-            int result=((ModuleInit)(image+modules[m].init))(0,NULL,NULL);
+            int result=(int)guest_cpu_call((uintptr_t)(image+modules[m].init),3,(const uint64_t[]){0,0,0});
             printf("Module %" PRIu64 " initializer returned %d\n",m,result);
             if (result) fail("module initializer failed");
         }
@@ -1369,8 +1779,13 @@ int main(int argc, char **argv) {
     enum { MAIN_STACK=8*1024*1024 };
     unsigned char *stack=runtime_low_map(MAIN_STACK,PROT_READ|PROT_WRITE);
     if (!stack) fail("cannot allocate guest main stack");
+#ifdef GUEST_CPU_NATIVE
     clobber_thread_init();
     enter_on_stack(image+entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
+#else
+    guest_cpu_thread_stack(stack+MAIN_STACK-64,MAIN_STACK-64);
+    guest_cpu_call((uintptr_t)(image+entry),2,(const uint64_t[]){(uintptr_t)&params,guest_cpu_host_function((void *)guest_exit)});
+#endif
 #endif
     fail("entry unexpectedly returned");
 }

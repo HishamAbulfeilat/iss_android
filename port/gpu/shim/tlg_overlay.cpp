@@ -628,7 +628,7 @@ void OverlayTab() {
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextDisabled(TL("Preview", "Prévia"));
+        ImGui::TextDisabled("%s", TL("Preview", "Prévia"));
         ImGui::BeginChild("##preview", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
         const std::string text = OverlayText();
@@ -657,9 +657,9 @@ void OverlayTab() {
         InfoRow(TL("Game", "Jogo"), text);
         const u32 total = background_total;
         if (total) {
-            std::snprintf(text, sizeof(text), TL("loading %u%%", "carregando %u%%"), u32(u64(background_done) * 100 / total));
+            std::snprintf(text, sizeof(text), "%s %u%%", TL("loading", "carregando"), u32(u64(background_done) * 100 / total));
         } else {
-            std::snprintf(text, sizeof(text), TL("ready", "pronto"));
+            std::snprintf(text, sizeof(text), "%s", TL("ready", "pronto"));
         }
         InfoRow(TL("Shader cache", "Cache de shaders"), text);
         ImGui::EndTable();
@@ -1376,19 +1376,63 @@ void GuideBox() {
 }
 
 // imgui_mutex held.
+void WriteAndroidGuideMarker(bool open) {
+    const char* state = std::getenv("TLG_PAD_FILE");
+    if (!state || !*state || !std::getenv("ISS_ANDROID_INPUT")) return;
+    const std::string file = std::string(state) + ".guide";
+    if (!open) {
+        std::remove(file.c_str());
+        return;
+    }
+    if (FILE* handle = std::fopen(file.c_str(), "wb")) {
+        std::fputs("guide\n", handle);
+        std::fclose(handle);
+    }
+}
+
 void OpenGuide() {
     guide_button_rect = ImRect();
     guide_active = true;
+    WriteAndroidGuideMarker(true);
     ImGui::GetIO().MouseDrawCursor = true;
 }
 
 void CloseGuide() {
     guide_active = false;
+    WriteAndroidGuideMarker(false);
     ImGui::GetIO().MouseDrawCursor = menu_open;
     auto& s = TlgSettings::Get();
     if (!s.graffiti_guide_seen.exchange(true)) {
         TlgSettings::Save();
     }
+}
+
+// Android's on-screen Cross arrives in TLG_PAD_FILE, not as an SDL key or
+// controller event. The modal eats *all* game input, so without this bridge the
+// first-time graffiti guide traps the player forever. Poll only while shown.
+void PollAndroidGraffitiGuide() {
+    static bool previous = false;
+    const char* state = std::getenv("TLG_PAD_FILE");
+    if (!guide_active || !state || !*state || !std::getenv("ISS_ANDROID_INPUT")) {
+        previous = false;
+        return;
+    }
+    bool pressed = false;
+    if (FILE* handle = std::fopen(state, "r")) {
+        char word[64];
+        while (std::fscanf(handle, "%63s", word) == 1) {
+            if (std::strcmp(word, "cross") == 0 || std::strcmp(word, "circle") == 0 ||
+                std::strcmp(word, "options") == 0) {
+                pressed = true;
+                break;
+            }
+        }
+        std::fclose(handle);
+    }
+    if (pressed && !previous) {
+        CloseGuide();
+    }
+    previous = pressed;
 }
 
 // Present thread, imgui_mutex held, after NewFrame: whichever save dialog is up.
@@ -1438,7 +1482,7 @@ void LoadingScreen() {
                                                              loading_compile_started)
                                    .count();
         const u32 left = u32(elapsed * double(total - done) / double(done)) + 1;
-        ImGui::Text(TL("About %u:%02u left", "Faltam cerca de %u:%02u"), left / 60, left % 60);
+        ImGui::Text("%s %u:%02u%s", TL("About", "Faltam cerca de"), left / 60, left % 60, TL(" left", ""));
     }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", compile ? TL("Only on the first start on this computer and after updates: "
@@ -1568,13 +1612,20 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                    int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
 
     const vk::Instance vk_instance = instance.GetInstance();
-    ImGui_ImplVulkan_LoadFunctions(
+    // A directly loaded Bionic Vulkan HAL can omit optional ImGui commands.
+    // Validate resolved functions rather than calling a NULL dispatch target.
+    const bool functions_loaded = ImGui_ImplVulkan_LoadFunctions(
         instance.ApiVersion(),
         [](const char* name, void* user) {
             return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr(
                 *static_cast<const vk::Instance*>(user), name);
         },
         const_cast<vk::Instance*>(&vk_instance));
+    if (!functions_loaded) {
+        std::fprintf(stderr, "Overlay: Vulkan backend function unavailable; disabling ImGui instead of crashing\n");
+        ImGui::DestroyContext();
+        return;
+    }
 
     const VkFormat color_format = static_cast<VkFormat>(format);
     ImGui_ImplVulkan_InitInfo info{};
@@ -1970,7 +2021,22 @@ bool CapturesInput() {
 
 void ShowGraffitiGuide(bool force) {
     std::scoped_lock lock{imgui_mutex};
-    if (!force && TlgSettings::Get().graffiti_guide_seen) {
+    auto& settings = TlgSettings::Get();
+    if (!force && settings.graffiti_guide_seen) {
+        return;
+    }
+    // On direct Android Vulkan HAL, ImGui_ImplVulkan_LoadFunctions may fail.
+    // Init then destroys the ImGui context, and OpenGuide() calling
+    // ImGui::GetIO() used to crash (SIGSEGV libtlggpu+0x9b20b4).
+    // The game sensor/graffiti mode itself must keep working: request the
+    // Android-native guide via the existing pad-state marker instead.
+    if (!initialized) {
+#ifdef ISS_ANDROID_BIONIC
+        WriteAndroidGuideMarker(true);
+        if (!settings.graffiti_guide_seen.exchange(true)) {
+            TlgSettings::Save();
+        }
+#endif
         return;
     }
     OpenGuide();
@@ -1978,6 +2044,13 @@ void ShowGraffitiGuide(bool force) {
 
 void BeginSaveList(int kind, std::vector<SaveRow> rows, std::vector<TlgPng::Image> pictures, int focus) {
     std::scoped_lock lock{imgui_mutex};
+    // No ImGui context: do not trap the guest or dereference GetIO().
+    // Report cancellation until a native Android save picker is implemented.
+    if (!initialized) {
+        choice_active = false;
+        choice_result = -2;
+        return;
+    }
     RetireChoiceTextures();
     choice_pictures = std::move(pictures);
     choice_pictures.resize(rows.size());
@@ -2000,6 +2073,11 @@ int PollSaveList() {
 void BeginSaveMessage(int kind, int code, u64 value, const std::string& text, int buttons,
                       const SaveRow* entry, TlgPng::Image picture) {
     std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        message_active = false;
+        message_result = 2; // Cancel / No: never silently accept a destructive dialog
+        return;
+    }
     RetireChoiceTextures();
     message_has_entry = entry != nullptr;
     if (entry) {
@@ -2028,6 +2106,13 @@ int PollSaveMessage() {
 
 void CloseSaveDialog() {
     std::scoped_lock lock{imgui_mutex};
+    if (!initialized) {
+        choice_active = false;
+        message_active = false;
+        choice_result = -2;
+        message_result = 2;
+        return;
+    }
     if (choice_active.exchange(false)) {
         choice_result = -2;
     }
@@ -2107,6 +2192,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     UpdateChoiceTextures();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    if (guide_active) PollAndroidGraffitiGuide();
     if (loading) {
         LoadingScreen();
     }

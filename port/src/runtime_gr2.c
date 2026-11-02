@@ -18,7 +18,26 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <sys/random.h>
+#ifdef __ANDROID__
+// libucontext's freestanding AArch64 header tags its private mcontext as
+// "struct sigcontext". Android NDK already defines that kernel struct.
+// Keep the ABI/layout unchanged, but give the private tag its own name in
+// just this include. This is Bionic-only; glibc keeps system ucontext.
+#define sigcontext iss_libucontext_private_sigcontext
+#include <libucontext/libucontext.h>
+#undef sigcontext
+typedef libucontext_ucontext_t IssFiberContext;
+#define iss_fiber_getcontext libucontext_getcontext
+#define iss_fiber_makecontext libucontext_makecontext
+#define iss_fiber_swapcontext libucontext_swapcontext
+#else
 #include <ucontext.h>
+typedef ucontext_t IssFiberContext;
+#define iss_fiber_getcontext getcontext
+#define iss_fiber_makecontext makecontext
+#define iss_fiber_swapcontext swapcontext
+#endif
+#include <sys/mman.h>
 #else
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -119,7 +138,9 @@ static ABI int32_t socket_down(void) {
 typedef void (ABI *FiberEntry)(uint64_t arg_on_initialize,uint64_t arg_on_run);
 #ifndef _WIN32
 typedef struct HostFiber {
-    ucontext_t context;
+    IssFiberContext context;
+    void *cpu_context, *host_stack, *owned_guest_stack;
+    size_t owned_guest_size;
     FiberEntry entry;
     uint64_t arg_on_initialize, arg_to_deliver;
     uint64_t *resume_out; /* where the fiber's own Switch/ReturnToThread wants its next argOnRun */
@@ -129,7 +150,8 @@ typedef struct HostFiber {
 /* The guest SceFiber (opaque, at least 16 bytes here) holds the magic and the host object. */
 typedef struct { uint64_t magic; HostFiber *host; } GuestFiber;
 static __thread struct {
-    ucontext_t thread_context;
+    IssFiberContext thread_context;
+    void *thread_cpu_context;
     HostFiber *current;
     uint64_t *thread_return_out;
 } fiber_tls;
@@ -139,18 +161,18 @@ static HostFiber *fiber_of(void *guest) {
 }
 static void fiber_trampoline(void) {
     HostFiber *f=fiber_tls.current;
-    f->entry(f->arg_on_initialize,f->arg_to_deliver);
+    guest_cpu_call((uintptr_t)f->entry,2,(const uint64_t[]){f->arg_on_initialize,f->arg_to_deliver});
     fprintf(stderr,"STOP: fiber %s returned from its entry function\n",f->name);
     abort();
 }
 /* Separate from fiber_initialize: getcontext returns twice like setjmp, and nothing of the
  * caller's must live across it. */
 static __attribute__((noinline)) void fiber_make_context(HostFiber *f,void *stack,size_t size) {
-    getcontext(&f->context);
+    iss_fiber_getcontext(&f->context);
     f->context.uc_stack.ss_sp=stack;
     f->context.uc_stack.ss_size=size;
     f->context.uc_link=NULL;
-    makecontext(&f->context,fiber_trampoline,0);
+    iss_fiber_makecontext(&f->context,fiber_trampoline,0);
 }
 static ABI int32_t fiber_initialize(void *guest,const char *name,FiberEntry entry,uint64_t arg_on_initialize,
                                     void *context,uint64_t context_size,const void *option,uint32_t build_version) {
@@ -163,7 +185,19 @@ static ABI int32_t fiber_initialize(void *guest,const char *name,FiberEntry entr
     size_t size=(size_t)context_size;
     void *stack=context;
     if (!stack || size<16384) { size=size<65536 ? 65536 : size; stack=malloc(size); }
+#ifndef GUEST_CPU_NATIVE
+    if (!context || context_size<16384) {
+        free(stack); stack=runtime_low_map(size,3);
+        if (!stack) { free(f); return FIBER_ERR_INVALID; }
+        f->owned_guest_stack=stack; f->owned_guest_size=size;
+    }
+    f->cpu_context=guest_cpu_context_create((char *)stack+size,size);
+    f->host_stack=malloc(1024*1024);
+    if (!f->host_stack) { guest_cpu_context_destroy(f->cpu_context); free(f); return FIBER_ERR_INVALID; }
+    fiber_make_context(f,f->host_stack,1024*1024);
+#else
     fiber_make_context(f,stack,size);
+#endif
     ((GuestFiber *)guest)->magic=FIBER_MAGIC;
     ((GuestFiber *)guest)->host=f;
     return 0;
@@ -173,7 +207,11 @@ static ABI int32_t fiber_finalize(void *guest) {
     if (!f) return FIBER_ERR_INVALID;
     if (f->running) return FIBER_ERR_STATE;
     ((GuestFiber *)guest)->magic=0;
-    free(f); /* the context memory belongs to the game */
+#ifndef GUEST_CPU_NATIVE
+    guest_cpu_context_destroy(f->cpu_context); free(f->host_stack);
+    if (f->owned_guest_stack) munmap(f->owned_guest_stack,f->owned_guest_size);
+#endif
+    free(f); /* the caller's context memory belongs to the game */
     return 0;
 }
 static void fiber_enter(HostFiber *f,uint64_t arg) {
@@ -181,6 +219,9 @@ static void fiber_enter(HostFiber *f,uint64_t arg) {
     f->arg_to_deliver=arg;
     f->started=1; f->running=1;
     fiber_tls.current=f;
+#ifndef GUEST_CPU_NATIVE
+    guest_cpu_context_use(f->cpu_context);
+#endif
 }
 static ABI int32_t fiber_run(void *guest,uint64_t arg_on_run_to,uint64_t *arg_on_return) {
     HostFiber *f=fiber_of(guest);
@@ -188,8 +229,11 @@ static ABI int32_t fiber_run(void *guest,uint64_t arg_on_run_to,uint64_t *arg_on
     if (fiber_tls.current) return FIBER_ERR_PERMISSION; /* only a thread runs a fiber */
     if (f->running) return FIBER_ERR_STATE;
     fiber_tls.thread_return_out=arg_on_return;
+#ifndef GUEST_CPU_NATIVE
+    fiber_tls.thread_cpu_context=guest_cpu_context_current();
+#endif
     fiber_enter(f,arg_on_run_to);
-    swapcontext(&fiber_tls.thread_context,&f->context);
+    iss_fiber_swapcontext(&fiber_tls.thread_context,&f->context);
     fiber_tls.current=NULL;
     return 0;
 }
@@ -200,7 +244,7 @@ static ABI int32_t fiber_switch(void *guest,uint64_t arg_on_run_to,uint64_t *arg
     if (to->running) return FIBER_ERR_STATE;
     from->resume_out=arg_on_run; from->running=0;
     fiber_enter(to,arg_on_run_to);
-    swapcontext(&from->context,&to->context);
+    iss_fiber_swapcontext(&from->context,&to->context);
     return 0;
 }
 static ABI int32_t fiber_return_to_thread(uint64_t arg_on_return,uint64_t *arg_on_run) {
@@ -209,7 +253,10 @@ static ABI int32_t fiber_return_to_thread(uint64_t arg_on_return,uint64_t *arg_o
     if (fiber_tls.thread_return_out) *fiber_tls.thread_return_out=arg_on_return;
     from->resume_out=arg_on_run; from->running=0;
     fiber_tls.current=NULL;
-    swapcontext(&from->context,&fiber_tls.thread_context);
+#ifndef GUEST_CPU_NATIVE
+    guest_cpu_context_use(fiber_tls.thread_cpu_context);
+#endif
+    iss_fiber_swapcontext(&from->context,&fiber_tls.thread_context);
     return 0;
 }
 #else
@@ -235,7 +282,7 @@ static HostFiber *fiber_of(void *guest) {
 }
 static void WINAPI fiber_trampoline(void *param) {
     HostFiber *f=param;
-    f->entry(f->arg_on_initialize,f->arg_to_deliver);
+    guest_cpu_call((uintptr_t)f->entry,2,(const uint64_t[]){f->arg_on_initialize,f->arg_to_deliver});
     fprintf(stderr,"STOP: fiber %s returned from its entry function\n",f->name);
     abort();
 }
@@ -268,6 +315,9 @@ static void fiber_enter(HostFiber *f,uint64_t arg) {
     f->arg_to_deliver=arg;
     f->started=1; f->running=1;
     fiber_tls.current=f;
+#ifndef GUEST_CPU_NATIVE
+    guest_cpu_context_use(f->cpu_context);
+#endif
 }
 static ABI int32_t fiber_run(void *guest,uint64_t arg_on_run_to,uint64_t *arg_on_return) {
     HostFiber *f=fiber_of(guest);
@@ -279,6 +329,9 @@ static ABI int32_t fiber_run(void *guest,uint64_t arg_on_run_to,uint64_t *arg_on
         if (!fiber_tls.thread_fiber) return FIBER_ERR_INVALID;
     }
     fiber_tls.thread_return_out=arg_on_return;
+#ifndef GUEST_CPU_NATIVE
+    fiber_tls.thread_cpu_context=guest_cpu_context_current();
+#endif
     fiber_enter(f,arg_on_run_to);
     SwitchToFiber(f->fiber);
     fiber_tls.current=NULL;
