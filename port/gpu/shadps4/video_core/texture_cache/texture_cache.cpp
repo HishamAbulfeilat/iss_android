@@ -1834,12 +1834,12 @@ void TextureCache::GarbageCollectImages() {
         }
     }
 #ifdef __ANDROID__
-    // tlg: TLG_GC_ANDROID_FREE_MB (default 1500, 0 = off): below this much free RAM, the
+    // tlg: TLG_GC_ANDROID_FREE_MB (default 3072, 0 = off): below this much free RAM, the
     // collector treats the missing amount as over its critical mark, so images unused for the
     // last submissions go before Android kills the game. Images it cannot evict stay.
     static const u64 android_free_mark = [] {
         const char* env = std::getenv("TLG_GC_ANDROID_FREE_MB");
-        const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 1500;
+        const u64 mb = env && *env ? std::strtoull(env, nullptr, 10) : 3072;
         if (mb) {
             std::printf("Texture cache: old images are freed when Android RAM or swap has under "
                         "%llu MiB free (TLG_GC_ANDROID_FREE_MB, 0 = off)\n",
