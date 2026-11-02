@@ -35,6 +35,10 @@ typedef struct {
 } InstalledAddcont;
 
 static InstalledAddcont installed[ADDCONT_MAX];
+static const char *const addcont_mount_names[ADDCONT_MAX] = {
+    "/addcont0", "/addcont1", "/addcont2", "/addcont3", "/addcont4", "/addcont5",
+    "/addcont6", "/addcont7", "/addcont8", "/addcont9", "/addcont10", "/addcont11",
+    "/addcont12", "/addcont13", "/addcont14", "/addcont15"};
 static unsigned installed_count;
 static int app_content_initialized;
 
@@ -108,8 +112,7 @@ static ABI int32_t addcont_mount(uint32_t service_label, const EntitlementLabel 
     for (unsigned i = 0; i < installed_count; ++i) {
         if (service_label != 0 || strncmp(entitlement->data, installed[i].label,
                                           sizeof(entitlement->data))) continue;
-        char guest[16];
-        snprintf(guest, sizeof(guest), "/addcont%u", i);
+        const char *guest = addcont_mount_names[i];
         if (runtime_file_mount(guest, installed[i].directory)) return APP_CONTENT_NOT_FOUND;
         memset(mount_point, 0, sizeof(*mount_point));
         memcpy(mount_point->data, guest, strlen(guest) + 1);
