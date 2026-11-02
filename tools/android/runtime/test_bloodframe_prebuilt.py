@@ -1,16 +1,18 @@
 """Verify the checksum-gated Bloodframe fallback extraction."""
 import hashlib
+import importlib.util
 import io
 from pathlib import Path
-import sys
 import tarfile
 import tempfile
 import unittest
 import zipfile
 
 BIONIC_DIR = Path(__file__).resolve().parents[1] / "bionic"
-sys.path.insert(0, str(BIONIC_DIR))
-import fetch_bloodframe_prebuilt as fallback
+spec = importlib.util.spec_from_file_location(
+    "fetch_bloodframe_prebuilt", BIONIC_DIR / "fetch_bloodframe_prebuilt.py")
+fallback = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fallback)
 
 
 def make_apk(path):
